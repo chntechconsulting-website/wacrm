@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Website Lead Submission Test Form - WaCRM</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f1f5f9;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #ffffff;
+      padding: 32px;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+      width: 100%;
+      max-width: 440px;
+    }
+    h2 {
+      margin-top: 0;
+      color: #0f172a;
+      font-size: 1.4rem;
+    }
+    p.subtitle {
+      color: #64748b;
+      font-size: 0.88rem;
+      margin-bottom: 24px;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 6px;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      box-sizing: border-box;
+    }
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #2563eb;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    button:hover {
+      background-color: #1d4ed8;
+    }
+    .alert {
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 0.88rem;
+      margin-top: 16px;
+      display: none;
+    }
+    .alert-success {
+      background-color: #d1fae5;
+      color: #065f46;
+      border: 1px solid #6ee7b7;
+    }
+    .alert-error {
+      background-color: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fca5a5;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>🌐 Contact Us Website Form</h2>
+    <p class="subtitle">Submit this form to test live website lead capture in WaCRM.</p>
+
+    <form id="leadForm">
+      <div class="form-group">
+        <label for="name">Full Name *</label>
+        <input type="text" id="name" placeholder="Enter Full Name (e.g. Ram)" required />
+      </div>
+
+      <div class="form-group">
+        <label for="phone">Phone Number *</label>
+        <input type="tel" id="phone" placeholder="Enter Phone Number (e.g. 9344764088)" required />
+      </div>
+
+      <div class="form-group">
+        <label for="whatsapp">WhatsApp Number (Optional)</label>
+        <input type="tel" id="whatsapp" placeholder="WhatsApp Number (defaults to phone)" />
+      </div>
+
+      <div class="form-group">
+        <label for="email">Email Address</label>
+        <input type="email" id="email" placeholder="Enter Email Address (e.g. ram@example.com)" />
+      </div>
+
+      <div class="form-group">
+        <label for="company">Company Name</label>
+        <input type="text" id="company" placeholder="Enter Company Name" />
+      </div>
+
+      <div class="form-group">
+        <label for="department">Department / Role</label>
+        <input type="text" id="department" placeholder="e.g. IT / Admin, Operations" />
+      </div>
+
+      <div class="form-group">
+        <label for="teamSize">Team Size / Company Size</label>
+        <select id="teamSize" style="width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem;">
+          <option value="">Select Team Size</option>
+          <option value="1–10">1–10 employees</option>
+          <option value="11–50">11–50 employees</option>
+          <option value="51–200">51–200 employees</option>
+          <option value="201–500">201–500 employees</option>
+          <option value="500+">500+ employees</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="message">Message / Requirement</label>
+        <textarea id="message" rows="3" placeholder="Interested in CRM demo"></textarea>
+      </div>
+
+      <button type="submit" id="submitBtn">Submit Lead to CRM</button>
+    </form>
+
+    <div id="alertSuccess" class="alert alert-success"></div>
+    <div id="alertError" class="alert alert-error"></div>
+  </div>
+
+  <script>
+    document.getElementById('leadForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const btn = document.getElementById('submitBtn');
+      const alertSuccess = document.getElementById('alertSuccess');
+      const alertError = document.getElementById('alertError');
+
+      alertSuccess.style.display = 'none';
+      alertError.style.display = 'none';
+      btn.disabled = true;
+      btn.innerText = 'Submitting...';
+
+      const payload = {
+        name: document.getElementById('name').value,
+        phone: document.getElementById('phone').value,
+        whatsapp_number: document.getElementById('whatsapp').value || document.getElementById('phone').value,
+        email: document.getElementById('email').value,
+        company: document.getElementById('company').value,
+        department: document.getElementById('department').value,
+        team_size: document.getElementById('teamSize').value,
+        message: document.getElementById('message').value,
+        website_name: 'WA Plus HR',
+        landing_page: 'https://waplushr.com/solutions/demo'
+      };
+
+      try {
+        const response = await fetch('http://127.0.0.1:8000/api/integrations/website/leads', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          alertSuccess.style.display = 'block';
+          alertSuccess.innerHTML = '✅ <strong>Success!</strong> Lead submitted successfully (Lead ID #' + result.lead_id + ').<br>Check your CRM under <strong>LEADS &rarr; Website Leads</strong>!';
+        } else {
+          alertError.style.display = 'block';
+          alertError.innerText = '❌ Error: ' + (result.detail || 'Failed to submit lead.');
+        }
+      } catch (err) {
+        console.error(err);
+        alertError.style.display = 'block';
+        alertError.innerText = '❌ Network Error: Make sure backend FastAPI server is running on http://127.0.0.1:8000';
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'Submit Lead to CRM';
+      }
+    });
+  </script>
+
+</body>
+</html>

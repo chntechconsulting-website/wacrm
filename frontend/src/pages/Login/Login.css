@@ -1,0 +1,1153 @@
+/* ==============================================================================
+   WA! CRM - Premium Branded Login Page Styles
+   Perfect Alignment, 2-Column Responsive Layout & Clean Spacing
+   ============================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
+
+.wa-login-viewport {
+  height: 100vh;
+  max-height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #f8fafc;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 16px 36px;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Dot Matrix Grid Patterns */
+.wa-dot-pattern-top {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  width: 140px;
+  height: 140px;
+  background-image: radial-gradient(rgba(244, 63, 94, 0.28) 1.5px, transparent 1.5px);
+  background-size: 16px 16px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wa-dot-pattern-bottom {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  width: 130px;
+  height: 130px;
+  background-image: radial-gradient(rgba(244, 63, 94, 0.28) 1.5px, transparent 1.5px);
+  background-size: 16px 16px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wa-dot-pattern-right {
+  position: absolute;
+  top: 28px;
+  right: 28px;
+  width: 130px;
+  height: 160px;
+  background-image: radial-gradient(rgba(244, 63, 94, 0.22) 1.5px, transparent 1.5px);
+  background-size: 16px 16px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dark-theme .wa-dot-pattern-top,
+.dark-theme .wa-dot-pattern-bottom,
+.dark-theme .wa-dot-pattern-right {
+  background-image: radial-gradient(rgba(244, 63, 94, 0.18) 1.5px, transparent 1.5px);
+}
+
+/* Ambient Studio Background Lighting */
+.wa-login-viewport::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(circle at 10% 20%, rgba(254, 226, 226, 0.7) 0%, transparent 45%),
+    radial-gradient(circle at 75% 35%, rgba(254, 205, 211, 0.4) 0%, rgba(255, 228, 230, 0.15) 45%, transparent 70%),
+    radial-gradient(circle at 85% 70%, rgba(239, 68, 68, 0.12) 0%, transparent 50%),
+    linear-gradient(135deg, #ffffff 0%, #fbfcfe 40%, #f1f5f9 100%);
+  z-index: 0;
+}
+
+/* Dark Theme Viewport */
+.wa-login-viewport.dark-theme {
+  background-color: #0b0f19;
+  color: #f1f5f9;
+}
+
+.wa-login-viewport.dark-theme::before {
+  background: 
+    radial-gradient(circle at 12% 15%, rgba(239, 68, 68, 0.16) 0%, transparent 40%),
+    radial-gradient(circle at 88% 80%, rgba(220, 38, 38, 0.22) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(30, 41, 59, 0.7) 0%, transparent 60%),
+    linear-gradient(135deg, #090d16 0%, #0f172a 60%, #171626 100%);
+}
+
+/* Studio Floor Subtle Reflection */
+.wa-login-viewport::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24%;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.75) 0%, rgba(254, 242, 242, 0.25) 50%, transparent 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Main Container: 3-Column Balanced Layout */
+.wa-login-container {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+}
+
+/* ==============================================================================
+   LEFT HERO SHOWCASE PANEL (Equal Height: ~500px)
+   ============================================================================== */
+.wa-hero-panel {
+  flex: 1.05;
+  max-width: 480px;
+  height: clamp(470px, 66vh, 510px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+/* Brand Logo (WA! CRM) */
+.wa-brand-wrapper {
+  margin-bottom: 8px;
+}
+
+.wa-brand-image-logo {
+  height: 48px;
+  width: auto;
+  max-width: 220px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 4px 10px rgba(225, 29, 72, 0.16));
+  transition: all 0.3s ease;
+}
+
+.wa-brand-tagline {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: #64748b;
+  margin-top: 5px;
+  text-transform: uppercase;
+}
+
+.dark-theme .wa-brand-tagline {
+  color: #94a3b8;
+}
+
+/* Hero Headline */
+.wa-hero-title {
+  font-size: clamp(2.1rem, 2.9vw, 2.6rem);
+  font-weight: 900;
+  line-height: 1.15;
+  letter-spacing: -1px;
+  color: #0f172a;
+  margin: 0 0 8px 0;
+}
+
+.dark-theme .wa-hero-title {
+  color: #f8fafc;
+}
+
+.wa-highlight-opportunity {
+  color: #ff1e38;
+  position: relative;
+  display: inline-block;
+}
+
+.wa-opportunity-swoosh {
+  position: absolute;
+  left: 0;
+  bottom: -6px;
+  width: 100%;
+  height: 10px;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(255, 30, 56, 0.28));
+}
+
+/* Subtitle paragraph */
+.wa-hero-desc {
+  font-size: 0.96rem;
+  line-height: 1.5;
+  color: #475569;
+  max-width: 480px;
+  margin: 0;
+}
+
+.dark-theme .wa-hero-desc {
+  color: #94a3b8;
+}
+
+/* 4 Feature Badges Grid (100% Equal Size) */
+.wa-features-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  width: 100%;
+  max-width: 500px;
+  margin: 0;
+}
+
+.wa-feature-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  box-sizing: border-box;
+  height: 60px;
+  min-height: 60px;
+  transition: all 0.25s ease;
+}
+
+.dark-theme .wa-feature-pill {
+  background: rgba(30, 41, 59, 0.6);
+  border-color: rgba(51, 65, 85, 0.6);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.wa-feature-pill:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
+}
+
+.wa-feature-icon-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.wa-feature-icon-box.red {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+.wa-feature-icon-box.blue {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.wa-feature-icon-box.green {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.wa-feature-icon-box.amber {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.wa-feature-text {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #1e293b;
+  letter-spacing: -0.2px;
+  line-height: 1.25;
+}
+
+.dark-theme .wa-feature-text {
+  color: #f1f5f9;
+}
+
+.wa-feature-arrow {
+  color: #94a3b8;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.wa-feature-pill:hover .wa-feature-arrow {
+  color: #ef4444;
+  transform: translateX(2px);
+}
+
+/* Bottom Stats Bar */
+.wa-hero-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding-top: 4px;
+}
+
+.wa-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  flex: 1;
+}
+
+.wa-stat-bar {
+  width: 3px;
+  height: 34px;
+  background: #ff1e38;
+  border-radius: 2px;
+  flex-shrink: 0;
+  margin-right: -2px;
+}
+
+.wa-stat-number {
+  font-size: 1.65rem;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+  color: #0f172a;
+  line-height: 1;
+}
+
+.dark-theme .wa-stat-number {
+  color: #ffffff;
+}
+
+.wa-stat-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #64748b;
+  max-width: 95px;
+}
+
+.dark-theme .wa-stat-label {
+  color: #94a3b8;
+}
+
+/* ==============================================================================
+   CENTER: 3D BRAND MASCOT (Equal Height: ~500px)
+   ============================================================================== */
+.wa-center-mascot-section {
+  flex: 0.9;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
+  height: clamp(470px, 66vh, 510px);
+  max-width: 420px;
+  box-sizing: border-box;
+}
+
+.wa-mascot-floor-shadow {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+  height: 20px;
+  background: radial-gradient(ellipse at center, rgba(30, 41, 59, 0.32) 0%, rgba(225, 29, 72, 0.08) 45%, transparent 75%);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.wa-center-mascot-img {
+  width: 100%;
+  max-width: 410px;
+  height: 100%;
+  max-height: clamp(470px, 66vh, 510px);
+  object-fit: contain;
+  object-position: bottom center;
+  display: block;
+  filter: drop-shadow(0 14px 28px rgba(0, 0, 0, 0.12));
+  position: relative;
+  z-index: 2;
+  transition: transform 0.3s ease;
+}
+
+.wa-center-mascot-section:hover .wa-center-mascot-img {
+  transform: scale(1.02);
+}
+
+/* ==============================================================================
+   RIGHT AUTHENTICATION CARD (Equal Height: ~500px)
+   ============================================================================== */
+.wa-auth-section {
+  flex: 0.9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  height: clamp(470px, 66vh, 510px);
+  max-width: 400px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Fluid Abstract Red Gradient Blobs Framing Card */
+.wa-auth-section::before {
+  content: '';
+  position: absolute;
+  top: -18px;
+  right: -18px;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.35) 0%, rgba(225, 29, 72, 0.12) 50%, transparent 70%);
+  filter: blur(40px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.wa-auth-section::after {
+  content: '';
+  position: absolute;
+  bottom: -18px;
+  left: -18px;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.25) 0%, rgba(251, 113, 133, 0.08) 50%, transparent 70%);
+  filter: blur(40px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.wa-login-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 395px;
+  height: 100%;
+  max-height: clamp(470px, 66vh, 510px);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 22px;
+  padding: 16px 22px;
+  box-shadow: 
+    0 18px 45px -12px rgba(15, 23, 42, 0.1),
+    0 0 30px rgba(239, 68, 68, 0.07);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.wa-card-fluid-blob-top {
+  position: absolute;
+  top: -65px;
+  right: -65px;
+  width: 170px;
+  height: 170px;
+  background: radial-gradient(circle, rgba(254, 202, 202, 0.6) 0%, rgba(254, 226, 226, 0.2) 60%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.wa-card-fluid-blob-bottom {
+  position: absolute;
+  bottom: -65px;
+  right: -40px;
+  width: 170px;
+  height: 170px;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.3) 0%, rgba(244, 63, 94, 0.08) 60%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.dark-theme .wa-login-card {
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 
+    0 24px 60px -12px rgba(0, 0, 0, 0.6),
+    0 0 50px rgba(239, 68, 68, 0.15);
+}
+
+/* Card Header & Dark Mode Toggle */
+.wa-card-top-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.wa-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(241, 245, 249, 0.85);
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dark-theme .wa-theme-toggle {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: #334155;
+  color: #cbd5e1;
+}
+
+.wa-theme-toggle:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.dark-theme .wa-theme-toggle:hover {
+  background: #334155;
+  color: #ffffff;
+}
+
+.wa-card-header {
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.wa-card-logo-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 5px;
+}
+
+.wa-card-image-logo {
+  height: 38px;
+  width: auto;
+  max-width: 170px;
+  margin: 0 auto;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 3px 8px rgba(225, 29, 72, 0.12));
+}
+
+.wa-card-title {
+  font-size: 1.32rem;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  color: #0f172a;
+  margin: 0 0 2px 0;
+}
+
+.dark-theme .wa-card-title {
+  color: #f8fafc;
+}
+
+.wa-card-subtitle {
+  font-size: 0.84rem;
+  color: #64748b;
+  margin: 0;
+}
+
+.dark-theme .wa-card-subtitle {
+  color: #94a3b8;
+}
+
+/* Alert Error Banner */
+.wa-login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-bottom: 12px;
+}
+
+.dark-theme .wa-login-error {
+  background: rgba(153, 27, 27, 0.2);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+/* ==============================================================================
+   FORM CONTROLS WITH AMPLE ICON CLEARANCE
+   ============================================================================== */
+.wa-form-group {
+  margin-bottom: 12px;
+}
+
+.wa-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.wa-input-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  pointer-events: none;
+  z-index: 4;
+  transition: color 0.2s ease;
+}
+
+/* 50px left padding guarantees typed text NEVER touches the icon */
+input.wa-input[type="text"],
+input.wa-input[type="password"],
+input.wa-input[type="email"],
+.wa-input {
+  width: 100% !important;
+  height: 44px !important;
+  padding-left: 50px !important;
+  padding-right: 46px !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  background: #ffffff !important;
+  border: 1.5px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  font-size: 0.93rem !important;
+  color: #0f172a !important;
+  font-family: inherit !important;
+  outline: none !important;
+  box-sizing: border-box !important;
+  transition: all 0.2s ease !important;
+}
+
+.dark-theme input.wa-input[type="text"],
+.dark-theme input.wa-input[type="password"],
+.dark-theme input.wa-input[type="email"],
+.dark-theme .wa-input {
+  background: rgba(30, 41, 59, 0.7) !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+
+input.wa-input::placeholder,
+.wa-input::placeholder {
+  color: #94a3b8 !important;
+}
+
+input.wa-input:focus,
+.wa-input:focus {
+  border-color: #ff1e38 !important;
+  box-shadow: 0 0 0 3px rgba(255, 30, 56, 0.15) !important;
+}
+
+.wa-input-wrapper:focus-within .wa-input-icon {
+  color: #ff1e38;
+}
+
+.wa-password-toggle {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  z-index: 4;
+  transition: color 0.2s ease;
+}
+
+.wa-password-toggle:hover {
+  color: #475569;
+}
+
+.dark-theme .wa-password-toggle:hover {
+  color: #f1f5f9;
+}
+
+/* Remember Me & Forgot Password Row */
+.wa-options-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 14px 0;
+  font-size: 0.86rem;
+}
+
+.wa-remember-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: #334155;
+  user-select: none;
+  font-weight: 500;
+  font-size: 0.86rem;
+}
+
+.dark-theme .wa-remember-me {
+  color: #cbd5e1;
+}
+
+.wa-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #ff1e38;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.wa-forgot-link {
+  color: #ff1e38;
+  font-weight: 600;
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-family: inherit;
+  transition: opacity 0.2s ease;
+}
+
+.wa-forgot-link:hover {
+  text-decoration: underline;
+  opacity: 0.9;
+}
+
+/* Primary Submit Button: Red Pill */
+.wa-submit-btn {
+  width: 100%;
+  height: 44px;
+  background: linear-gradient(135deg, #ff1e38 0%, #e11d48 50%, #dc2626 100%);
+  border: none;
+  border-radius: 12px;
+  color: #ffffff;
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 6px 20px rgba(225, 29, 72, 0.32);
+  transition: all 0.25s ease;
+  font-family: inherit;
+}
+
+.wa-submit-btn:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  box-shadow: 0 10px 24px rgba(225, 29, 72, 0.4);
+  background: linear-gradient(135deg, #ff2e46 0%, #eb2450 50%, #e11d48 100%);
+}
+
+.wa-submit-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.wa-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* OR Divider */
+.wa-divider {
+  display: flex;
+  align-items: center;
+  margin: 13px 0 11px 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.wa-divider::before,
+.wa-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.dark-theme .wa-divider::before,
+.dark-theme .wa-divider::after {
+  background: #334155;
+}
+
+.wa-divider span {
+  padding: 0 12px;
+}
+
+/* Google Sign In Button */
+.wa-google-btn {
+  width: 100%;
+  height: 44px;
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  color: #1e293b;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.dark-theme .wa-google-btn {
+  background: rgba(30, 41, 59, 0.6);
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+.wa-google-btn:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.dark-theme .wa-google-btn:hover {
+  background: #1e293b;
+  border-color: #475569;
+}
+
+/* Footer Links */
+.wa-card-footer {
+  text-align: center;
+  margin-top: 10px;
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.dark-theme .wa-card-footer {
+  color: #94a3b8;
+}
+
+.wa-admin-link {
+  color: #ff1e38;
+  font-weight: 700;
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.wa-admin-link:hover {
+  text-decoration: underline;
+}
+
+/* Demo Credentials Pill */
+.wa-demo-badge {
+  margin-top: 12px;
+  padding: 6px 12px;
+  background: rgba(241, 245, 249, 0.85);
+  border: 1px dashed #cbd5e1;
+  border-radius: 9px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dark-theme .wa-demo-badge {
+  background: rgba(30, 41, 59, 0.5);
+  border-color: #475569;
+}
+
+.wa-demo-badge:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.dark-theme .wa-demo-badge:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+}
+
+.wa-demo-text {
+  font-size: 0.78rem;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.dark-theme .wa-demo-text {
+  color: #94a3b8;
+}
+
+.wa-demo-text strong {
+  color: #0f172a;
+}
+
+.dark-theme .wa-demo-text strong {
+  color: #f8fafc;
+}
+
+/* ==============================================================================
+   MODAL POPUP
+   ============================================================================== */
+.wa-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: waFadeIn 0.2s ease;
+}
+
+.wa-modal-card {
+  width: 100%;
+  max-width: 440px;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  box-sizing: border-box;
+  animation: waScaleUp 0.25s ease;
+}
+
+.dark-theme .wa-modal-card {
+  background: #1e293b;
+  color: #f8fafc;
+  border: 1px solid #334155;
+}
+
+.wa-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.wa-modal-title {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0;
+}
+
+.dark-theme .wa-modal-title {
+  color: #ffffff;
+}
+
+.wa-modal-close {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wa-modal-close:hover {
+  color: #0f172a;
+}
+
+.dark-theme .wa-modal-close:hover {
+  color: #ffffff;
+}
+
+.wa-modal-body {
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: #475569;
+  margin-bottom: 22px;
+}
+
+.dark-theme .wa-modal-body {
+  color: #cbd5e1;
+}
+
+.wa-modal-info-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 14px;
+  font-size: 0.85rem;
+}
+
+.dark-theme .wa-modal-info-box {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+.wa-modal-btn {
+  width: 100%;
+  height: 44px;
+  background: #0f172a;
+  color: #ffffff;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.dark-theme .wa-modal-btn {
+  background: #ef4444;
+}
+
+@keyframes waFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes waScaleUp {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ==============================================================================
+   RESPONSIVE DESIGN (Tablets & Mobile)
+   ============================================================================== */
+@media (max-width: 1360px) {
+  .wa-center-mascot-img {
+    height: clamp(400px, 52vh, 490px);
+    max-width: 370px;
+  }
+  .wa-login-container {
+    gap: 20px;
+  }
+  .wa-hero-panel {
+    max-width: 480px;
+  }
+}
+
+@media (max-width: 1080px) {
+  .wa-center-mascot-section {
+    display: none;
+  }
+
+  .wa-features-grid {
+    max-width: 100%;
+  }
+
+  .wa-login-container {
+    gap: 36px;
+  }
+}
+
+@media (max-width: 900px) {
+  .wa-login-viewport {
+    height: auto;
+    min-height: 100vh;
+    padding: 24px 16px;
+    align-items: flex-start;
+  }
+
+  .wa-login-container {
+    flex-direction: column;
+    align-items: center;
+    gap: 32px;
+  }
+
+  .wa-hero-panel {
+    max-width: 480px;
+    text-align: center;
+    align-items: center;
+  }
+
+  .wa-brand-image-logo {
+    margin: 0 auto;
+  }
+
+  .wa-hero-desc {
+    text-align: center;
+  }
+
+  .wa-features-grid {
+    width: 100%;
+  }
+
+  .wa-hero-stats {
+    justify-content: center;
+  }
+
+  .wa-auth-section {
+    max-width: 440px;
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .wa-login-card {
+    padding: 26px 20px;
+    border-radius: 22px;
+  }
+
+  .wa-hero-title {
+    font-size: 1.85rem;
+  }
+
+  .wa-features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wa-hero-stats {
+    flex-direction: column;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .wa-stat-item:not(:first-child)::before {
+    display: none;
+  }
+
+  .wa-options-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+
+@media (max-height: 580px) {
+  .wa-login-viewport {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+    padding: 16px;
+  }
+}

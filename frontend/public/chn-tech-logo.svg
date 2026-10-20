@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" width="320" height="80">
+  <g transform="translate(10, 16)">
+    <!-- Stylized modern monogram badge -->
+    <rect x="0" y="0" width="48" height="48" rx="12" fill="#0f172a"/>
+    <path d="M34 16 C34 16, 26 12, 18 16 C12 20, 12 28, 18 32 C26 36, 34 32, 34 32" stroke="#dc2626" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+    <circle cx="30" cy="24" r="3" fill="#ffffff"/>
+  </g>
+  <!-- Text -->
+  <text x="70" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="30" fill="#0f172a" letter-spacing="1">CHN</text>
+  <text x="146" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="28" fill="#dc2626" letter-spacing="0.5">TECH</text>
+  <text x="72" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="700" font-size="9.5" fill="#64748b" letter-spacing="3.5">TECHNOLOGIES PVT LTD</text>
+</svg>

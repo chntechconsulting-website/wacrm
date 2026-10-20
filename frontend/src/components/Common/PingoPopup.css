@@ -1,0 +1,244 @@
+/* Pingo Global Action & Download Popup Container */
+.pingo-popup-viewport {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999999;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Main Popup Card */
+.pingo-popup-card {
+  pointer-events: auto;
+  position: relative;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.28), 0 0 0 1px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+  display: flex;
+  align-items: stretch;
+  animation: pingoPopupSlideIn 0.38s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.pingo-popup-card.closing {
+  animation: pingoPopupSlideOut 0.28s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes pingoPopupSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pingoPopupSlideOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+}
+
+/* Mascot Left Stage */
+.pingo-popup-mascot-col {
+  width: 96px;
+  min-width: 96px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justifyContent: center;
+  padding: 10px 4px 6px 4px;
+  border-right: 1px solid #e2e8f0;
+  position: relative;
+}
+
+/* Theme variations for Mascot stage */
+.pingo-popup-card.theme-celebrate .pingo-popup-mascot-col {
+  background: linear-gradient(135deg, #fef9c3 0%, #fef08a 100%);
+  border-right-color: #fde047;
+}
+
+.pingo-popup-card.theme-primary .pingo-popup-mascot-col {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border-right-color: #bfdbfe;
+}
+
+.pingo-popup-card.theme-download .pingo-popup-mascot-col {
+  background: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+  border-right-color: #99f6e4;
+}
+
+.pingo-popup-card.theme-default .pingo-popup-mascot-col {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-right-color: #e2e8f0;
+}
+
+/* Content Body */
+.pingo-popup-content-col {
+  flex: 1;
+  padding: 14px 16px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  justifyContent: center;
+}
+
+.pingo-popup-header-row {
+  display: flex;
+  align-items: center;
+  justifyContent: space-between;
+  margin-bottom: 4px;
+}
+
+/* Badge */
+.pingo-popup-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: #dcfce7;
+  color: #15803d;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pingo-popup-card.theme-celebrate .pingo-popup-badge {
+  background: #fef08a;
+  color: #854d0e;
+}
+
+.pingo-popup-card.theme-primary .pingo-popup-badge {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.pingo-popup-card.theme-download .pingo-popup-badge {
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.pingo-popup-card.theme-default .pingo-popup-badge {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+/* Close Button */
+.pingo-popup-close-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.pingo-popup-close-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+/* Title & Subtitle */
+.pingo-popup-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 3px 0;
+  line-height: 1.25;
+}
+
+.pingo-popup-subtitle {
+  font-size: 0.78rem;
+  color: #475569;
+  margin: 0 0 6px 0;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Reference Tag Pill */
+.pingo-popup-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.69rem;
+  font-weight: 600;
+  color: #0369a1;
+  background: #f0f9ff;
+  border: 1px solid #e0f2fe;
+  padding: 1px 6px;
+  border-radius: 4px;
+  width: fit-content;
+}
+
+/* Progress Countdown Bar */
+.pingo-popup-progress-track {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.pingo-popup-progress-fill {
+  height: 100%;
+  background: #10b981;
+  width: 100%;
+  animation: pingoProgressCountdown linear forwards;
+}
+
+.pingo-popup-card.theme-celebrate .pingo-popup-progress-fill {
+  background: #eab308;
+}
+
+.pingo-popup-card.theme-primary .pingo-popup-progress-fill {
+  background: #0284c7;
+}
+
+.pingo-popup-card.theme-download .pingo-popup-progress-fill {
+  background: #0d9488;
+}
+
+@keyframes pingoProgressCountdown {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+/* Responsive adjustment for small screens */
+@media (max-width: 480px) {
+  .pingo-popup-viewport {
+    bottom: 16px;
+    right: 16px;
+    left: 16px;
+  }
+  .pingo-popup-card {
+    width: 100%;
+  }
+}

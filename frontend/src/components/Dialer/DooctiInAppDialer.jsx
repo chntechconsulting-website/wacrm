@@ -1,0 +1,1537 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import API from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
+import { 
+  Phone, 
+  PhoneCall, 
+  PhoneIncoming, 
+  PhoneOutgoing, 
+  PhoneMissed,
+  PhoneOff,
+  Minus, 
+  RotateCw, 
+  Settings, 
+  ChevronUp,
+  Delete,
+  Clock,
+  Grid,
+  Mic,
+  MicOff,
+  Pause,
+  Play,
+  Volume2,
+  VolumeX,
+  Home,
+  Users,
+  Search,
+  X,
+  UserCheck,
+  Radio,
+  Building,
+  ArrowUpRight,
+  ArrowDownLeft
+} from 'lucide-react';
+import './DooctiInAppDialer.css';
+import { formatLeadReceived } from '../../utils/dateUtils';
+import PingoMascot from '../Common/PingoMascot';
+
+// Default configuration based on Doocti deployment handover email
+const DEFAULT_DOOCTI_CONFIG = {
+  domain: 'https://beta3-app.doocti.com/',
+  tenantId: 'chntechnolog',
+  userEmail: 'chntechnolog_agent01@doocti.com',
+  userId: '1282',
+  userNumber: '1282', // Agent extension
+};
+
+// Standard ITU-T Dual-Tone Multi-Frequency (DTMF) mapping
+const DTMF_FREQUENCIES = {
+  '1': [697, 1209],
+  '2': [697, 1336],
+  '3': [697, 1477],
+  '4': [770, 1209],
+  '5': [770, 1336],
+  '6': [770, 1477],
+  '7': [852, 1209],
+  '8': [852, 1336],
+  '9': [852, 1477],
+  '*': [941, 1209],
+  '0': [941, 1336],
+  '#': [941, 1477],
+};
+
+const KEYPAD_BUTTONS = [
+  { digit: '1', letters: '' },
+  { digit: '2', letters: 'ABC' },
+  { digit: '3', letters: 'DEF' },
+  { digit: '4', letters: 'GHI' },
+  { digit: '5', letters: 'JKL' },
+  { digit: '6', letters: 'MNO' },
+  { digit: '7', letters: 'PQRS' },
+  { digit: '8', letters: 'TUV' },
+  { digit: '9', letters: 'WXYZ' },
+  { digit: '*', letters: '' },
+  { digit: '0', letters: '+' },
+  { digit: '#', letters: '' },
+];
+
+// Persistent Web Audio context for zero-lag touch-tone playback
+let audioCtx = null;
+
+const playDTMF = (digit) => {
+  try {
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtxClass) return;
+    if (!audioCtx) audioCtx = new AudioCtxClass();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const freqs = DTMF_FREQUENCIES[digit] || [770, 1336];
+    const now = audioCtx.currentTime;
+
+    const osc1 = audioCtx.createOscillator();
+    const osc2 = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc1.type = 'sine';
+    osc2.type = 'sine';
+    osc1.frequency.setValueAtTime(freqs[0], now);
+    osc2.frequency.setValueAtTime(freqs[1], now);
+
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(0.14, now + 0.012);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+
+    osc1.connect(gainNode);
+    osc2.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc1.start(now);
+    osc2.start(now);
+    osc1.stop(now + 0.15);
+    osc2.stop(now + 0.15);
+  } catch (err) {
+    console.debug('DTMF tone error:', err);
+  }
+};
+
+const playClickTone = (freq = 440) => {
+  try {
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtxClass) return;
+    if (!audioCtx) audioCtx = new AudioCtxClass();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, now);
+    gainNode.gain.setValueAtTime(0.08, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.08);
+  } catch (err) {}
+};
+
+const playCallConnectingTone = () => {
+  try {
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtxClass) return;
+    if (!audioCtx) audioCtx = new AudioCtxClass();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, now); // C5
+    osc.frequency.setValueAtTime(659.25, now + 0.09); // E5
+
+    gainNode.gain.setValueAtTime(0.12, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.22);
+  } catch (err) {}
+};
+
+const formatCallTimer = (sec) => {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+};
+
+const formatDurationBadge = (sec) => {
+  if (!sec || sec <= 0) return '00:00';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+};
+
+const formatCallTimestamp = (isoDate) => {
+  if (!isoDate) return '';
+  const parsed = formatLeadReceived(isoDate);
+  if (parsed && parsed.full && parsed.full !== '-') {
+    const todayStr = formatLeadReceived(new Date().toISOString()).date;
+    if (parsed.date === todayStr) {
+      return `Today ${parsed.time}`;
+    }
+    return `${parsed.date}, ${parsed.time}`;
+  }
+  return String(isoDate);
+};
+
+const getAvatarColor = (name) => {
+  const colors = [
+    'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+    'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+    'linear-gradient(135deg, #059669 0%, #047857 100%)',
+    'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+    'linear-gradient(135deg, #d97706 0%, #b45309 100%)',
+    'linear-gradient(135deg, #e11d48 0%, #be123c 100%)'
+  ];
+  if (!name) return colors[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+};
+
+const DooctiInAppDialer = () => {
+  const { user } = useAuth();
+
+  // Floating Window State
+  const [isMinimized, setIsMinimized] = useState(() => {
+    const saved = localStorage.getItem('doocti_minimized');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+
+  const [config, setConfig] = useState(() => {
+    const saved = localStorage.getItem('doocti_config');
+    return saved ? { ...DEFAULT_DOOCTI_CONFIG, ...JSON.parse(saved) } : DEFAULT_DOOCTI_CONFIG;
+  });
+
+  // Navigation: 'home' (Calls history), 'dialpad' (Keypad), 'leads' (Lead directory)
+  const [activeTab, setActiveTab] = useState('home');
+  const [callFilter, setCallFilter] = useState('all'); // 'all' | 'missed'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [tempConfig, setTempConfig] = useState(config);
+
+  // Keypad & Number State
+  const [dialNumber, setDialNumber] = useState('');
+  const [matchedLead, setMatchedLead] = useState(null);
+
+  // In-Call State
+  const [activeCall, setActiveCall] = useState(null); // { number, name, startTime, isMuted, isHeld }
+  const [callDuration, setCallDuration] = useState(0);
+  const [isRinging, setIsRinging] = useState(false);
+
+  // Recent Calls & Leads Data
+  const [recentCalls, setRecentCalls] = useState([]);
+  const [loadingCalls, setLoadingCalls] = useState(false);
+  const [leadsList, setLeadsList] = useState([]);
+  const [loadingLeads, setLoadingLeads] = useState(false);
+  const [leadSearchQuery, setLeadSearchQuery] = useState('');
+
+  // Audio Playback
+  const [playingAudioId, setPlayingAudioId] = useState(null);
+  const audioPlayerRef = useRef(null);
+
+  const iframeRef = useRef(null);
+  const activeSessionRef = useRef(null);
+  const timerIntervalRef = useRef(null);
+  const isEndingCallRef = useRef(false);
+  const dialpadInputRef = useRef(null);
+
+  // Auto-focus dialpad number input when switching to dialpad tab
+  useEffect(() => {
+    if (activeTab === 'dialpad' && !isMinimized) {
+      const timer = setTimeout(() => {
+        dialpadInputRef.current?.focus();
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab, isMinimized]);
+
+  // Sync minimize state with localStorage
+  const toggleMinimize = (minimizedState) => {
+    const next = typeof minimizedState === 'boolean' ? minimizedState : !isMinimized;
+    setIsMinimized(next);
+    localStorage.setItem('doocti_minimized', JSON.stringify(next));
+  };
+
+  // Reload iframe in case agent session loses audio connection
+  const handleReloadIframe = () => {
+    if (iframeRef.current) {
+      const currentSrc = iframeRef.current.src;
+      iframeRef.current.src = 'about:blank';
+      setTimeout(() => {
+        if (iframeRef.current) {
+          iframeRef.current.src = currentSrc;
+        }
+      }, 150);
+    }
+    fetchRecentCalls();
+  };
+
+  // Save custom configuration
+  const handleSaveConfig = (e) => {
+    e.preventDefault();
+    setConfig(tempConfig);
+    localStorage.setItem('doocti_config', JSON.stringify(tempConfig));
+    setShowSettings(false);
+  };
+
+  // Fetch recent calls
+  const fetchRecentCalls = async () => {
+    setLoadingCalls(true);
+    try {
+      const res = await API.get('/ivr/calls?limit=40');
+      const items = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+      setRecentCalls(items);
+    } catch (e) {
+      console.warn('Failed to fetch recent calls:', e);
+      setRecentCalls([]);
+    } finally {
+      setLoadingCalls(false);
+    }
+  };
+
+  // Fetch CRM leads for Lead Dial directory
+  const fetchLeads = async (searchVal = '') => {
+    setLoadingLeads(true);
+    try {
+      const endpoint = searchVal ? `/leads?search=${encodeURIComponent(searchVal)}&limit=30` : '/leads?limit=30';
+      const res = await API.get(endpoint);
+      const items = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+      setLeadsList(items);
+    } catch (err) {
+      console.warn('Failed to fetch leads for dialer:', err);
+      setLeadsList([]);
+    } finally {
+      setLoadingLeads(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRecentCalls();
+    // Auto-poll recent calls every 6 seconds so inbound and missed calls appear automatically
+    const pollInterval = setInterval(() => {
+      if (!activeCall && !isRinging) {
+        fetchRecentCalls();
+      }
+    }, 6000);
+    return () => clearInterval(pollInterval);
+  }, [activeCall, isRinging]);
+
+  // Live Lead Lookup as user types number (Strictly read-only, never auto-creates)
+  useEffect(() => {
+    const cleanNum = dialNumber.replace(/[^0-9]/g, '');
+    if (cleanNum.length >= 6) {
+      API.get(`/doocti/lead-by-number?number=${cleanNum}&auto_create=false`)
+        .then(res => {
+          if (res.data?.success && res.data?.lead) {
+            setMatchedLead(res.data.lead);
+          } else {
+            setMatchedLead(null);
+          }
+        })
+        .catch(() => setMatchedLead(null));
+    } else {
+      setMatchedLead(null);
+    }
+  }, [dialNumber]);
+
+  // Active call duration timer: strictly runs ONLY when client answers / call is connected
+  useEffect(() => {
+    const isConnected = activeCall && (activeCall.callStatus === 'CONNECTED' || activeCall.callStatus === 'ANSWERED') && activeCall.answeredAt;
+
+    if (isConnected) {
+      // Calculate initial duration in seconds
+      setCallDuration(Math.max(0, Math.floor((Date.now() - activeCall.answeredAt) / 1000)));
+
+      timerIntervalRef.current = setInterval(() => {
+        setCallDuration(Math.max(0, Math.floor((Date.now() - activeCall.answeredAt) / 1000)));
+      }, 1000);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      setCallDuration(0);
+    }
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [activeCall?.callStatus, activeCall?.answeredAt]);
+
+  // Background server-side status synchronization for active call
+  useEffect(() => {
+    let pollTimer = null;
+    if (activeCall && !['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED'].includes(activeCall.callStatus)) {
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await API.get('/ivr/calls?limit=1');
+          const latest = res.data?.items?.[0];
+          if (!latest) return;
+
+          const session = activeSessionRef.current;
+          const cleanTarget = session?.customerPhone || activeCall.number;
+          const isLatestSameTarget = cleanTarget && (latest.to_number?.includes(cleanTarget) || latest.from_number?.includes(cleanTarget) || latest.customer_phone?.includes(cleanTarget));
+
+          if (isLatestSameTarget) {
+            const st = (latest.call_status || '').toUpperCase();
+            if (st === 'RINGING' && activeCall.callStatus === 'CONNECTING') {
+              setActiveCall(prev => prev ? ({ ...prev, callStatus: 'RINGING' }) : null);
+            } else if (['ANSWERED', 'CONNECTED'].includes(st) && activeCall.callStatus !== 'CONNECTED') {
+              const ansTime = latest.answered_at ? new Date(latest.answered_at).getTime() : Date.now();
+              if (session) {
+                session.answeredAt = ansTime;
+                session.status = 'ANSWERED';
+              }
+              setActiveCall(prev => prev ? ({
+                ...prev,
+                callStatus: 'CONNECTED',
+                answeredAt: ansTime
+              }) : null);
+            } else if (['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED', 'MISSED'].includes(st)) {
+              // Server detected terminal state
+              const diffMs = latest.ended_at ? (Date.now() - new Date(latest.ended_at).getTime()) : 0;
+              if (diffMs < 30000) {
+                handleEndCall(st);
+              }
+            }
+          }
+        } catch (e) {
+          // Silent polling error
+        }
+      }, 2500);
+    }
+
+    return () => {
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [activeCall?.callStatus, activeCall?.number]);
+
+  // -------------------------------------------------------------
+  // Click-To-Call: Dispatches postMessage into Doocti Iframe
+  // -------------------------------------------------------------
+  const dialLead = (phoneNumber, contactData = {}) => {
+    if (!phoneNumber) return;
+    const cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
+
+    const leadName = contactData.name || contactData.contact_name || contactData.lead_name || matchedLead?.name || 'Customer';
+
+    const payload = {
+      entity_id: String(contactData.id || contactData.lead_id || matchedLead?.id || ''),
+      entity_name: leadName,
+      entity_number: cleanNumber,
+      entity_type: contactData.entity_type || (contactData.company ? 'Contact' : 'Leads'),
+      tenant_id: config.tenantId || 'chntechnolog',
+      user_email: config.userEmail || 'chntechnolog_agent01@doocti.com',
+      user_id: String(config.userId || '1282'),
+      user_number: String(config.userNumber || '1282')
+    };
+
+    const uniqueSessionId = `doocti_${config.userNumber || '1282'}_${cleanNumber}_${Date.now()}`;
+    activeSessionRef.current = {
+      callId: uniqueSessionId,
+      customerPhone: cleanNumber,
+      contactData: contactData,
+      startTime: Date.now(),
+      answeredAt: null,
+      employeeId: user?.employee_id || user?.id,
+      agentName: user?.name,
+      agentEmail: user?.email,
+      direction: 'OUTBOUND',
+      status: 'CONNECTING'
+    };
+
+    // Transition to Active Call View with CONNECTING status and timer at 00:00
+    setActiveCall({
+      number: cleanNumber,
+      name: leadName,
+      callStatus: 'CONNECTING',
+      startedAt: Date.now(),
+      answeredAt: null,
+      isMuted: false,
+      isHeld: false
+    });
+
+    setCallDuration(0);
+    toggleMinimize(false);
+
+    const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
+    if (iframeRef.current && iframeRef.current.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage({ data: payload }, targetOrigin);
+      } catch (err) {
+        console.error('Failed to dispatch postMessage to Doocti iframe:', err);
+      }
+    }
+  };
+
+  // Answer Call Handler for Incoming Ringing Call
+  const handleAnswerCall = () => {
+    setIsRinging(false);
+    toggleMinimize(false);
+    const ansTime = Date.now();
+    if (activeSessionRef.current) {
+      activeSessionRef.current.answeredAt = ansTime;
+      activeSessionRef.current.status = 'ANSWERED';
+    }
+
+    if (!activeCall && activeSessionRef.current) {
+      setActiveCall({
+        number: activeSessionRef.current.customerPhone || 'Customer',
+        name: activeSessionRef.current.contactData?.name || 'Customer',
+        callStatus: 'CONNECTED',
+        startedAt: activeSessionRef.current.startTime || ansTime,
+        answeredAt: ansTime,
+        isMuted: false,
+        isHeld: false
+      });
+    } else if (activeCall) {
+      setActiveCall(prev => ({
+        ...prev,
+        callStatus: 'CONNECTED',
+        answeredAt: ansTime
+      }));
+    }
+
+    // Persist answered state to CRM backend
+    const session = activeSessionRef.current;
+    if (session?.callId) {
+      API.post('/doocti/call-log', {
+        uniqueid: session.callId,
+        phone_number: session.customerPhone,
+        station: config.userNumber || '1282',
+        status: 'ANSWERED',
+        call_direction: session.direction || 'INBOUND',
+        answer_time: new Date(ansTime).toISOString()
+      }).catch(() => {});
+    }
+
+    window.dispatchEvent(new CustomEvent('crm-call-answered', { detail: { callId: session?.callId } }));
+
+    // Forward answer event to Doocti WebPhone iframe
+    const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
+    if (iframeRef.current && iframeRef.current.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage({ action: 'answer', event: 'answer', type: 'answer' }, targetOrigin);
+        iframeRef.current.contentWindow.postMessage({ action: 'accept', event: 'accept', type: 'accept' }, targetOrigin);
+      } catch (err) {
+        console.warn('Failed to dispatch answer postMessage to Doocti iframe:', err);
+      }
+    }
+  };
+
+  // End / Decline Call Handler
+  const handleEndCall = (outcomeOverride = null, isUserInitiated = false) => {
+    if (isEndingCallRef.current) return;
+    const session = activeSessionRef.current;
+    const currentCall = activeCall;
+    const wasRinging = isRinging;
+
+    if (!session && !currentCall && !wasRinging) {
+      setActiveCall(null);
+      activeSessionRef.current = null;
+      setDialNumber('');
+      setMatchedLead(null);
+      setIsRinging(false);
+      setCallDuration(0);
+      return;
+    }
+
+    isEndingCallRef.current = true;
+
+    // 1. Stop timer immediately
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+
+    const targetPhone = currentCall?.number || session?.customerPhone || dialNumber || 'Unknown';
+    const cleanPhone = String(targetPhone || '').replace(/[^0-9]/g, '');
+    const userExt = String(config.userNumber || '1282').replace(/[^0-9]/g, '');
+
+    const wasAnswered = Boolean(currentCall?.answeredAt || session?.answeredAt || currentCall?.callStatus === 'CONNECTED' || currentCall?.callStatus === 'ANSWERED');
+    const answerTime = currentCall?.answeredAt || session?.answeredAt;
+    const endTime = Date.now();
+
+    // Actual talk duration is strictly calculated using ended_at - answered_at:
+    let talkDuration = 0;
+    if (wasAnswered && answerTime) {
+      talkDuration = Math.max(1, Math.round((endTime - answerTime) / 1000));
+    }
+
+    // Determine final status accurately (an unanswered incoming call is MISSED, never FAILED)
+    let finalStatus = 'COMPLETED';
+    const isDirectionInbound = session?.direction === 'INBOUND' || wasRinging;
+    if (outcomeOverride) {
+      finalStatus = outcomeOverride;
+    } else if (wasRinging && !wasAnswered) {
+      finalStatus = 'MISSED';
+      talkDuration = 0;
+    } else if (!wasAnswered) {
+      finalStatus = isDirectionInbound ? 'MISSED' : 'NO_ANSWER';
+      talkDuration = 0;
+    } else {
+      finalStatus = 'COMPLETED';
+    }
+
+    if (['NO_ANSWER', 'BUSY', 'FAILED', 'MISSED'].includes(finalStatus)) {
+      talkDuration = 0;
+    }
+
+    // 2. Log CDR to CRM backend if phone has digits
+    if (cleanPhone && cleanPhone.length >= 6 && cleanPhone !== userExt) {
+      const pushPayload = {
+        uniqueid: session?.callId || `doocti_${userExt}_${cleanPhone}_${Date.now()}`,
+        phone_number: cleanPhone,
+        station: userExt,
+        agent: user?.name || config.userEmail,
+        agent_email: user?.email || config.userEmail,
+        employee_id: user?.employee_id || user?.id || 1,
+        status: finalStatus,
+        duration: talkDuration,
+        call_direction: session?.direction || (isDirectionInbound ? 'INBOUND' : 'OUTBOUND'),
+        entity_id: session?.contactData?.id || matchedLead?.id || null,
+        entity_type: 'Lead',
+        start_time: session?.startTime ? new Date(session.startTime).toISOString() : new Date().toISOString(),
+        answer_time: (wasAnswered && answerTime) ? new Date(answerTime).toISOString() : null,
+        end_time: new Date(endTime).toISOString()
+      };
+
+      API.post('/doocti/call-log', pushPayload)
+        .then((res) => {
+          window.dispatchEvent(new CustomEvent('crm-call-completed', { detail: res.data }));
+          window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: pushPayload.uniqueid, status: finalStatus } }));
+          fetchRecentCalls();
+        })
+        .catch(() => {
+          window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: pushPayload.uniqueid, status: finalStatus } }));
+          fetchRecentCalls();
+        });
+    } else {
+      window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: session?.callId, status: finalStatus } }));
+    }
+
+    // 3. Dispatch call hangup / disconnect postMessages to Doocti iframe
+    const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
+    if (iframeRef.current && iframeRef.current.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage({ action: 'hangup', event: 'hangup', type: 'hangup' }, targetOrigin);
+        iframeRef.current.contentWindow.postMessage({ event: 'call_disconnect', action: 'call_disconnect' }, targetOrigin);
+        if (wasRinging && !wasAnswered) {
+          iframeRef.current.contentWindow.postMessage({ action: 'decline', type: 'decline' }, targetOrigin);
+        }
+      } catch (err) {
+        console.warn('Failed to dispatch postMessage to Doocti iframe:', err);
+      }
+    }
+
+    // 4. Reset active call state cleanly without abrupt iframe reloads that trigger PBX re-ring loops
+    setActiveCall(null);
+    activeSessionRef.current = null;
+    setDialNumber('');
+    setMatchedLead(null);
+    setIsRinging(false);
+    setCallDuration(0);
+
+    setTimeout(() => {
+      isEndingCallRef.current = false;
+    }, 1000);
+  };
+
+  // Keypad Handlers with DTMF Audio
+  const handleDigitClick = (digit) => {
+    playDTMF(digit);
+    setDialNumber(prev => (prev.length < 25 ? prev + digit : prev));
+    dialpadInputRef.current?.focus();
+  };
+
+  const handleBackspace = () => {
+    playClickTone(380);
+    setDialNumber(prev => prev.slice(0, -1));
+    dialpadInputRef.current?.focus();
+  };
+
+  const handleCallAction = () => {
+    playCallConnectingTone();
+    const clean = dialNumber.trim();
+    if (!clean) {
+      if (recentCalls && recentCalls.length > 0) {
+        const lastCall = recentCalls[0];
+        const lastPhone = lastCall.customer_phone || lastCall.to_number || lastCall.from_number;
+        if (lastPhone) {
+          setDialNumber(lastPhone);
+          return;
+        }
+      }
+      return;
+    }
+    dialLead(clean, matchedLead || {});
+  };
+
+  // Audio recording player toggle
+  const handleToggleAudio = (callItem) => {
+    if (!callItem.recording_url) {
+      playClickTone(520);
+      return;
+    }
+    if (playingAudioId === callItem.id) {
+      if (audioPlayerRef.current) audioPlayerRef.current.pause();
+      setPlayingAudioId(null);
+    } else {
+      setPlayingAudioId(callItem.id);
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.src = callItem.recording_url;
+        audioPlayerRef.current.play().catch(e => console.warn(e));
+      }
+    }
+  };
+
+  // Inbound Window postMessage listener
+  useEffect(() => {
+    window.dooctiDial = (phone, contact) => dialLead(phone, contact);
+    window.crmDial = (phone, contact) => dialLead(phone, contact);
+    window.expandDoocti = () => toggleMinimize(false);
+
+    const handleCustomDialEvent = (event) => {
+      const { phone, contact } = event.detail || {};
+      if (phone) dialLead(phone, contact);
+    };
+    window.addEventListener('crm-doocti-dial', handleCustomDialEvent);
+
+    const handleWindowMessage = (event) => {
+      let dooctiHost = '';
+      try {
+        dooctiHost = new URL(config.domain).hostname;
+      } catch (e) {}
+      if (event.origin && !event.origin.includes('doocti') && dooctiHost && !event.origin.includes(dooctiHost)) {
+        return;
+      }
+
+      let msg = event.data;
+      if (!msg) return;
+      if (typeof msg === 'string') {
+        try { msg = JSON.parse(msg); } catch (e) {}
+      }
+
+      const eventType = String(msg.type || msg.action || msg.event || msg.status || msg.calltype || msg.event_type || '').toLowerCase();
+      const callState = String(msg.state || msg.call_state || msg.disposition || '').toLowerCase();
+
+      // Ringing Detection (handles Doocti's { type: "Ringing", phone_number: ... })
+      const isRingingSignal = ['ringing', 'ring', 'inbound', 'incoming', 'call_incoming'].some(k => eventType.includes(k) || callState.includes(k));
+
+      if (isRingingSignal) {
+        if (activeCall && (activeCall.callStatus === 'CONNECTING' || activeCall.callStatus === 'DIALING')) {
+          // Outbound call is progressing and ringing
+          setActiveCall(prev => prev ? ({ ...prev, callStatus: 'RINGING' }) : null);
+        } else {
+          // INBOUND CALL ARRIVAL! (e.g. Doocti sending { type: "Ringing", phone_number: m })
+          setIsRinging(true);
+          toggleMinimize(false);
+          const rawNum = msg.phone_number || msg.customer_number || msg.number || msg.caller || '';
+          const inNum = String(rawNum).replace(/[^0-9]/g, '');
+          const realCallId = msg.uniqueid || msg.call_id || msg.callid || msg.CallId || msg.id || `doocti_inbound_${Date.now()}`;
+
+          activeSessionRef.current = {
+            callId: realCallId,
+            customerPhone: inNum || rawNum,
+            startTime: Date.now(),
+            direction: 'INBOUND',
+            status: 'RINGING'
+          };
+
+          setActiveCall({
+            number: inNum || rawNum || 'Incoming Caller',
+            name: msg.customer_name || 'Incoming Call',
+            callStatus: 'RINGING',
+            startedAt: Date.now(),
+            answeredAt: null,
+            isMuted: false,
+            isHeld: false
+          });
+
+          // 1. Immediately register call in CRM DB as RINGING so the whole system knows a call is active
+          API.post('/doocti/call-log', {
+            uniqueid: realCallId,
+            phone_number: inNum || rawNum,
+            station: config.userNumber || '1282',
+            agent: user?.name || config.userEmail,
+            agent_email: user?.email || config.userEmail,
+            employee_id: user?.employee_id || user?.id || 1,
+            status: 'RINGING',
+            call_direction: 'INBOUND',
+            duration: 0,
+            start_time: new Date().toISOString()
+          }).then(res => {
+            if (res.data?.call_log_id && activeSessionRef.current) {
+              activeSessionRef.current.dbCallId = res.data.call_log_id;
+            }
+          }).catch(() => {});
+
+          // 2. Fetch CRM lead details for caller ID in real time
+          if (inNum && inNum.length >= 6) {
+            API.get(`/doocti/lead-by-number?number=${inNum}&auto_create=false`)
+              .then(res => {
+                const lead = res.data?.lead || null;
+                if (activeSessionRef.current) {
+                  activeSessionRef.current.contactData = lead;
+                }
+                const leadName = lead?.name || msg.customer_name || 'Incoming Caller';
+                setActiveCall(prev => prev ? ({
+                  ...prev,
+                  name: leadName,
+                  contactData: lead
+                }) : null);
+
+                // Dispatch global real-time event for Layout.jsx & other CRM components
+                window.dispatchEvent(new CustomEvent('crm-incoming-call', {
+                  detail: {
+                    id: activeSessionRef.current?.dbCallId || null,
+                    provider_call_id: realCallId,
+                    customer_phone: inNum || rawNum,
+                    from_number: inNum || rawNum,
+                    lead_name: leadName,
+                    company: lead?.company || '',
+                    lead_status: lead?.status || 'NEW',
+                    employee_name: lead?.lead_owner || user?.name || 'Sales Representative',
+                    call_status: 'RINGING',
+                    call_direction: 'INBOUND',
+                    started_at: new Date().toISOString()
+                  }
+                }));
+              })
+              .catch(() => {
+                window.dispatchEvent(new CustomEvent('crm-incoming-call', {
+                  detail: {
+                    id: null,
+                    provider_call_id: realCallId,
+                    customer_phone: inNum || rawNum,
+                    from_number: inNum || rawNum,
+                    lead_name: msg.customer_name || 'Incoming Caller',
+                    company: '',
+                    lead_status: 'NEW',
+                    employee_name: user?.name || 'Sales Representative',
+                    call_status: 'RINGING',
+                    call_direction: 'INBOUND',
+                    started_at: new Date().toISOString()
+                  }
+                }));
+              });
+          } else {
+            window.dispatchEvent(new CustomEvent('crm-incoming-call', {
+              detail: {
+                id: null,
+                provider_call_id: realCallId,
+                customer_phone: rawNum || 'Unknown Caller',
+                from_number: rawNum || 'Unknown Caller',
+                lead_name: 'Incoming Caller',
+                company: '',
+                lead_status: 'NEW',
+                employee_name: user?.name || 'Sales Representative',
+                call_status: 'RINGING',
+                call_direction: 'INBOUND',
+                started_at: new Date().toISOString()
+              }
+            }));
+          }
+        }
+      }
+
+      // Call Answered / Connected
+      if (['answered', 'connected', 'in-progress', 'inprogress', 'call_connected', 'call_answered', 'media_connected'].some(k => eventType.includes(k) || callState.includes(k))) {
+        setIsRinging(false);
+        const ansTime = Date.now();
+        if (activeSessionRef.current) {
+          activeSessionRef.current.answeredAt = ansTime;
+          activeSessionRef.current.status = 'ANSWERED';
+        }
+        setActiveCall(prev => prev ? ({
+          ...prev,
+          callStatus: 'CONNECTED',
+          answeredAt: prev.answeredAt || ansTime
+        }) : {
+          number: msg.phone_number || 'Connected Call',
+          name: msg.customer_name || 'Customer',
+          callStatus: 'CONNECTED',
+          startedAt: ansTime,
+          answeredAt: ansTime,
+          isMuted: false,
+          isHeld: false
+        });
+
+        window.dispatchEvent(new CustomEvent('crm-call-answered', {
+          detail: {
+            callId: activeSessionRef.current?.callId,
+            dbCallId: activeSessionRef.current?.dbCallId
+          }
+        }));
+      }
+
+      // Specific Terminal Outcomes
+      if (['busy', 'line_busy', 'engaged'].some(k => eventType.includes(k) || callState.includes(k))) {
+        setIsRinging(false);
+        handleEndCall('BUSY');
+      } else if (['failed', 'error', 'call_failed'].some(k => eventType.includes(k) || callState.includes(k))) {
+        setIsRinging(false);
+        // For incoming calls that weren't answered, mark as MISSED, not FAILED
+        const isInc = activeSessionRef.current?.direction === 'INBOUND' || isRinging;
+        handleEndCall(isInc ? 'MISSED' : 'FAILED');
+      } else if (['no_answer', 'noanswer', 'unreachable', 'timeout'].some(k => eventType.includes(k) || callState.includes(k))) {
+        setIsRinging(false);
+        handleEndCall('MISSED');
+      } else if (['hangup', 'disconnected', 'ended', 'call_disconnect', 'call_ended', 'decline', 'rejected', 'terminate'].some(k => eventType.includes(k) || callState.includes(k))) {
+        setIsRinging(false);
+        handleEndCall();
+      }
+    };
+
+    // Expose functional call controls on window for Layout & other components
+    window.crmAnswerCall = () => handleAnswerCall();
+    window.crmRejectCall = () => handleEndCall('MISSED', true);
+    window.crmHangupCall = () => handleEndCall(null, true);
+    window.expandDoocti = () => toggleMinimize(false);
+
+    window.addEventListener('message', handleWindowMessage);
+
+    return () => {
+      window.removeEventListener('crm-doocti-dial', handleCustomDialEvent);
+      window.removeEventListener('message', handleWindowMessage);
+    };
+  }, [config, user, activeCall, callDuration, dialNumber]);
+
+  // Filtered calls for Home screen
+  const filteredRecentCalls = useMemo(() => {
+    return recentCalls.filter(call => {
+      const status = (call.call_status || '').toUpperCase();
+      const isMissed = ['MISSED', 'NO_ANSWER', 'FAILED', 'BUSY'].includes(status);
+      if (callFilter === 'missed' && !isMissed) return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const phone = String(call.customer_phone || call.to_number || call.from_number || '').toLowerCase();
+        const name = String(call.lead_name || '').toLowerCase();
+        return phone.includes(q) || name.includes(q);
+      }
+      return true;
+    });
+  }, [recentCalls, callFilter, searchQuery]);
+
+  const missedCount = useMemo(() => {
+    return recentCalls.filter(c => ['MISSED', 'NO_ANSWER', 'FAILED', 'BUSY'].includes((c.call_status || '').toUpperCase())).length;
+  }, [recentCalls]);
+
+  return (
+    <div className="doocti-container">
+      {/* Hidden Audio Player for Recordings */}
+      <audio 
+        ref={audioPlayerRef} 
+        onEnded={() => setPlayingAudioId(null)} 
+        onError={() => setPlayingAudioId(null)}
+        style={{ display: 'none' }}
+      />
+
+      {/* -----------------------------------------------------------
+          1. Minimized Floating Pill (Docked at Bottom-Right)
+      ------------------------------------------------------------ */}
+      {isMinimized && (
+        <div 
+          className="doocti-minimized-pill"
+          onClick={() => toggleMinimize(false)}
+          title="Click to open CRM Softphone"
+        >
+          <div className="doocti-status-dot-wrapper">
+            <div className={`doocti-status-dot ${isRinging ? 'ringing' : 'pulsing'}`} />
+          </div>
+          <PingoMascot pose="run" height={26} withShadow={false} />
+          <div className="doocti-pill-info">
+            <span className="doocti-pill-title">
+              {activeCall ? `Active Call (${formatCallTimer(callDuration)})` : (isRinging ? 'Incoming Call...' : 'CRM Softphone')}
+            </span>
+            <span className="doocti-pill-ext">
+              Ext: {config.userNumber} • Online
+            </span>
+          </div>
+          <button 
+            type="button" 
+            className="doocti-pill-expand-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleMinimize(false);
+            }}
+            title="Expand Softphone"
+          >
+            <ChevronUp size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* -----------------------------------------------------------
+          2. Native CRM Softphone Window
+      ------------------------------------------------------------ */}
+      <div 
+        className="native-dialer-window"
+        style={{ display: isMinimized ? 'none' : 'flex' }}
+      >
+        {/* Top Header */}
+        <div className="native-dialer-header">
+          <div className="dialer-brand-group">
+            <PingoMascot pose="run" height={34} withShadow={false} />
+            <div className="doocti-status-dot-wrapper">
+              <div className={`doocti-status-dot ${isRinging ? 'ringing' : 'pulsing'}`} />
+            </div>
+            <span className="dialer-brand-title">CRM Softphone</span>
+            <span className="dialer-ext-pill">Ext {config.userNumber}</span>
+          </div>
+
+          <div className="dialer-header-actions">
+            {/* Quick Reload Audio Session */}
+            <button
+              type="button"
+              className="btn-dialer-icon"
+              onClick={handleReloadIframe}
+              title="Refresh / Reload Audio Session"
+            >
+              <RotateCw size={14} />
+            </button>
+
+            {/* Settings */}
+            <button
+              type="button"
+              className="btn-dialer-icon"
+              onClick={() => {
+                setTempConfig(config);
+                setShowSettings(!showSettings);
+              }}
+              title="Extension Settings"
+            >
+              <Settings size={14} />
+            </button>
+
+            {/* Minimize */}
+            <button
+              type="button"
+              className="btn-dialer-icon btn-dialer-minimize"
+              onClick={() => toggleMinimize(true)}
+              title="Minimize Phone"
+            >
+              <Minus size={16} strokeWidth={2.5} />
+            </button>
+          </div>
+        </div>
+
+        {/* Settings Dropdown */}
+        {showSettings && (
+          <form className="doocti-settings-panel" onSubmit={handleSaveConfig}>
+            <div>
+              <label>Agent Extension:</label>
+              <input
+                type="text"
+                value={tempConfig.userNumber}
+                onChange={(e) => setTempConfig({ ...tempConfig, userNumber: e.target.value, userId: e.target.value })}
+                placeholder="1282"
+              />
+            </div>
+            <div>
+              <label>Agent Email:</label>
+              <input
+                type="email"
+                value={tempConfig.userEmail}
+                onChange={(e) => setTempConfig({ ...tempConfig, userEmail: e.target.value })}
+                placeholder="chntechnolog_agent01@doocti.com"
+              />
+            </div>
+            <div className="doocti-settings-actions">
+              <button 
+                type="button" 
+                onClick={() => setShowSettings(false)}
+                className="doocti-btn-cancel"
+              >
+                Cancel
+              </button>
+              <button type="submit" className="doocti-btn-save">
+                Save
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* -----------------------------------------------------------
+            Screen 1: Active In-Call / Ringing Status Bar
+        ------------------------------------------------------------ */}
+        {(activeCall || isRinging) && (
+          <div className="active-call-header-bar">
+            <div className="active-call-header-lead">
+              <div className={`active-call-pulse-ring-sm ${isRinging || activeCall?.callStatus === 'RINGING' ? 'ringing-pulse' : (activeCall?.callStatus === 'CONNECTED' ? 'connected-pulse' : '')}`} />
+              <div className="active-call-header-meta">
+                <span className="active-call-header-name">
+                  {isRinging ? 'Incoming Call' : (activeCall?.name || 'Customer')}
+                </span>
+                <span className="active-call-header-phone">
+                  {activeCall?.number || 'Caller ID'}
+                </span>
+              </div>
+            </div>
+            <div className="active-call-header-right">
+              {isRinging ? (
+                <div className="incoming-actions-guidance">
+                  <span className="active-call-timer-badge ringing-badge">
+                    Ringing...
+                  </span>
+                  <button
+                    type="button"
+                    className="active-call-header-btn btn-answer-call"
+                    onClick={handleAnswerCall}
+                    title="Answer Incoming Call"
+                  >
+                    <PhoneIncoming size={14} />
+                    <span>Answer</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="active-call-header-btn btn-decline-call"
+                    onClick={() => handleEndCall('MISSED', true)}
+                    title="Reject / Decline Incoming Call"
+                  >
+                    <PhoneOff size={14} />
+                    <span>Reject</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Status Indicator Badge */}
+                  {activeCall?.callStatus === 'CONNECTING' ? (
+                    <span className="active-call-timer-badge connecting-badge">
+                      <span className="recording-pulse-dot" style={{ backgroundColor: '#38bdf8' }} />
+                      CONNECTING
+                    </span>
+                  ) : activeCall?.callStatus === 'RINGING' ? (
+                    <span className="active-call-timer-badge ringing-badge">
+                      <span className="recording-pulse-dot" style={{ backgroundColor: '#fbbf24' }} />
+                      RINGING
+                    </span>
+                  ) : (
+                    <span className="active-call-timer-badge connected-badge">
+                      <span className="recording-pulse-dot" style={{ backgroundColor: '#34d399' }} />
+                      CONNECTED
+                    </span>
+                  )}
+
+                  {/* Talk Timer: strictly 00:00 until client answers */}
+                  <span className="active-call-timer-badge" style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+                    {formatCallTimer(callDuration)}
+                  </span>
+
+                  <button
+                    type="button"
+                    className="active-call-header-btn btn-end-call"
+                    onClick={() => handleEndCall(null, true)}
+                    title="End Call / Disconnect"
+                  >
+                    <PhoneOff size={14} />
+                    <span>End Call</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* -----------------------------------------------------------
+            Main Tab Views: Home (Recent Calls) | Dialpad | Lead Dial
+        ------------------------------------------------------------ */}
+        {!(activeCall || isRinging) && (
+          <div className="dialer-body-content" style={{ display: activeTab === 'phone' ? 'none' : 'flex' }}>
+            {/* -------------------- TAB 1: HOME (RECENT CALLS) -------------------- */}
+            {activeTab === 'home' && (
+              <div className="screen-home-calls">
+                {/* Sub-Header: All Calls vs Missed Calls */}
+                <div className="calls-filter-bar">
+                  <button
+                    type="button"
+                    className={`call-subtab-btn ${callFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setCallFilter('all')}
+                  >
+                    <span>All Calls</span>
+                    <span className="count-pill">{recentCalls.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`call-subtab-btn ${callFilter === 'missed' ? 'active' : ''}`}
+                    onClick={() => setCallFilter('missed')}
+                  >
+                    <span>Missed</span>
+                    {missedCount > 0 && <span className="count-pill count-missed">{missedCount}</span>}
+                  </button>
+                </div>
+
+                {/* Search Bar */}
+                <div className="calls-search-box">
+                  <Search size={14} className="search-icon" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search name or number..."
+                  />
+                  {searchQuery && (
+                    <button type="button" className="clear-search-btn" onClick={() => setSearchQuery('')}>
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Calls Scroll List */}
+                <div className="calls-history-list">
+                  {loadingCalls ? (
+                    <div className="calls-empty-state">
+                      <div className="spinner-mini" />
+                      <span>Loading call records...</span>
+                    </div>
+                  ) : filteredRecentCalls.length === 0 ? (
+                    <div className="calls-empty-state">
+                      <PhoneCall size={32} color="#cbd5e1" />
+                      <p>No call logs found</p>
+                      <span className="empty-subtitle">Your connected and missed calls will appear here.</span>
+                    </div>
+                  ) : (
+                    filteredRecentCalls.map((item) => {
+                      const phone = item.customer_phone || item.to_number || item.from_number || 'Unknown';
+                      const name = item.lead_name || 'Customer';
+                      const isMissed = ['MISSED', 'NO_ANSWER', 'FAILED', 'BUSY'].includes((item.call_status || '').toUpperCase());
+                      const isIncoming = (item.call_direction || '').toUpperCase() === 'INBOUND';
+                      const isPlaying = playingAudioId === item.id;
+
+                      return (
+                        <div key={item.id} className="call-history-row">
+                          <div className={`call-direction-badge ${isMissed ? 'missed' : isIncoming ? 'inbound' : 'outbound'}`}>
+                            {isMissed ? (
+                              <PhoneMissed size={16} />
+                            ) : isIncoming ? (
+                              <ArrowDownLeft size={16} />
+                            ) : (
+                              <ArrowUpRight size={16} />
+                            )}
+                          </div>
+
+                          <div className="call-info-block">
+                            <div className="call-title-row">
+                              <span className="call-contact-name" title={name}>{name}</span>
+                              <span className={`call-status-tag ${isMissed ? 'missed' : 'completed'}`}>
+                                {isMissed ? 'Missed' : 'Completed'}
+                              </span>
+                            </div>
+
+                            <div className="call-number-row">
+                              <span className="call-contact-phone">{phone}</span>
+                            </div>
+
+                            <div className="call-meta-row">
+                              <span className="call-time-text">{formatCallTimestamp(item.created_at)}</span>
+                              <span className="call-duration-text">
+                                <Clock size={11} />
+                                {formatDurationBadge(item.duration_seconds || item.duration)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="call-actions-block">
+                            {/* Audio Recording / Mic Button */}
+                            <button
+                              type="button"
+                              className={`btn-call-audio ${isPlaying ? 'playing' : ''} ${item.recording_url ? 'has-rec' : ''}`}
+                              onClick={() => handleToggleAudio(item)}
+                              title={item.recording_url ? (isPlaying ? "Stop Recording" : "Play Call Recording") : "Call Duration"}
+                            >
+                              {isPlaying ? <Volume2 size={15} /> : <Mic size={15} />}
+                            </button>
+
+                            {/* 1-Click Dial Button */}
+                            <button
+                              type="button"
+                              className="btn-call-redial"
+                              onClick={() => {
+                                setDialNumber(phone);
+                                dialLead(phone, { name: item.lead_name, id: item.lead_id });
+                              }}
+                              title={`Dial ${name} (${phone})`}
+                            >
+                              <PhoneCall size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* -------------------- TAB 2: DIALPAD -------------------- */}
+            {activeTab === 'dialpad' && (
+              <div className="dialpad-screen">
+                {/* Number Display & Live Contact Match */}
+                <div className="dialpad-display-area" onClick={() => dialpadInputRef.current?.focus()}>
+                  {matchedLead && (
+                    <div className="dialpad-lead-preview">
+                      <UserCheck size={12} />
+                      <span>{matchedLead.name}</span>
+                      {matchedLead.company && <span className="lead-preview-comp">• {matchedLead.company}</span>}
+                    </div>
+                  )}
+                  <div className="dialpad-input-wrapper">
+                    <input
+                      ref={dialpadInputRef}
+                      type="tel"
+                      className="dialpad-number-input"
+                      value={dialNumber}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9*#+]/g, '');
+                        setDialNumber(val);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleCallAction();
+                        } else if (['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#'].includes(e.key)) {
+                          playDTMF(e.key);
+                        }
+                      }}
+                      placeholder="Enter number..."
+                      autoComplete="off"
+                      spellCheck={false}
+                      autoFocus
+                    />
+                    {dialNumber.length > 0 && (
+                      <button 
+                        type="button" 
+                        className="dialpad-backspace-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleBackspace();
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          playClickTone(350);
+                          setDialNumber('');
+                          dialpadInputRef.current?.focus();
+                        }}
+                        title="Backspace (Double-click to clear)"
+                      >
+                        <Delete size={20} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Number Keypad Grid (3x4) */}
+                <div className="dialpad-grid">
+                  {KEYPAD_BUTTONS.map((item) => (
+                    <button
+                      key={item.digit}
+                      type="button"
+                      className="dialpad-key"
+                      onClick={() => handleDigitClick(item.digit)}
+                    >
+                      <span className="dialpad-digit">{item.digit}</span>
+                      {item.letters && <span className="dialpad-letters">{item.letters}</span>}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Big Green Dial / Call Button */}
+                <div className="dialpad-actions-area">
+                  <button
+                    type="button"
+                    className="btn-dial-call"
+                    onClick={handleCallAction}
+                    title={dialNumber ? `Call ${dialNumber}` : "Click to call or redial"}
+                  >
+                    <PhoneCall size={26} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* -------------------- TAB 3: LEAD DIAL (CRM DIRECTORY) -------------------- */}
+            {activeTab === 'leads' && (
+              <div className="screen-leads-dial">
+                {/* Search Bar for Leads */}
+                <div className="calls-search-box">
+                  <Search size={14} className="search-icon" />
+                  <input
+                    type="text"
+                    value={leadSearchQuery}
+                    onChange={(e) => {
+                      setLeadSearchQuery(e.target.value);
+                      fetchLeads(e.target.value);
+                    }}
+                    placeholder="Search CRM leads..."
+                  />
+                  {leadSearchQuery && (
+                    <button 
+                      type="button" 
+                      className="clear-search-btn" 
+                      onClick={() => {
+                        setLeadSearchQuery('');
+                        fetchLeads('');
+                      }}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Leads Scroll List */}
+                <div className="leads-directory-list">
+                  {loadingLeads ? (
+                    <div className="calls-empty-state">
+                      <div className="spinner-mini" />
+                      <span>Loading leads...</span>
+                    </div>
+                  ) : leadsList.length === 0 ? (
+                    <div className="calls-empty-state">
+                      <Users size={32} color="#cbd5e1" />
+                      <p>No leads found</p>
+                      <span className="empty-subtitle">Leads assigned to you in CRM will appear here.</span>
+                    </div>
+                  ) : (
+                    leadsList.map((lead) => {
+                      const phone = lead.phone || lead.mobile || lead.contact_number;
+                      return (
+                        <div key={lead.id} className="lead-dial-card">
+                          <div className="lead-avatar" style={{ background: getAvatarColor(lead.name) }}>
+                            {lead.name ? lead.name[0].toUpperCase() : 'L'}
+                          </div>
+
+                          <div className="lead-details-block">
+                            <div className="lead-card-header">
+                              <span className="lead-name-text" title={lead.name}>{lead.name}</span>
+                              {lead.status && (
+                                <span className="lead-status-chip">{lead.status}</span>
+                              )}
+                            </div>
+
+                            <div className="lead-company-text">
+                              {lead.company ? (
+                                <>
+                                  <Building size={11} />
+                                  <span>{lead.company}</span>
+                                </>
+                              ) : (
+                                <span>Prospect Lead</span>
+                              )}
+                            </div>
+
+                            <div className="lead-phone-text">
+                              {phone || 'No phone number'}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="btn-lead-call"
+                            disabled={!phone}
+                            onClick={() => {
+                              if (phone) {
+                                setDialNumber(phone);
+                                dialLead(phone, lead);
+                              }
+                            }}
+                            title={phone ? `Call ${lead.name} (${phone})` : "No phone number available"}
+                          >
+                            <PhoneCall size={16} />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* -----------------------------------------------------------
+            Bottom Navigation Bar: Home | Dialpad | Lead Dial | WebPhone
+        ------------------------------------------------------------ */}
+        {!(activeCall || isRinging) && (
+          <div className="softphone-bottom-nav">
+            <button
+              type="button"
+              className={`bottom-nav-btn ${activeTab === 'home' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('home');
+                fetchRecentCalls();
+              }}
+            >
+              <Home size={19} />
+              <span>Home</span>
+            </button>
+
+            <button
+              type="button"
+              className={`bottom-nav-btn ${activeTab === 'dialpad' ? 'active' : ''}`}
+              onClick={() => setActiveTab('dialpad')}
+            >
+              <Grid size={19} />
+              <span>Dialpad</span>
+            </button>
+
+            <button
+              type="button"
+              className={`bottom-nav-btn ${activeTab === 'leads' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('leads');
+                fetchLeads(leadSearchQuery);
+              }}
+            >
+              <Users size={19} />
+              <span>Lead Dial</span>
+            </button>
+
+            <button
+              type="button"
+              className={`bottom-nav-btn ${activeTab === 'phone' ? 'active' : ''}`}
+              onClick={() => setActiveTab('phone')}
+              title="Live Doocti WebPhone & Queue Status"
+            >
+              <Radio size={19} />
+              <span>WebPhone</span>
+            </button>
+          </div>
+        )}
+
+        {/* -----------------------------------------------------------
+            Doocti Telephony Engine (Active WebPhone during Call or WebPhone Tab)
+        ------------------------------------------------------------ */}
+        <div className={`doocti-telephony-wrapper ${(activeCall || isRinging) ? 'active-mode' : (activeTab === 'phone' ? 'tab-mode' : 'background-mode')}`}>
+          <iframe
+            ref={iframeRef}
+            src={config.domain}
+            title="Doocti Telephony Engine"
+            className="doocti-telephony-iframe"
+            allow="microphone; camera; autoplay; display-capture; clipboard-read; clipboard-write"
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DooctiInAppDialer;

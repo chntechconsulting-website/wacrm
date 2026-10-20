@@ -1,0 +1,254 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Wa CRM - External Proforma Invoice Integration API",
+    "description": "Secure server-to-server REST API enabling external websites, ERPs, and client portals to authoritatively receive, validate, and query Proforma Invoices and customer billing profiles from Wa CRM.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Wa CRM Technical Integration Support",
+      "email": "support@dinuping.com",
+      "url": "https://wacrm.dinuping.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://wacrm.dinuping.com",
+      "description": "Production Server (HTTPS Required)"
+    },
+    {
+      "url": "http://localhost:8000",
+      "description": "Local Development / Staging Server"
+    }
+  ],
+  "security": [
+    { "ApiKeyAuth": [] },
+    { "BearerAuth": [] }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Pre-shared server-to-server integration API key. Example: `X-API-Key: wacrm_ext_live_...`"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Bearer token authentication header. Example: `Authorization: Bearer <API_KEY>`"
+      }
+    },
+    "schemas": {
+      "BillingAddress": {
+        "type": "object",
+        "properties": {
+          "line1": { "type": "string", "example": "Level 4, Tidel Park, Rajiv Gandhi Salai" },
+          "line2": { "type": "string", "example": "Taramani" },
+          "city": { "type": "string", "example": "Chennai" },
+          "state": { "type": "string", "example": "Tamil Nadu" },
+          "stateCode": { "type": "string", "example": "33" },
+          "pincode": { "type": "string", "example": "600113" },
+          "country": { "type": "string", "example": "India" }
+        }
+      },
+      "LineItem": {
+        "type": "object",
+        "required": ["name", "rate"],
+        "properties": {
+          "id": { "type": "string", "example": "item_1" },
+          "name": { "type": "string", "example": "WAHRMS Core HR + Payroll Cloud Suite" },
+          "description": { "type": "string", "example": "Annual subscription for 50 employees including statutory compliance & payroll processing" },
+          "hsn": { "type": "string", "example": "998314" },
+          "qty": { "type": "number", "example": 1.0 },
+          "rate": { "type": "number", "example": 75000.0 },
+          "discount": { "type": "number", "example": 0.0 },
+          "gstRate": { "type": "number", "example": 0.18 },
+          "amount": { "type": "number", "example": 75000.0 },
+          "total": { "type": "number", "example": 88500.0 }
+        }
+      },
+      "AuthoritativeSummary": {
+        "type": "object",
+        "properties": {
+          "taxableSubtotal": { "type": "number", "example": 75000.0 },
+          "taxMode": { "type": "string", "enum": ["intra", "inter"], "example": "intra" },
+          "cgst": { "type": "number", "example": 6750.0 },
+          "sgst": { "type": "number", "example": 6750.0 },
+          "igst": { "type": "number", "example": 0.0 },
+          "totalTax": { "type": "number", "example": 13500.0 },
+          "roundOff": { "type": "number", "example": 0.0 },
+          "grandTotal": { "type": "number", "example": 88500.0 },
+          "lineItemsCount": { "type": "integer", "example": 1 }
+        }
+      },
+      "ProformaRequest": {
+        "type": "object",
+        "required": ["companyName", "lineItems"],
+        "properties": {
+          "idempotencyKey": { "type": "string", "example": "idem_req_20261017_9921" },
+          "customerId": { "type": "integer", "example": 101 },
+          "companyName": { "type": "string", "example": "Acme Global Solutions Pvt Ltd" },
+          "contactPerson": { "type": "string", "example": "Rajesh Kumar" },
+          "email": { "type": "string", "format": "email", "example": "billing@acmeglobal.com" },
+          "phone": { "type": "string", "example": "+91 9876543210" },
+          "billingAddress": { "$ref": "#/components/schemas/BillingAddress" },
+          "gstin": { "type": "string", "example": "33AAAAA1234A1Z5" },
+          "quotationNumber": { "type": "string", "example": "QT-2026-0012" },
+          "proformaNumber": { "type": "string", "example": "PI-2026-0042" },
+          "productCategory": { "type": "string", "enum": ["wahrms", "biometric"], "example": "wahrms" },
+          "selectedBundle": { "type": "string", "example": "hr_payroll" },
+          "lineItems": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/LineItem" }
+          },
+          "subtotal": { "type": "number", "example": 75000.0 },
+          "grandTotal": { "type": "number", "example": 88500.0 },
+          "termsAndConditions": { "type": "string", "example": "1. Software onboarding commences upon payment receipt.\n2. Prices subject to 18% GST." },
+          "pdfUrl": { "type": "string", "example": "/api/integrations/waquote/proformas/204/download" }
+        }
+      },
+      "ProformaResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "requestId": { "type": "string", "example": "req_88a91b2c4d" },
+          "idempotencyKey": { "type": "string", "example": "idem_req_20261017_9921" },
+          "processingStatus": { "type": "string", "enum": ["AUTHORITATIVE_VERIFIED", "CREATED", "ALREADY_PROCESSED"], "example": "CREATED" },
+          "customerId": { "type": "integer", "example": 101 },
+          "customerName": { "type": "string", "example": "Rajesh Kumar" },
+          "companyName": { "type": "string", "example": "Acme Global Solutions Pvt Ltd" },
+          "proformaId": { "type": "integer", "example": 204 },
+          "proformaNumber": { "type": "string", "example": "PI-2026-0042" },
+          "quotationNumber": { "type": "string", "example": "QT-2026-0012" },
+          "authoritativeSummary": { "$ref": "#/components/schemas/AuthoritativeSummary" },
+          "pdfDownloadUrl": { "type": "string", "example": "/api/integrations/waquote/proformas/204/download" },
+          "syncedAt": { "type": "string", "format": "date-time", "example": "2026-10-17T10:45:00.000000+00:00" },
+          "message": { "type": "string", "example": "Proforma Invoice #PI-2026-0042 successfully registered in CRM." },
+          "warnings": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "detail": { "type": "string", "example": "Invalid API key or unauthorized integration credential." }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/integrations/proforma": {
+      "post": {
+        "summary": "Receive or Authoritatively Synchronize Proforma Invoice",
+        "description": "Receives proforma data from another website or external ERP. The CRM authoritatively calculates subtotals, GST distributions, round-offs, and grand totals instead of blindly trusting arbitrary client figures. Idempotent deduplication is enforced via `X-Idempotency-Key` or document number.",
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Unique client UUID to prevent duplicate document ingestion on network retries.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProformaRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Proforma Invoice successfully ingested and saved in CRM",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProformaResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or document type mismatch error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing authentication credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Invalid or revoked API key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (120 req/min)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Authoritative Proforma Invoices",
+        "description": "Allows external websites to query all authoritative proformas issued in CRM.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "skip", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "customer_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "List of proformas returned successfully" }
+        }
+      }
+    },
+    "/api/integrations/proforma/{id_or_number}": {
+      "get": {
+        "summary": "Get Single Proforma by ID or Document Number",
+        "description": "Allows external website to verify, fetch, or poll an authoritative proforma record by numeric ID or document number (e.g. `PI-2026-0042`).",
+        "parameters": [
+          {
+            "name": "id_or_number",
+            "in": "path",
+            "required": true,
+            "description": "Numeric CRM Proforma ID or Document Number",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authoritative document details",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProformaResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Proforma document not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

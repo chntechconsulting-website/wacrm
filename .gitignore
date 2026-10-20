@@ -1,0 +1,73 @@
+# Environment variables (NEVER commit secrets)
+.env
+.env.*
+!.env.example
+*.env
+
+# Python / Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+backend/venv/
+ENV/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+frontend/dist/
+frontend/dist-ssr/
+dist/
+
+# Databases / Uploads / Temporary files
+*.sqlite
+*.sqlite3
+*.db
+uploads/
+backend/uploads/
+backups/
+scratch/
+crop*.png
+test_rupee.pdf
+backend/*.png
+
+# Logs
+*.log
+logs/
+
+# IDEs & System files
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
