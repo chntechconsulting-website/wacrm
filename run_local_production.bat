@@ -42,11 +42,11 @@ if %ERRORLEVEL% EQU 0 (
 echo.
 echo Once Nginx is started, access your CRM at:
 echo    --> http://localhost
-echo    --> https://wacrm.dinuping.com
+echo    --> http://www.wapluscrm.in
 echo.
 echo ========================================================
 echo Backend is running on 127.0.0.1:8000
 echo Reverse Proxy exposed on port 80 (http://localhost)
-echo Cloudflare Tunnel forwarding to https://wacrm.dinuping.com
+echo Production domain: http://www.wapluscrm.in
 echo ========================================================
 pause

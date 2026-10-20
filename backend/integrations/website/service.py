@@ -31,9 +31,9 @@ class WebsiteLeadService:
         if not location and (city or state):
             location = ", ".join(filter(None, [city, state]))
 
-        website_id = payload.website_id or "waplushr"
-        website_name = payload.website_name or "WA Plus HR"
-        landing_page = payload.landing_page or "https://waplushr.com/solutions/demo"
+        website_id = payload.website_id or "wapluscrm"
+        website_name = payload.website_name or "WA Plus CRM"
+        landing_page = payload.landing_page or "http://www.wapluscrm.in/solutions/demo"
         campaign = payload.campaign
 
         # Intelligently extract key-value data if user supplied it formatted in message

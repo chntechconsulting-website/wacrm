@@ -48,6 +48,10 @@ app = FastAPI(
 )
 
 origins = [
+    "http://www.wapluscrm.in",
+    "https://www.wapluscrm.in",
+    "http://wapluscrm.in",
+    "https://wapluscrm.in",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",

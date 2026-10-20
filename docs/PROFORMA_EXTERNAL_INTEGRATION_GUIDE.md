@@ -13,7 +13,7 @@ POST /api/integrations/proforma
 
 | Environment | Base URL | Protocol |
 | :--- | :--- | :--- |
-| **Production** | `https://wacrm.dinuping.com` | HTTPS (Enforced) |
+| **Production** | `http://www.wapluscrm.in` | HTTPS (Enforced) |
 | **Local / Dev** | `http://localhost:8000` | HTTP |
 
 ### Supported API Routes
@@ -84,7 +84,7 @@ To guarantee that network retries or double clicks never duplicate documents or 
 ### HTTP Request
 ```http
 POST /api/integrations/proforma HTTP/1.1
-Host: wacrm.dinuping.com
+Host: www.wapluscrm.in
 X-API-Key: YOUR_INTEGRATION_KEY
 X-Idempotency-Key: idem_req_20261017_9921
 Content-Type: application/json
@@ -184,7 +184,7 @@ Content-Type: application/json
 
 ### cURL
 ```bash
-curl -X POST "https://wacrm.dinuping.com/api/integrations/proforma" \
+curl -X POST "http://www.wapluscrm.in/api/integrations/proforma" \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "X-Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -216,7 +216,7 @@ async function syncProformaToCrm(proformaData) {
 
   try {
     const response = await axios.post(
-      'https://wacrm.dinuping.com/api/integrations/proforma',
+      'http://www.wapluscrm.in/api/integrations/proforma',
       proformaData,
       {
         headers: {
@@ -251,7 +251,7 @@ def push_proforma_to_crm(proforma_payload: dict, api_key: str):
 
     with httpx.Client(timeout=10.0) as client:
         resp = client.post(
-            "https://wacrm.dinuping.com/api/integrations/proforma",
+            "http://www.wapluscrm.in/api/integrations/proforma",
             headers=headers,
             json=proforma_payload
         )

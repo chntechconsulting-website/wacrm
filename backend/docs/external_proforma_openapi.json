@@ -6,14 +6,14 @@
     "version": "1.0.0",
     "contact": {
       "name": "Wa CRM Technical Integration Support",
-      "email": "support@dinuping.com",
-      "url": "https://wacrm.dinuping.com"
+      "email": "support@wapluscrm.in",
+      "url": "http://www.wapluscrm.in"
     }
   },
   "servers": [
     {
-      "url": "https://wacrm.dinuping.com",
-      "description": "Production Server (HTTPS Required)"
+      "url": "http://www.wapluscrm.in",
+      "description": "Production Server"
     },
     {
       "url": "http://localhost:8000",

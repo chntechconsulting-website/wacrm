@@ -155,7 +155,7 @@ def generate_pdf(output_paths):
 
     meta_data = [
         [Paragraph("Document ID:", table_cell_bold), Paragraph("SOP-INT-WACRM-001", table_cell), Paragraph("Effective Date:", table_cell_bold), Paragraph("October 2026", table_cell)],
-        [Paragraph("Production Base URL:", table_cell_bold), Paragraph("<b>https://wacrm.dinuping.com</b>", table_cell_code), Paragraph("Version:", table_cell_bold), Paragraph("1.0.0 (Production)", table_cell)],
+        [Paragraph("Production Base URL:", table_cell_bold), Paragraph("<b>http://www.wapluscrm.in</b>", table_cell_code), Paragraph("Version:", table_cell_bold), Paragraph("1.0.0 (Production)", table_cell)],
         [Paragraph("Target Endpoint:", table_cell_bold), Paragraph("<b>POST /api/integrations/proforma</b>", table_cell_code), Paragraph("Security:", table_cell_bold), Paragraph("API Key (Header)", table_cell)]
     ]
     t_meta = Table(meta_data, colWidths=[105, 185, 95, 127])
@@ -180,11 +180,11 @@ def generate_pdf(output_paths):
     
     cred_table_data = [
         [Paragraph("Parameter", table_cell_bold), Paragraph("Value", table_cell_bold), Paragraph("Notes", table_cell_bold)],
-        [Paragraph("Base URL", table_cell), Paragraph("<b>https://wacrm.dinuping.com</b>", table_cell_code), Paragraph("Production endpoint (HTTPS enforced)", table_cell)],
+        [Paragraph("Base URL", table_cell), Paragraph("<b>http://www.wapluscrm.in</b>", table_cell_code), Paragraph("Production endpoint", table_cell)],
         [Paragraph("Header Option A", table_cell), Paragraph("<b>X-API-Key: wacrm_ext_live_8849204128f73a0e691823c91</b>", table_cell_code), Paragraph("Recommended header", table_cell)],
         [Paragraph("Header Option B", table_cell), Paragraph("<b>Authorization: Bearer wacrm_ext_live_8849204128f73a0e691823c91</b>", table_cell_code), Paragraph("Standard OAuth Bearer format", table_cell)],
         [Paragraph("Rate Limit", table_cell), Paragraph("<b>120 req / minute</b>", table_cell), Paragraph("Sliding window per IP/key (HTTP 429 on breach)", table_cell)],
-        [Paragraph("Interactive Docs", table_cell), Paragraph("<b>https://wacrm.dinuping.com/docs</b>", table_cell_code), Paragraph("Live Swagger sandbox to test endpoints", table_cell)]
+        [Paragraph("Interactive Docs", table_cell), Paragraph("<b>http://www.wapluscrm.in/docs</b>", table_cell_code), Paragraph("Live Swagger sandbox to test endpoints", table_cell)]
     ]
     t_cred = Table(cred_table_data, colWidths=[95, 275, 142])
     t_cred.setStyle(TableStyle([
@@ -269,7 +269,7 @@ def generate_pdf(output_paths):
     story.append(Paragraph("5. Live HTTP Request Example", h1_style))
     req_lines = [
         "POST /api/integrations/proforma HTTP/1.1",
-        "Host: wacrm.dinuping.com",
+        "Host: www.wapluscrm.in",
         "X-API-Key: wacrm_ext_live_8849204128f73a0e691823c91",
         "X-Idempotency-Key: idem_req_20261017_001",
         "Content-Type: application/json",
@@ -355,7 +355,7 @@ def generate_pdf(output_paths):
     story.append(Paragraph("<b>Node.js (Axios):</b>", body_bold))
     node_lines = [
         "const axios = require('axios');",
-        "const response = await axios.post('https://wacrm.dinuping.com/api/integrations/proforma', {",
+        "const response = await axios.post('http://www.wapluscrm.in/api/integrations/proforma', {",
         "  idempotencyKey: `idem_${Date.now()}`,",
         "  companyName: 'Acme Corp', contactPerson: 'Ravi', phone: '+91 9876543210',",
         "  lineItems: [{ name: 'WAHRMS Software', qty: 1, rate: 50000, gstRate: 0.18 }]",
@@ -377,7 +377,7 @@ def generate_pdf(output_paths):
 
     story.append(Paragraph("<b>cURL (Terminal One-Liner):</b>", body_bold))
     curl_lines = [
-        'curl -X POST "https://wacrm.dinuping.com/api/integrations/proforma" \\',
+        'curl -X POST "http://www.wapluscrm.in/api/integrations/proforma" \\',
         '  -H "X-API-Key: wacrm_ext_live_8849204128f73a0e691823c91" \\',
         '  -H "Content-Type: application/json" \\',
         '  -d \'{"companyName":"Test Client","contactPerson":"Ravi","phone":"9876543210","lineItems":[{"name":"WAHRMS","rate":50000,"qty":1,"gstRate":0.18}]}\''

@@ -171,12 +171,12 @@
         department: document.getElementById('department').value,
         team_size: document.getElementById('teamSize').value,
         message: document.getElementById('message').value,
-        website_name: 'WA Plus HR',
-        landing_page: 'https://waplushr.com/solutions/demo'
+        website_name: 'WA Plus CRM',
+        landing_page: 'http://www.wapluscrm.in/solutions/demo'
       };
 
       try {
-        const response = await fetch('http://127.0.0.1:8000/api/integrations/website/leads', {
+        const response = await fetch('/api/integrations/website/leads', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'

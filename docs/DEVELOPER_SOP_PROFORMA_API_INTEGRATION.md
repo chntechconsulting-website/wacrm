@@ -25,11 +25,11 @@ By following this SOP, external systems can securely:
 | Parameter | Production Value | Development / Local |
 | :--- | :--- | :--- |
 | **Protocol** | HTTPS (Strictly Enforced) | HTTP / HTTPS |
-| **Base URL** | `https://wacrm.dinuping.com` | `http://localhost:8000` |
+| **Base URL** | `http://www.wapluscrm.in` | `http://localhost:8000` |
 | **Authentication Scheme** | API Key Header (`X-API-Key`) | API Key Header (`X-API-Key`) |
 | **API Key** | `wacrm_ext_live_8849204128f73a0e691823c91` | `wacrm_ext_live_8849204128f73a0e691823c91` |
 | **Data Format** | JSON (`application/json; charset=utf-8`) | JSON |
-| **Interactive Docs** | `https://wacrm.dinuping.com/docs` | `http://localhost:8000/docs` |
+| **Interactive Docs** | `http://www.wapluscrm.in/docs` | `http://localhost:8000/docs` |
 
 > [!IMPORTANT]
 > **Security Requirement**: Never embed `wacrm_ext_live_...` in client-side JavaScript, single-page browser apps, or public source control. Store the credential in backend environment variables (`.env`).
@@ -119,7 +119,7 @@ The CRM automatically determines GST compliance based on the client's state code
 #### Live Example Request
 ```http
 POST /api/integrations/proforma HTTP/1.1
-Host: wacrm.dinuping.com
+Host: www.wapluscrm.in
 X-API-Key: wacrm_ext_live_8849204128f73a0e691823c91
 X-Idempotency-Key: idem_7b8a1c92-34ef-4b21-8809-5a9e32bf1014
 Content-Type: application/json
@@ -196,7 +196,7 @@ Content-Type: application/json
 const axios = require('axios');
 const crypto = require('crypto');
 
-const CRM_BASE_URL = 'https://wacrm.dinuping.com';
+const CRM_BASE_URL = 'http://www.wapluscrm.in';
 const CRM_API_KEY = process.env.CRM_EXTERNAL_API_KEY || 'wacrm_ext_live_8849204128f73a0e691823c91';
 
 async function sendProformaToCrm(orderData) {
@@ -258,7 +258,7 @@ import os
 import uuid
 import httpx
 
-CRM_BASE_URL = "https://wacrm.dinuping.com"
+CRM_BASE_URL = "http://www.wapluscrm.in"
 CRM_API_KEY = os.getenv("CRM_EXTERNAL_API_KEY", "wacrm_ext_live_8849204128f73a0e691823c91")
 
 def issue_proforma_in_crm(order_data: dict) -> dict:
@@ -314,7 +314,7 @@ def issue_proforma_in_crm(order_data: dict) -> dict:
 <?php
 
 function syncProformaToCrm($orderData) {
-    $baseUrl = 'https://wacrm.dinuping.com';
+    $baseUrl = 'http://www.wapluscrm.in';
     $apiKey  = 'wacrm_ext_live_8849204128f73a0e691823c91';
     $idemKey = 'idem_' . bin2hex(random_bytes(16));
 
@@ -376,6 +376,6 @@ function syncProformaToCrm($orderData) {
 
 ### 8. Verification & Sign-off
 
-- **Swagger UI Interactive Sandbox**: [https://wacrm.dinuping.com/docs](https://wacrm.dinuping.com/docs)
+- **Swagger UI Interactive Sandbox**: [http://www.wapluscrm.in/docs](http://www.wapluscrm.in/docs)
 - **OpenAPI 3.0 Raw Specification File**: [`backend/docs/external_proforma_openapi.json`](file:///c:/Users/CHN/Desktop/Wa%20CRM/backend/docs/external_proforma_openapi.json)
-- **CRM Integration Support**: `support@dinuping.com`
+- **CRM Integration Support**: `support@wapluscrm.in`

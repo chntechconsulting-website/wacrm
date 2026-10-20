@@ -38,9 +38,9 @@ class WebsiteLeadRequest(BaseModel):
     location: Optional[str] = Field(None, max_length=150)
 
     # Multi-Website Attribution Fields
-    website_id: Optional[str] = Field(None, max_length=50, example="waplushr")
-    website_name: Optional[str] = Field(None, max_length=100, example="WA Plus HR")
-    landing_page: Optional[str] = Field(None, max_length=255, example="https://waplushr.com/solutions/demo")
+    website_id: Optional[str] = Field(None, max_length=50, example="wapluscrm")
+    website_name: Optional[str] = Field(None, max_length=100, example="WA Plus CRM")
+    landing_page: Optional[str] = Field(None, max_length=255, example="http://www.wapluscrm.in/solutions/demo")
     campaign: Optional[str] = Field(None, max_length=100, example="Solutions Demo")
 
     source: Optional[str] = Field(None, description="Ignored by backend - source is forced to WEBSITE")

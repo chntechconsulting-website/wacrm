@@ -95,7 +95,7 @@ This guide explains how to integrate any public website (HTML, React, Vue, Next.
     };
 
     try {
-      const response = await fetch('http://YOUR-CRM-DOMAIN/api/integrations/website/leads', {
+      const response = await fetch('http://www.wapluscrm.in/api/integrations/website/leads', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -139,7 +139,7 @@ const ContactUsForm = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await axios.post('http://YOUR-CRM-DOMAIN/api/integrations/website/leads', formData);
+      const res = await axios.post('http://www.wapluscrm.in/api/integrations/website/leads', formData);
       if (res.data.success) {
         setStatus('Lead submitted successfully!');
         setFormData({ name: '', phone: '', email: '', company: '', message: '' });
