@@ -123,8 +123,8 @@ class WaveBackgroundPainter extends CustomPainter {
 
       // Deep corporate navy bottom-right wave
       final navyWave = Path()
-        ..moveTo(w * 0.45, h)
-        ..cubicTo(w * 0.65, h * 0.94, w * 0.82, h * 0.92, w, h * 0.85)
+        ..moveTo(w * 0.50, h)
+        ..cubicTo(w * 0.68, h * 0.96, w * 0.84, h * 0.94, w, h * 0.88)
         ..lineTo(w, h)
         ..close();
       final navyPaint = Paint()
@@ -135,14 +135,14 @@ class WaveBackgroundPainter extends CustomPainter {
             Color(0xFF1E3A5F),
             Color(0xFF162A45),
           ],
-        ).createShader(Rect.fromLTWH(w * 0.45, h * 0.85, w * 0.55, h * 0.15));
+        ).createShader(Rect.fromLTWH(w * 0.50, h * 0.88, w * 0.50, h * 0.12));
       canvas.drawPath(navyWave, navyPaint);
 
       // Bold crimson red bottom-left curved wave
       final redWave = Path()
-        ..moveTo(0, h * 0.84)
-        ..cubicTo(w * 0.25, h * 0.80, w * 0.55, h * 0.96, w * 0.82, h * 0.94)
-        ..cubicTo(w * 0.92, h * 0.94, w * 0.98, h * 0.96, w, h)
+        ..moveTo(0, h * 0.88)
+        ..cubicTo(w * 0.22, h * 0.86, w * 0.52, h * 0.98, w * 0.80, h * 0.96)
+        ..cubicTo(w * 0.90, h * 0.96, w * 0.96, h * 0.98, w, h)
         ..lineTo(0, h)
         ..close();
       final redPaint = Paint()
@@ -153,7 +153,7 @@ class WaveBackgroundPainter extends CustomPainter {
             Color(0xFFE5252A),
             Color(0xFFDC2626),
           ],
-        ).createShader(Rect.fromLTWH(0, h * 0.80, w, h * 0.20));
+        ).createShader(Rect.fromLTWH(0, h * 0.86, w, h * 0.14));
       canvas.drawPath(redWave, redPaint);
     }
   }
