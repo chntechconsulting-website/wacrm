@@ -5,6 +5,10 @@ import 'package:mobile/app.dart';
 import 'package:mobile/features/auth/presentation/landing_welcome_screen.dart';
 import 'package:mobile/features/auth/presentation/login_screen.dart';
 import 'package:mobile/features/auth/providers/auth_provider.dart';
+import 'package:mobile/features/leads/models/lead_model.dart';
+import 'package:mobile/features/leads/presentation/lead_detail_screen.dart';
+import 'package:mobile/features/leads/presentation/leads_list_screen.dart';
+import 'package:mobile/features/leads/providers/leads_provider.dart';
 
 void main() {
   testWidgets('App smoke test builds without error', (WidgetTester tester) async {
@@ -131,5 +135,89 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Get Started'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('LeadsListScreen renders hero banner, search bar, and filter tabs', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => LeadsProvider()),
+        ],
+        child: const MaterialApp(
+          home: LeadsListScreen(),
+        ),
+      ),
+    );
+
+    // Hero banner texts
+    expect(find.text('Leads'), findsWidgets);
+    expect(find.text('Find new opportunities,\nturn them into customers.'), findsOneWidget);
+
+    // Search bar hint
+    expect(find.text('Search leads, company, phone...'), findsOneWidget);
+
+    // Filter tabs
+    expect(find.text('All Leads'), findsOneWidget);
+    expect(find.text('New'), findsOneWidget);
+    expect(find.text('In Progress'), findsOneWidget);
+    expect(find.text('Hot'), findsOneWidget);
+    expect(find.text('Converted'), findsOneWidget);
+  });
+
+  testWidgets('LeadDetailScreen renders profile card, 5 quick actions, tabs, basic info, and status', (WidgetTester tester) async {
+    final mockLead = LeadModel(
+      id: 101,
+      name: 'Arun Kumar',
+      phone: '+91 98765 43210',
+      email: 'arun@techsolutions.com',
+      company: 'Tech Solutions Pvt Ltd',
+      source: 'Website',
+      status: 'IN_PROGRESS',
+      priority: 'HOT',
+      requirement: 'Corporate Software Solutions',
+      assignedToName: 'Chandra Mohan',
+      createdAt: '2026-10-16T10:00:00Z',
+    );
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => LeadsProvider()),
+        ],
+        child: MaterialApp(
+          home: LeadDetailScreen(lead: mockLead),
+        ),
+      ),
+    );
+
+    // Profile card
+    expect(find.text('Tech Solutions Pvt Ltd'), findsOneWidget);
+    expect(find.text('Corporate Software Solutions'), findsOneWidget);
+    expect(find.text('Hot Lead'), findsOneWidget);
+
+    // 5 Quick actions
+    expect(find.text('Call'), findsOneWidget);
+    expect(find.text('WhatsApp'), findsOneWidget);
+    expect(find.text('Email'), findsNWidgets(2));
+    expect(find.text('Map'), findsOneWidget);
+    expect(find.text('More'), findsWidgets);
+
+    // Sub nav tabs
+    expect(find.text('Overview'), findsOneWidget);
+    expect(find.text('Activities'), findsOneWidget);
+    expect(find.text('Quotes'), findsOneWidget);
+    expect(find.text('Files'), findsOneWidget);
+
+    // Basic information
+    expect(find.text('Basic Information'), findsOneWidget);
+    expect(find.text('Contact Person'), findsOneWidget);
+    expect(find.text('+91 98765 43210'), findsOneWidget);
+    expect(find.text('arun@techsolutions.com'), findsOneWidget);
+
+    // Lead status & Update status button
+    expect(find.text('Lead Status'), findsOneWidget);
+    expect(find.text('Update Status'), findsOneWidget);
   });
 }

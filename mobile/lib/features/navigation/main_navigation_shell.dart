@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/pingo_mascot_widget.dart';
+import '../../core/widgets/wacrm_wave_nav_bar.dart';
 import '../activities/presentation/activities_screen.dart';
 import '../auth/presentation/profile_screen.dart';
 import '../auth/providers/auth_provider.dart';
@@ -11,6 +12,7 @@ import '../dashboard/presentation/dashboard_screen.dart';
 import '../deals/presentation/deals_list_screen.dart';
 import '../field_visits/presentation/field_visits_list_screen.dart';
 import '../followups/presentation/followups_list_screen.dart';
+import '../leads/presentation/lead_create_edit_screen.dart';
 import '../leads/presentation/leads_list_screen.dart';
 import '../notifications/presentation/notifications_screen.dart';
 import '../notifications/providers/notifications_provider.dart';
@@ -233,7 +235,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().currentUser;
-    final unreadCount = context.watch<NotificationsProvider>().unreadCount;
 
     // Define bottom tabs based on role
     final List<Widget> screens = [
@@ -256,118 +257,27 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         const SupportTicketsScreen(),
     ];
 
-    final List<BottomNavigationBarItem> navItems = [
-      const BottomNavigationBarItem(
-        icon: Icon(Icons.dashboard_outlined),
-        activeIcon: Icon(Icons.dashboard_rounded),
-        label: 'Dashboard',
-      ),
-      if (user?.isSupportExecutive == true || user?.isSupportManager == true)
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.support_agent_outlined),
-          activeIcon: Icon(Icons.support_agent_rounded),
-          label: 'Support',
-        )
-      else
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.people_alt_outlined),
-          activeIcon: Icon(Icons.people_alt_rounded),
-          label: 'Leads',
-        ),
-      const BottomNavigationBarItem(
-        icon: Icon(Icons.alarm_outlined),
-        activeIcon: Icon(Icons.alarm_rounded),
-        label: 'Follow-ups',
-      ),
-      if (user?.canViewFinance == true)
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.payments_outlined),
-          activeIcon: Icon(Icons.payments_rounded),
-          label: 'Deals',
-        )
-      else if (user?.canViewSales == true)
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.receipt_long_outlined),
-          activeIcon: Icon(Icons.receipt_long_rounded),
-          label: 'Quotes',
-        )
-      else
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.support_agent_outlined),
-          activeIcon: Icon(Icons.support_agent_rounded),
-          label: 'Support',
-        ),
-    ];
-
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex.clamp(0, screens.length - 1),
         children: screens,
       ),
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.card,
-          border: Border(top: BorderSide(color: AppColors.border, width: 1)),
-        ),
-        child: SafeArea(
-          child: Row(
-            children: [
-              Expanded(
-                child: BottomNavigationBar(
-                  currentIndex: _currentIndex.clamp(0, navItems.length - 1),
-                  onTap: (idx) => setState(() => _currentIndex = idx),
-                  backgroundColor: Colors.transparent,
-                  elevation: 0,
-                  type: BottomNavigationBarType.fixed,
-                  selectedItemColor: AppColors.primary,
-                  unselectedItemColor: AppColors.textMuted,
-                  selectedFontSize: 11,
-                  unselectedFontSize: 11,
-                  selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700),
-                  items: navItems,
-                ),
-              ),
-              // More / Modules Pill Button
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: InkWell(
-                  onTap: () => _showMoreMenu(context),
-                  borderRadius: BorderRadius.circular(10),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: AppColors.cardHover,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        const Icon(Icons.grid_view_rounded, size: 20, color: AppColors.textMain),
-                        if (unreadCount > 0)
-                          Positioned(
-                            top: -4,
-                            right: -4,
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              decoration: const BoxDecoration(
-                                color: AppColors.danger,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Text(
-                                '$unreadCount',
-                                style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+      bottomNavigationBar: WacrmWaveNavBar(
+        currentIndex: _currentIndex == 1 ? 1 : 0,
+        onTap: (idx) {
+          if (idx == 0) {
+            _navigateToTab(0);
+          } else if (idx == 1) {
+            _navigateToTab(1);
+          } else if (idx == 2) {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const CallLogsScreen()));
+          } else if (idx == 3) {
+            _showMoreMenu(context);
+          }
+        },
+        onAdd: () {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => const LeadCreateEditScreen()));
+        },
       ),
     );
   }
