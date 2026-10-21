@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/wave_background_painter.dart';
@@ -85,7 +86,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                       TextButton(
                         onPressed: _navigateToLogin,
                         style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF2563EB),
+                          foregroundColor: const Color(0xFF5B7A9C),
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         ),
                         child: const Text(
@@ -93,7 +94,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF2563EB),
+                            color: Color(0xFF5B7A9C),
                           ),
                         ),
                       ),
@@ -236,7 +237,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                 TextSpan(
                   text: 'WA!',
                   style: TextStyle(
-                    fontSize: 36,
+                    fontSize: 38,
                     fontWeight: FontWeight.w900,
                     color: Color(0xFFE5252A),
                     letterSpacing: -0.5,
@@ -245,7 +246,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                 TextSpan(
                   text: 'CRM',
                   style: TextStyle(
-                    fontSize: 36,
+                    fontSize: 38,
                     fontWeight: FontWeight.w900,
                     color: Color(0xFF162A45),
                     letterSpacing: -0.5,
@@ -258,7 +259,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
           const Text(
             'Manage Leads. Close Deals. Grow Together.',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 13.5,
               fontWeight: FontWeight.w500,
               color: Color(0xFF64748B),
               letterSpacing: -0.2,
@@ -274,90 +275,124 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
               child: FittedBox(
                 fit: BoxFit.contain,
                 child: SizedBox(
-                  width: 330,
-                  height: 280,
+                  width: 340,
+                  height: 290,
                   child: Stack(
                     alignment: Alignment.center,
                     clipBehavior: Clip.none,
                     children: [
-                      // Circular Floor Glow
+                      // Floor Shadow under Pingo
                       Positioned(
-                        bottom: 0,
-                        left: 10,
-                        right: 10,
-                        height: 50,
+                        bottom: 6,
+                        left: 14,
+                        width: 140,
+                        height: 22,
                         child: Container(
                           decoration: BoxDecoration(
-                            borderRadius: const BorderRadius.all(Radius.elliptical(160, 45)),
-                            gradient: RadialGradient(
-                              center: const Alignment(0, 0.2),
-                              radius: 0.9,
-                              colors: [
-                                const Color(0xFFE5252A).withValues(alpha: 0.08),
-                                const Color(0xFF2563EB).withValues(alpha: 0.05),
-                                Colors.transparent,
-                              ],
-                            ),
+                            borderRadius: const BorderRadius.all(Radius.elliptical(70, 11)),
+                            color: Colors.black.withValues(alpha: 0.06),
                           ),
                         ),
                       ),
 
-                      // Rising Red Growth Arrow
+                      // 3D Glass Podium Stage under the 4 pillars
                       Positioned(
-                        top: 15,
-                        right: 15,
-                        child: Transform.rotate(
-                          angle: -0.22,
-                          child: const Icon(
-                            Icons.trending_up_rounded,
-                            size: 82,
-                            color: Color(0xFFE5252A),
-                          ),
+                        right: 8,
+                        bottom: 22,
+                        width: 154,
+                        height: 38,
+                        child: CustomPaint(
+                          painter: _StagePodiumPainter(),
                         ),
                       ),
 
-                      // 4 3D Bar Chart Pillars
+                      // 4 Glossy 3D Pillars
                       Positioned(
-                        right: 14,
-                        bottom: 26,
+                        right: 35,
+                        bottom: 36,
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            _buildBar(32, const Color(0xFFBFDBFE)),
-                            const SizedBox(width: 5),
-                            _buildBar(55, const Color(0xFF93C5FD)),
-                            const SizedBox(width: 5),
-                            _buildBar(82, const Color(0xFF60A5FA)),
-                            const SizedBox(width: 5),
-                            _buildBar(114, const Color(0xFF3B82F6)),
+                            _buildGlossy3DBar(
+                              height: 32,
+                              lightColor: const Color(0xFFEFF6FF),
+                              primaryColor: const Color(0xFFBFDBFE),
+                              darkColor: const Color(0xFF93C5FD),
+                            ),
+                            const SizedBox(width: 8),
+                            _buildGlossy3DBar(
+                              height: 60,
+                              lightColor: const Color(0xFFDBEAFE),
+                              primaryColor: const Color(0xFF93C5FD),
+                              darkColor: const Color(0xFF60A5FA),
+                            ),
+                            const SizedBox(width: 8),
+                            _buildGlossy3DBar(
+                              height: 92,
+                              lightColor: const Color(0xFF93C5FD),
+                              primaryColor: const Color(0xFF60A5FA),
+                              darkColor: const Color(0xFF2563EB),
+                            ),
+                            const SizedBox(width: 8),
+                            _buildGlossy3DBar(
+                              height: 128,
+                              lightColor: const Color(0xFF60A5FA),
+                              primaryColor: const Color(0xFF2563EB),
+                              darkColor: const Color(0xFF1D4ED8),
+                            ),
                           ],
                         ),
                       ),
 
-                      // Floating circular badges
+                      // 3D Curved Growth Arrow
                       Positioned(
-                        top: 36,
-                        right: 88,
-                        child: _buildCircleBadge(Icons.flag_rounded, const Color(0xFFEF4444), const Color(0xFFFFEEEE)),
-                      ),
-                      Positioned(
-                        bottom: 95,
-                        right: 98,
-                        child: _buildCircleBadge(Icons.person_rounded, const Color(0xFF2563EB), const Color(0xFFEFF6FF)),
-                      ),
-                      Positioned(
-                        bottom: 28,
-                        right: 58,
-                        child: _buildCircleBadge(Icons.pie_chart_rounded, const Color(0xFFE11D48), const Color(0xFFFFF1F2)),
+                        right: 18,
+                        bottom: 42,
+                        width: 150,
+                        height: 170,
+                        child: CustomPaint(
+                          painter: _GrowthArrowPainter(),
+                        ),
                       ),
 
-                      // Pingo Mascot (Pointing high)
+                      // 3 Floating White Badges with Colored Glows
+                      // 1. Red Flag Badge (Top)
+                      Positioned(
+                        top: 26,
+                        right: 80,
+                        child: _buildFloatingWhiteBadge(
+                          Icons.flag_rounded,
+                          const Color(0xFFE5252A),
+                        ),
+                      ),
+
+                      // 2. Blue Person Badge (Middle)
+                      Positioned(
+                        top: 114,
+                        right: 128,
+                        child: _buildFloatingWhiteBadge(
+                          Icons.person_rounded,
+                          const Color(0xFF2563EB),
+                        ),
+                      ),
+
+                      // 3. Red Pie Chart Badge (Bottom)
+                      Positioned(
+                        bottom: 50,
+                        right: 16,
+                        child: _buildFloatingWhiteBadge(
+                          Icons.pie_chart_rounded,
+                          const Color(0xFFE5252A),
+                        ),
+                      ),
+
+                      // Pingo Mascot (Pointing high in victory pose)
                       const Positioned(
                         bottom: 0,
-                        left: 8,
+                        left: 2,
                         child: PingoMascotWidget(
                           pose: PingoPoses.victory,
-                          height: 245,
+                          height: 265,
                         ),
                       ),
                     ],
@@ -625,39 +660,75 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
   // SHARED UI WIDGETS & BADGES
   // ==========================================
 
-  Widget _buildBar(double height, Color color) {
+  Widget _buildGlossy3DBar({
+    required double height,
+    required Color lightColor,
+    required Color primaryColor,
+    required Color darkColor,
+  }) {
     return Container(
-      width: 15,
+      width: 19,
       height: height,
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(9.5),
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [lightColor, primaryColor, darkColor],
+          stops: const [0.0, 0.45, 1.0],
+        ),
         boxShadow: [
           BoxShadow(
-            color: color.withValues(alpha: 0.3),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
+            color: darkColor.withValues(alpha: 0.35),
+            blurRadius: 8,
+            offset: const Offset(2, 4),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // Specular glossy vertical highlight
+          Positioned(
+            top: 3,
+            left: 2.5,
+            bottom: 3,
+            width: 3,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(1.5),
+                color: Colors.white.withValues(alpha: 0.55),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCircleBadge(IconData icon, Color color, Color bgColor) {
+  Widget _buildFloatingWhiteBadge(IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.all(7),
+      width: 34,
+      height: 34,
       decoration: BoxDecoration(
-        color: bgColor,
+        color: Colors.white,
         shape: BoxShape.circle,
         boxShadow: [
           BoxShadow(
             color: color.withValues(alpha: 0.25),
-            blurRadius: 7,
-            offset: const Offset(0, 2),
+            blurRadius: 10,
+            spreadRadius: 1,
+            offset: const Offset(0, 3),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 5,
+            offset: const Offset(0, 1.5),
           ),
         ],
       ),
-      child: Icon(icon, size: 16, color: color),
+      child: Center(
+        child: Icon(icon, size: 18, color: color),
+      ),
     );
   }
 
@@ -803,4 +874,180 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
       ],
     );
   }
+}
+
+class _StagePodiumPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final ovalHeight = h * 0.55;
+    final cylinderHeight = h * 0.45;
+
+    // Floor contact shadow under the podium
+    final shadowPaint = Paint()
+      ..color = const Color(0xFF0284C7).withValues(alpha: 0.16)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(w / 2, h * 0.88),
+        width: w * 0.95,
+        height: ovalHeight * 0.8,
+      ),
+      shadowPaint,
+    );
+
+    // Cylinder side body
+    final bodyPath = Path()
+      ..moveTo(0, ovalHeight / 2)
+      ..lineTo(0, ovalHeight / 2 + cylinderHeight)
+      ..arcToPoint(
+        Offset(w, ovalHeight / 2 + cylinderHeight),
+        radius: Radius.elliptical(w / 2, ovalHeight / 2),
+        clockwise: false,
+      )
+      ..lineTo(w, ovalHeight / 2)
+      ..arcToPoint(
+        Offset(0, ovalHeight / 2),
+        radius: Radius.elliptical(w / 2, ovalHeight / 2),
+        clockwise: true,
+      )
+      ..close();
+
+    final bodyPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          const Color(0xFFBAE6FD).withValues(alpha: 0.88),
+          const Color(0xFF7DD3FC).withValues(alpha: 0.72),
+          const Color(0xFF38BDF8).withValues(alpha: 0.55),
+        ],
+      ).createShader(Rect.fromLTWH(0, ovalHeight / 2, w, cylinderHeight));
+    canvas.drawPath(bodyPath, bodyPaint);
+
+    // Top Oval surface
+    final topOvalRect = Rect.fromLTWH(0, 0, w, ovalHeight);
+    final topPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white.withValues(alpha: 0.95),
+          const Color(0xFFE0F2FE).withValues(alpha: 0.90),
+          const Color(0xFFBAE6FD).withValues(alpha: 0.82),
+        ],
+      ).createShader(topOvalRect);
+    canvas.drawOval(topOvalRect, topPaint);
+
+    // Top Oval glossy edge highlight rim
+    final rimPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.white,
+          const Color(0xFF7DD3FC).withValues(alpha: 0.65),
+        ],
+      ).createShader(topOvalRect);
+    canvas.drawOval(topOvalRect, rimPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _GrowthArrowPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Arrow curve path from bottom-left (base of Bar 1) to top-right (above Bar 4)
+    final startPoint = Offset(w * 0.08, h * 0.90);
+    final controlPoint1 = Offset(w * 0.38, h * 0.82);
+    final controlPoint2 = Offset(w * 0.68, h * 0.32);
+    final tipPoint = Offset(w * 0.94, h * 0.12);
+
+    final arrowPath = Path()
+      ..moveTo(startPoint.dx, startPoint.dy)
+      ..cubicTo(
+        controlPoint1.dx,
+        controlPoint1.dy,
+        controlPoint2.dx,
+        controlPoint2.dy,
+        tipPoint.dx,
+        tipPoint.dy,
+      );
+
+    // 1. Soft glowing ribbon drop trail
+    final glowPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 12.0
+      ..strokeCap = StrokeCap.round
+      ..color = const Color(0xFFE5252A).withValues(alpha: 0.22)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+    canvas.drawPath(arrowPath, glowPaint);
+
+    // 2. Main red curved arrow shaft
+    final strokePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5.5
+      ..strokeCap = StrokeCap.round
+      ..shader = const LinearGradient(
+        begin: Alignment.bottomLeft,
+        end: Alignment.topRight,
+        colors: [
+          Color(0xFFE5252A),
+          Color(0xFFFF3B30),
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, w, h));
+    canvas.drawPath(arrowPath, strokePaint);
+
+    // 3. Arrowhead at tip pointing along tangent
+    final dx = tipPoint.dx - controlPoint2.dx;
+    final dy = tipPoint.dy - controlPoint2.dy;
+    final angle = math.atan2(dy, dx);
+
+    const headLength = 16.0;
+
+    final headPath = Path();
+    headPath.moveTo(tipPoint.dx, tipPoint.dy);
+    headPath.lineTo(
+      tipPoint.dx - headLength * math.cos(angle - 0.48),
+      tipPoint.dy - headLength * math.sin(angle - 0.48),
+    );
+    headPath.lineTo(
+      tipPoint.dx - (headLength * 0.65) * math.cos(angle),
+      tipPoint.dy - (headLength * 0.65) * math.sin(angle),
+    );
+    headPath.lineTo(
+      tipPoint.dx - headLength * math.cos(angle + 0.48),
+      tipPoint.dy - headLength * math.sin(angle + 0.48),
+    );
+    headPath.close();
+
+    final headPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..shader = const LinearGradient(
+        begin: Alignment.bottomLeft,
+        end: Alignment.topRight,
+        colors: [
+          Color(0xFFE5252A),
+          Color(0xFFFF3B30),
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, w, h));
+
+    final headShadow = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFE5252A).withValues(alpha: 0.35)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawPath(headPath.shift(const Offset(1, 2)), headShadow);
+    canvas.drawPath(headPath, headPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

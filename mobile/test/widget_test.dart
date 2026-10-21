@@ -19,11 +19,14 @@ void main() {
       ),
     );
 
-    // Initial slide 1 should show brand subtitle, Skip button, and Powered by footer
+    // Initial slide 1 should show brand subtitle, Skip button, badges, and Powered by footer
     expect(find.text('Manage Leads. Close Deals. Grow Together.'), findsOneWidget);
     expect(find.text('Skip'), findsOneWidget);
     expect(find.text('Powered by'), findsOneWidget);
     expect(find.byType(Image), findsWidgets);
+    expect(find.byIcon(Icons.flag_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.person_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.pie_chart_rounded), findsOneWidget);
 
     // Swipe to Slide 2
     await tester.drag(find.byType(PageView), const Offset(-500, 0));

@@ -90,10 +90,41 @@ class WaveBackgroundPainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(0, 0, w, h * 0.45));
       canvas.drawRect(Rect.fromLTWH(0, 0, w, h * 0.45), topGlow);
 
+      // Left mid-level crimson red wave petal (behind Pingo's waist/elbow)
+      final midLeftPinkArc = Path()
+        ..moveTo(0, h * 0.44)
+        ..cubicTo(w * 0.28, h * 0.46, w * 0.28, h * 0.65, 0, h * 0.72)
+        ..close();
+      final midLeftPinkPaint = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            const Color(0xFFE5252A).withValues(alpha: 0.22),
+            const Color(0xFFE5252A).withValues(alpha: 0.03),
+          ],
+        ).createShader(Rect.fromLTWH(0, h * 0.44, w * 0.28, h * 0.28));
+      canvas.drawPath(midLeftPinkArc, midLeftPinkPaint);
+
+      final midLeftRedWave = Path()
+        ..moveTo(0, h * 0.47)
+        ..cubicTo(w * 0.20, h * 0.49, w * 0.22, h * 0.62, 0, h * 0.67)
+        ..close();
+      final midLeftRedPaint = Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            Color(0xFFE5252A),
+            Color(0xFFDC2626),
+          ],
+        ).createShader(Rect.fromLTWH(0, h * 0.47, w * 0.22, h * 0.20));
+      canvas.drawPath(midLeftRedWave, midLeftRedPaint);
+
       // Deep corporate navy bottom-right wave
       final navyWave = Path()
         ..moveTo(w * 0.45, h)
-        ..cubicTo(w * 0.65, h * 0.94, w * 0.82, h * 0.92, w, h * 0.86)
+        ..cubicTo(w * 0.65, h * 0.94, w * 0.82, h * 0.92, w, h * 0.85)
         ..lineTo(w, h)
         ..close();
       final navyPaint = Paint()
@@ -104,14 +135,14 @@ class WaveBackgroundPainter extends CustomPainter {
             Color(0xFF1E3A5F),
             Color(0xFF162A45),
           ],
-        ).createShader(Rect.fromLTWH(w * 0.45, h * 0.86, w * 0.55, h * 0.14));
+        ).createShader(Rect.fromLTWH(w * 0.45, h * 0.85, w * 0.55, h * 0.15));
       canvas.drawPath(navyWave, navyPaint);
 
       // Bold crimson red bottom-left curved wave
       final redWave = Path()
-        ..moveTo(0, h * 0.88)
-        ..cubicTo(w * 0.2, h * 0.82, w * 0.4, h * 0.94, w * 0.65, h * 0.96)
-        ..cubicTo(w * 0.8, h * 0.97, w * 0.9, h * 0.98, w, h)
+        ..moveTo(0, h * 0.84)
+        ..cubicTo(w * 0.25, h * 0.80, w * 0.55, h * 0.96, w * 0.82, h * 0.94)
+        ..cubicTo(w * 0.92, h * 0.94, w * 0.98, h * 0.96, w, h)
         ..lineTo(0, h)
         ..close();
       final redPaint = Paint()
@@ -122,7 +153,7 @@ class WaveBackgroundPainter extends CustomPainter {
             Color(0xFFE5252A),
             Color(0xFFDC2626),
           ],
-        ).createShader(Rect.fromLTWH(0, h * 0.82, w, h * 0.18));
+        ).createShader(Rect.fromLTWH(0, h * 0.80, w, h * 0.20));
       canvas.drawPath(redWave, redPaint);
     }
   }
