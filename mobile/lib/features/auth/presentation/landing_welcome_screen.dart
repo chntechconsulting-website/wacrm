@@ -248,30 +248,35 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
       child: Column(
         children: [
           const SizedBox(height: 4),
-          // WA!CRM Authentic Bold Typography
-          RichText(
-            textAlign: TextAlign.center,
-            text: const TextSpan(
-              children: [
-                TextSpan(
-                  text: 'WA!',
-                  style: TextStyle(
-                    fontSize: 38,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFFE5252A),
-                    letterSpacing: -0.5,
+          // WA!CRM Official 3D Ribbon Logo Asset
+          Image.asset(
+            'assets/images/logo.png',
+            height: 46,
+            fit: BoxFit.contain,
+            errorBuilder: (ctx, err, stack) => RichText(
+              textAlign: TextAlign.center,
+              text: const TextSpan(
+                children: [
+                  TextSpan(
+                    text: 'WA!',
+                    style: TextStyle(
+                      fontSize: 38,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFFE5252A),
+                      letterSpacing: -0.5,
+                    ),
                   ),
-                ),
-                TextSpan(
-                  text: 'CRM',
-                  style: TextStyle(
-                    fontSize: 38,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF162A45),
-                    letterSpacing: -0.5,
+                  TextSpan(
+                    text: 'CRM',
+                    style: TextStyle(
+                      fontSize: 38,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF162A45),
+                      letterSpacing: -0.5,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 6),
