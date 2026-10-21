@@ -59,10 +59,29 @@ const GoogleLogo = () => (
 );
 
 const Login = () => {
-  const [username, setUsername] = useState(() => localStorage.getItem('crm_remember_user') || 'admin');
+  const [username, setUsername] = useState(() => {
+    try {
+      const saved = localStorage.getItem('crm_remember_user');
+      // Purge any legacy 'admin' value from localStorage
+      if (saved === 'admin') {
+        localStorage.removeItem('crm_remember_user');
+        return '';
+      }
+      return saved || '';
+    } catch (_) {
+      return '';
+    }
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(() => {
+    try {
+      const saved = localStorage.getItem('crm_remember_user');
+      return !!(saved && saved !== 'admin');
+    } catch (_) {
+      return false;
+    }
+  });
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeModal, setActiveModal] = useState(null); // 'forgot' | 'admin' | 'google'
@@ -303,12 +322,11 @@ const Login = () => {
                     id="username"
                     type="text"
                     className="wa-input"
-                    placeholder="Email Address"
+                    placeholder="Email Address / Username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     disabled={isSubmitting}
                     autoComplete="username"
-                    autoFocus
                   />
                 </div>
               </div>
