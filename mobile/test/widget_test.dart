@@ -19,11 +19,11 @@ void main() {
       ),
     );
 
-    // Initial slide 1 should show brand subtitle and Skip button
+    // Initial slide 1 should show brand subtitle, Skip button, and Powered by footer
     expect(find.text('Manage Leads. Close Deals. Grow Together.'), findsOneWidget);
     expect(find.text('Skip'), findsOneWidget);
     expect(find.text('Powered by'), findsOneWidget);
-    expect(find.text('CHN'), findsOneWidget);
+    expect(find.byType(Image), findsWidgets);
 
     // Swipe to Slide 2
     await tester.drag(find.byType(PageView), const Offset(-500, 0));
@@ -65,5 +65,61 @@ void main() {
     expect(find.text('Login'), findsOneWidget);
     expect(find.text('Sign in with Google'), findsOneWidget);
     expect(find.text('Powered by'), findsOneWidget);
+  });
+
+  testWidgets('LandingWelcomeScreen adapts cleanly without overflow on short Android screen (360x640)', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: LandingWelcomeScreen(),
+      ),
+    );
+
+    // Slide 1 on compact screen
+    expect(find.text('Manage Leads. Close Deals. Grow Together.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Swipe to Slide 2
+    await tester.drag(find.byType(PageView), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('New Leads'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Swipe to Slide 3
+    await tester.drag(find.byType(PageView), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('Get Started'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('LandingWelcomeScreen adapts cleanly without overflow on tall Android screen (412x915)', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: LandingWelcomeScreen(),
+      ),
+    );
+
+    // Slide 1 on tall screen
+    expect(find.text('Manage Leads. Close Deals. Grow Together.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Swipe to Slide 2
+    await tester.drag(find.byType(PageView), const Offset(-350, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('New Leads'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Swipe to Slide 3
+    await tester.drag(find.byType(PageView), const Offset(-350, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('Get Started'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
