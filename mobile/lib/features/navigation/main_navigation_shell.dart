@@ -263,7 +263,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         children: screens,
       ),
       bottomNavigationBar: WacrmWaveNavBar(
-        currentIndex: _currentIndex == 1 ? 1 : 0,
+        currentIndex: _currentIndex,
         onTap: (idx) {
           if (idx == 0) {
             _navigateToTab(0);

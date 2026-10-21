@@ -14,16 +14,21 @@ class WacrmWaveNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 78,
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    const baseNavHeight = 72.0;
+    final totalHeight = baseNavHeight + bottomInset;
+
+    return Container(
+      color: Colors.transparent,
+      height: totalHeight,
       child: Stack(
         alignment: Alignment.bottomCenter,
         clipBehavior: Clip.none,
         children: [
-          // Wave Background
+          // Wave Background extending all the way down through bottomInset
           Positioned.fill(
             child: CustomPaint(
-              painter: _WaveNavBarPainter(),
+              painter: _WaveNavBarPainter(bottomInset: bottomInset),
             ),
           ),
 
@@ -31,8 +36,8 @@ class WacrmWaveNavBar extends StatelessWidget {
           Positioned(
             left: 0,
             right: 0,
-            bottom: 6,
-            height: 56,
+            bottom: bottomInset + 4,
+            height: 50,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
@@ -51,7 +56,7 @@ class WacrmWaveNavBar extends StatelessWidget {
                 ),
 
                 // Center Spacer for FAB
-                const SizedBox(width: 52),
+                const SizedBox(width: 54),
 
                 // 3. Calls
                 _buildNavItem(
@@ -72,7 +77,7 @@ class WacrmWaveNavBar extends StatelessWidget {
 
           // Center Elevated Red FAB with White '+'
           Positioned(
-            top: 0,
+            bottom: bottomInset + 22,
             child: GestureDetector(
               onTap: onAdd,
               child: Container(
@@ -150,37 +155,43 @@ class WacrmWaveNavBar extends StatelessWidget {
 }
 
 class _WaveNavBarPainter extends CustomPainter {
+  final double bottomInset;
+
+  _WaveNavBarPainter({this.bottomInset = 0});
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
 
-    // Navy Wave Background Path with Center Drip Cutout for FAB
+    // Top baseline of the wave
+    const topY = 18.0;
+
     final path = Path();
-    path.moveTo(0, 24);
+    path.moveTo(0, topY);
 
     // Left curve towards center
-    path.cubicTo(w * 0.20, 24, w * 0.32, 16, w * 0.38, 20);
+    path.cubicTo(w * 0.20, topY, w * 0.32, topY - 6, w * 0.38, topY - 2);
 
     // Center cutout around FAB
-    path.cubicTo(w * 0.42, 25, w * 0.44, 46, w * 0.50, 46);
-    path.cubicTo(w * 0.56, 46, w * 0.58, 25, w * 0.62, 20);
+    path.cubicTo(w * 0.42, topY + 4, w * 0.44, topY + 26, w * 0.50, topY + 26);
+    path.cubicTo(w * 0.56, topY + 26, w * 0.58, topY + 4, w * 0.62, topY - 2);
 
     // Right curve towards right edge
-    path.cubicTo(w * 0.68, 16, w * 0.80, 24, w, 24);
+    path.cubicTo(w * 0.68, topY - 6, w * 0.80, topY, w, topY);
 
-    // Close path along bottom
+    // Close path down through the bottom including bottomInset
     path.lineTo(w, h);
     path.lineTo(0, h);
     path.close();
 
     // Top Drop Shadow
     final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.18)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      ..color = Colors.black.withValues(alpha: 0.15)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
     canvas.drawPath(path.shift(const Offset(0, -2)), shadowPaint);
 
-    // Solid Deep Corporate Navy Paint (#0B192C)
+    // Solid Deep Corporate Navy Gradient (#162A45 to #0F172A)
     final paint = Paint()
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
@@ -189,11 +200,12 @@ class _WaveNavBarPainter extends CustomPainter {
           Color(0xFF162A45),
           Color(0xFF0F172A),
         ],
-      ).createShader(Rect.fromLTWH(0, 16, w, h - 16));
+      ).createShader(Rect.fromLTWH(0, topY - 6, w, h));
 
     canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _WaveNavBarPainter oldDelegate) =>
+      oldDelegate.bottomInset != bottomInset;
 }

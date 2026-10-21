@@ -156,9 +156,9 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
                               await provider.fetchActiveReminders();
                             },
                             child: ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 110),
                               itemCount: followups.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              separatorBuilder: (_, _) => const SizedBox(height: 10),
                               itemBuilder: (context, index) {
                                 final f = followups[index];
                                 final isDone = f.status == 'Completed';
