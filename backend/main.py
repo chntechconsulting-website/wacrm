@@ -33,7 +33,8 @@ from routers import (
     notifications,
     workflow,
     roles,
-    doocti
+    doocti,
+    field_visits
 )
 
 # Ensure upload directory exists
@@ -91,6 +92,8 @@ app.include_router(integrations.router, prefix=settings.API_V1_STR)
 app.include_router(ivr.router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp.router, prefix=settings.API_V1_STR)
 app.include_router(employee_monitoring.router, prefix=settings.API_V1_STR)
+app.include_router(field_visits.router, prefix=settings.API_V1_STR)
+app.include_router(field_visits.router)  # Allow direct /api/field-visits endpoint
 app.include_router(delete_requests.router, prefix=settings.API_V1_STR)
 app.include_router(activities.router, prefix=settings.API_V1_STR)
 app.include_router(activities.router)  # Allow direct /api/activities endpoint
@@ -218,6 +221,27 @@ def startup_db_client():
                         print(f"Auto-added missing column '{col_name}' to 'followups' table.")
             except Exception as ex:
                 print(f"Followups column sync check: {ex}")
+
+            # field_visits table schema sync
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM field_visits"))
+                fv_cols = [row[0] for row in result.fetchall()]
+                missing_fv_cols = {
+                    "customer_id": "INT NULL",
+                    "checkin_address": "VARCHAR(255) NULL",
+                    "visiting_card_url": "TEXT NULL",
+                    "customer_requirements": "TEXT NULL",
+                    "visit_outcome": "VARCHAR(100) NULL",
+                    "followup_id": "INT NULL",
+                    "client_token": "VARCHAR(100) NULL"
+                }
+                for col_name, col_type in missing_fv_cols.items():
+                    if col_name not in fv_cols:
+                        conn.execute(text(f"ALTER TABLE field_visits ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                        print(f"Auto-added missing column '{col_name}' to 'field_visits' table.")
+            except Exception as ex:
+                print(f"Field visits column sync check: {ex}")
     except Exception as e:
         print(f"Error creating/synchronizing database tables: {e}")
 
@@ -237,6 +261,15 @@ def startup_db_client():
         print("Dynamic Lead Auto-Assignment background scheduler launched.")
     except Exception as ex:
         print(f"Failed to start lead auto-assignment scheduler: {ex}")
+
+    # Launch Follow-up 1-Hour Reminder Background Scheduler
+    try:
+        import asyncio
+        from services.followup_reminder_service import start_followup_reminder_scheduler
+        asyncio.create_task(start_followup_reminder_scheduler(interval_seconds=60))
+        print("Follow-up 1-Hour Reminder background scheduler launched.")
+    except Exception as ex:
+        print(f"Failed to start follow-up reminder scheduler: {ex}")
 
     # Seed initial Admin, Manager, and Employee users if not existing
     db = SessionLocal()

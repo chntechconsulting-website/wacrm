@@ -77,6 +77,13 @@ def get_activities(
                     LeadActivity.related_entity_type == "WHATSAPP"
                 )
             )
+        elif target_type in ["FIELD_VISIT", "VISIT"]:
+            query = query.filter(
+                or_(
+                    LeadActivity.activity_type.ilike("%VISIT%"),
+                    LeadActivity.related_entity_type == "FIELD_VISIT"
+                )
+            )
         else:
             query = query.filter(
                 or_(

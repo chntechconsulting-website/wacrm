@@ -484,6 +484,15 @@ def record_presence_heartbeat(
 # ==========================================
 # 8. FIELD VISIT CHECK-IN & CHECK-OUT API
 # ==========================================
+@router.post("/field-visits")
+def submit_field_visit_unified(
+    data: Dict[str, Any],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from routers.field_visits import handle_field_visit_submission
+    return handle_field_visit_submission(data, db, current_user)
+
 @router.post("/field-visits/check-in")
 def field_visit_check_in(
     data: Dict[str, Any],
@@ -500,6 +509,7 @@ def field_visit_check_in(
         customer_name=data.get("customer_name"),
         checkin_lat=str(data.get("checkin_lat", "")),
         checkin_lng=str(data.get("checkin_lng", "")),
+        checkin_address=data.get("checkin_address"),
         notes=data.get("notes"),
         photo_url=data.get("photo_url"),
         status="CHECKED_IN"
@@ -555,26 +565,7 @@ def get_all_field_visits(
     elif authorized_emp_ids is not None:
         query = query.filter(FieldVisit.employee_id.in_(authorized_emp_ids))
     visits = query.order_by(desc(FieldVisit.checkin_time)).all()
-    result = []
-    for v in visits:
-        emp = db.query(Employee).filter(Employee.id == v.employee_id).first()
-        result.append({
-            "id": v.id,
-            "employee_id": v.employee_id,
-            "employee_name": emp.name if emp else "Unknown",
-            "lead_id": v.lead_id,
-            "customer_name": v.customer_name,
-            "checkin_time": v.checkin_time,
-            "checkout_time": v.checkout_time,
-            "checkin_lat": v.checkin_lat,
-            "checkin_lng": v.checkin_lng,
-            "checkout_lat": v.checkout_lat,
-            "checkout_lng": v.checkout_lng,
-            "notes": v.notes,
-            "photo_url": v.photo_url,
-            "status": v.status
-        })
-    return result
+    return [v.to_dict() for v in visits]
 
 @router.get("/{employee_id}/field-visits")
 def get_employee_field_visits(

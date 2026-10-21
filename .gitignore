@@ -57,6 +57,8 @@ scratch/
 crop*.png
 test_rupee.pdf
 backend/*.png
+mobile/build/
+mobile/.dart_tool/
 
 # Logs
 *.log
