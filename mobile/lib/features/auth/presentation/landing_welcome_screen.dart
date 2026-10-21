@@ -228,35 +228,30 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
       child: Column(
         children: [
           const SizedBox(height: 4),
-          // WA!CRM Bold Logo
-          Image.asset(
-            'assets/images/logo.png',
-            height: 38,
-            fit: BoxFit.contain,
-            errorBuilder: (ctx, err, stack) => RichText(
-              textAlign: TextAlign.center,
-              text: const TextSpan(
-                children: [
-                  TextSpan(
-                    text: 'WA!',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.w900,
-                      color: Color(0xFFE5252A),
-                      letterSpacing: -0.5,
-                    ),
+          // WA!CRM Authentic Bold Typography
+          RichText(
+            textAlign: TextAlign.center,
+            text: const TextSpan(
+              children: [
+                TextSpan(
+                  text: 'WA!',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFFE5252A),
+                    letterSpacing: -0.5,
                   ),
-                  TextSpan(
-                    text: 'CRM',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.w900,
-                      color: Color(0xFF162A45),
-                      letterSpacing: -0.5,
-                    ),
+                ),
+                TextSpan(
+                  text: 'CRM',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF162A45),
+                    letterSpacing: -0.5,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 6),
@@ -279,8 +274,8 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
               child: FittedBox(
                 fit: BoxFit.contain,
                 child: SizedBox(
-                  width: 320,
-                  height: 270,
+                  width: 330,
+                  height: 280,
                   child: Stack(
                     alignment: Alignment.center,
                     clipBehavior: Clip.none,
@@ -290,7 +285,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                         bottom: 0,
                         left: 10,
                         right: 10,
-                        height: 55,
+                        height: 50,
                         child: Container(
                           decoration: BoxDecoration(
                             borderRadius: const BorderRadius.all(Radius.elliptical(160, 45)),
@@ -315,7 +310,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                           angle: -0.22,
                           child: const Icon(
                             Icons.trending_up_rounded,
-                            size: 78,
+                            size: 82,
                             color: Color(0xFFE5252A),
                           ),
                         ),
@@ -323,18 +318,18 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
 
                       // 4 3D Bar Chart Pillars
                       Positioned(
-                        right: 16,
-                        bottom: 28,
+                        right: 14,
+                        bottom: 26,
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             _buildBar(32, const Color(0xFFBFDBFE)),
                             const SizedBox(width: 5),
-                            _buildBar(54, const Color(0xFF93C5FD)),
+                            _buildBar(55, const Color(0xFF93C5FD)),
                             const SizedBox(width: 5),
-                            _buildBar(80, const Color(0xFF60A5FA)),
+                            _buildBar(82, const Color(0xFF60A5FA)),
                             const SizedBox(width: 5),
-                            _buildBar(110, const Color(0xFF3B82F6)),
+                            _buildBar(114, const Color(0xFF3B82F6)),
                           ],
                         ),
                       ),
@@ -346,23 +341,23 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                         child: _buildCircleBadge(Icons.flag_rounded, const Color(0xFFEF4444), const Color(0xFFFFEEEE)),
                       ),
                       Positioned(
-                        bottom: 92,
-                        right: 100,
+                        bottom: 95,
+                        right: 98,
                         child: _buildCircleBadge(Icons.person_rounded, const Color(0xFF2563EB), const Color(0xFFEFF6FF)),
                       ),
                       Positioned(
-                        bottom: 30,
-                        right: 60,
+                        bottom: 28,
+                        right: 58,
                         child: _buildCircleBadge(Icons.pie_chart_rounded, const Color(0xFFE11D48), const Color(0xFFFFF1F2)),
                       ),
 
                       // Pingo Mascot (Pointing high)
                       const Positioned(
                         bottom: 0,
-                        left: 10,
+                        left: 8,
                         child: PingoMascotWidget(
                           pose: PingoPoses.victory,
-                          height: 235,
+                          height: 245,
                         ),
                       ),
                     ],

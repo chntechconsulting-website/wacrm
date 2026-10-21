@@ -74,8 +74,8 @@ class WaveBackgroundPainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(0, h * 0.74, w, h * 0.26));
       canvas.drawPath(wave2, paint2);
     } else {
-      // Light background
-      final bgPaint = Paint()..color = const Color(0xFFFAFAFA);
+      // Pure white light background
+      final bgPaint = Paint()..color = Colors.white;
       canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
       // Soft ambient pink glow on top right
