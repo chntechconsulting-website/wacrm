@@ -31,7 +31,6 @@ import {
   Activity,
   Trash2,
   X,
-  Palette,
   CreditCard,
   LifeBuoy,
   TrendingUp,
@@ -258,8 +257,6 @@ const Sidebar = ({
     return localStorage.getItem('crm_sidebar_theme') || 'white-brown';
   });
 
-  const [showThemePicker, setShowThemePicker] = useState(false);
-
   // Apply theme variables to root document
   useEffect(() => {
     const selected = LITE_THEMES.find(t => t.id === activeThemeId) || LITE_THEMES[0];
@@ -464,20 +461,6 @@ const Sidebar = ({
           </NavLink>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <button
-              type="button"
-              onClick={() => setShowThemePicker(prev => !prev)}
-              className="collapse-toggle-btn"
-              title="Test Lite Tone Colors"
-              aria-label="Test Lite Tone Colors"
-              style={{
-                borderColor: showThemePicker ? 'var(--sidebar-text)' : undefined,
-                color: showThemePicker ? 'var(--sidebar-text)' : undefined
-              }}
-            >
-              <Palette size={16} />
-            </button>
-
             {isMobileOpen ? (
               <button 
                 type="button"
@@ -501,43 +484,6 @@ const Sidebar = ({
             )}
           </div>
         </div>
-
-        {/* Color Presets Picker Popup / Floating Bar */}
-        {showThemePicker && (
-          <div className="sidebar-theme-picker-panel">
-            <div className="sidebar-theme-picker-header">
-              <span style={{ fontWeight: 700, fontSize: '0.78rem', color: 'var(--sidebar-text)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Test Lite Colors
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowThemePicker(false)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--sidebar-muted)' }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="sidebar-theme-grid">
-              {LITE_THEMES.map(theme => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveThemeId(theme.id);
-                  }}
-                  className={`sidebar-theme-option ${activeThemeId === theme.id ? 'active' : ''}`}
-                  title={theme.name}
-                >
-                  <span 
-                    className="sidebar-theme-swatch" 
-                    style={{ backgroundColor: theme.bg, borderColor: theme.border }} 
-                  />
-                  {!isCollapsed && <span className="sidebar-theme-name">{theme.name}</span>}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Scrollable Navigation Items */}
         <nav className="sidebar-nav">
