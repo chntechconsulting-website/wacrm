@@ -83,18 +83,37 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const SizedBox(width: 48), // Spacer
-                      TextButton(
-                        onPressed: _navigateToLogin,
-                        style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF5B7A9C),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        ),
-                        child: const Text(
-                          'Skip',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF5B7A9C),
+                      InkWell(
+                        onTap: _navigateToLogin,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.04),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Skip',
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF475569),
+                                ),
+                              ),
+                              SizedBox(width: 4),
+                              Icon(Icons.chevron_right_rounded, size: 16, color: Color(0xFF475569)),
+                            ],
                           ),
                         ),
                       ),
@@ -421,7 +440,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
           RichText(
             textAlign: TextAlign.center,
             text: const TextSpan(
-              style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, height: 1.2),
+              style: TextStyle(fontSize: 29, fontWeight: FontWeight.w900, height: 1.15),
               children: [
                 TextSpan(text: 'Your Leads,\n', style: TextStyle(color: Color(0xFF162A45))),
                 TextSpan(text: 'All in One Place', style: TextStyle(color: Color(0xFFE5252A))),
@@ -432,10 +451,10 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
           const Text(
             'Track customers, manage follow-ups,\nand stay connected with your team.',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 13.5,
               fontWeight: FontWeight.w500,
               color: Color(0xFF64748B),
-              height: 1.3,
+              height: 1.35,
             ),
             textAlign: TextAlign.center,
           ),
@@ -448,33 +467,64 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
               child: FittedBox(
                 fit: BoxFit.contain,
                 child: SizedBox(
-                  width: 330,
-                  height: 270,
+                  width: 350,
+                  height: 285,
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      // Floor Shadow
+                      // Floor Ambient Shadow
                       Positioned(
                         bottom: 0,
-                        left: 20,
-                        width: 140,
-                        height: 30,
+                        left: 10,
+                        width: 260,
+                        height: 26,
                         child: Container(
                           decoration: BoxDecoration(
-                            borderRadius: const BorderRadius.all(Radius.elliptical(70, 15)),
+                            borderRadius: const BorderRadius.all(Radius.elliptical(130, 13)),
                             color: Colors.black.withValues(alpha: 0.05),
                           ),
                         ),
                       ),
 
+                      // Curved Dashed Path Guide Lines
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: _Slide2DashedPathPainter(),
+                        ),
+                      ),
+
+                      // Floating Badge 1: Top-Left Speech Trend
+                      Positioned(
+                        top: 24,
+                        left: 14,
+                        child: _buildTopLeftTrendBadge(),
+                      ),
+
+                      // Floating Badge 2: Bottom-Right Pie Chart
+                      Positioned(
+                        bottom: 30,
+                        right: 18,
+                        child: _buildBottomRightPieBadge(),
+                      ),
+
+                      // Pingo Mascot (Sitting at laptop with WA!CRM logo & pointing with red idea sparks)
+                      const Positioned(
+                        bottom: 0,
+                        left: 0,
+                        child: PingoMascotWidget(
+                          pose: PingoPoses.laptop,
+                          height: 235,
+                        ),
+                      ),
+
                       // Floating Metric Card 1: New Leads
                       Positioned(
-                        top: 10,
-                        right: 0,
+                        top: 14,
+                        right: 6,
                         child: _buildMetricCard(
-                          icon: Icons.person_add_rounded,
-                          iconColor: const Color(0xFFEF4444),
-                          iconBg: const Color(0xFFFFEEEE),
+                          icon: Icons.person_rounded,
+                          iconStartColor: const Color(0xFFFF5252),
+                          iconEndColor: const Color(0xFFE5252A),
                           title: 'New Leads',
                           value: '24',
                           change: '↑ 12%',
@@ -484,12 +534,12 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
 
                       // Floating Metric Card 2: Follow-ups
                       Positioned(
-                        top: 95,
-                        right: 0,
+                        top: 100,
+                        right: 6,
                         child: _buildMetricCard(
-                          icon: Icons.phone_callback_rounded,
-                          iconColor: const Color(0xFF2563EB),
-                          iconBg: const Color(0xFFEFF6FF),
+                          icon: Icons.phone_rounded,
+                          iconStartColor: const Color(0xFF60A5FA),
+                          iconEndColor: const Color(0xFF2563EB),
                           title: 'Follow-ups',
                           value: '18',
                           change: '↑ 8%',
@@ -499,26 +549,16 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
 
                       // Floating Metric Card 3: Converted
                       Positioned(
-                        top: 180,
-                        right: 0,
+                        top: 186,
+                        right: 6,
                         child: _buildMetricCard(
                           icon: Icons.handshake_rounded,
-                          iconColor: const Color(0xFF10B981),
-                          iconBg: const Color(0xFFECFDF5),
+                          iconStartColor: const Color(0xFF34D399),
+                          iconEndColor: const Color(0xFF10B981),
                           title: 'Converted',
                           value: '5',
                           change: '↑ 25%',
                           changeColor: const Color(0xFF16A34A),
-                        ),
-                      ),
-
-                      // Pingo Mascot (Sitting with laptop & pointing up) - comfortable beside cards
-                      const Positioned(
-                        bottom: 0,
-                        left: 6,
-                        child: PingoMascotWidget(
-                          pose: PingoPoses.ideaPoint,
-                          height: 215,
                         ),
                       ),
                     ],
@@ -732,26 +772,100 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
     );
   }
 
+  Widget _buildTopLeftTrendBadge() {
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFE5252A).withValues(alpha: 0.15),
+            blurRadius: 12,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Container(
+          width: 28,
+          height: 24,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE5252A),
+            borderRadius: BorderRadius.circular(7),
+          ),
+          child: const Center(
+            child: Icon(
+              Icons.trending_up_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomRightPieBadge() {
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFE5252A).withValues(alpha: 0.15),
+            blurRadius: 12,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: const Center(
+        child: Icon(
+          Icons.pie_chart_rounded,
+          color: Color(0xFFE5252A),
+          size: 24,
+        ),
+      ),
+    );
+  }
+
   Widget _buildMetricCard({
     required IconData icon,
-    required Color iconColor,
-    required Color iconBg,
+    required Color iconStartColor,
+    required Color iconEndColor,
     required String title,
     required String value,
     required String change,
     required Color changeColor,
   }) {
     return Container(
-      width: 145,
+      width: 156,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: const Color(0xFFF1F5F9), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 14,
             offset: const Offset(0, 4),
           ),
         ],
@@ -759,14 +873,26 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(7),
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
-              color: iconBg,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [iconStartColor, iconEndColor],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: iconEndColor.withValues(alpha: 0.35),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ],
             ),
-            child: Icon(icon, size: 16, color: iconColor),
+            child: Icon(icon, size: 20, color: Colors.white),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -775,31 +901,30 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 10.5,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF64748B),
+                    letterSpacing: -0.2,
                   ),
                 ),
-                Row(
-                  children: [
-                    Text(
-                      value,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF0F172A),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      change,
-                      style: TextStyle(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                        color: changeColor,
-                      ),
-                    ),
-                  ],
+                const SizedBox(height: 1),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF0F172A),
+                    height: 1.15,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  change,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    color: changeColor,
+                  ),
                 ),
               ],
             ),
@@ -1046,6 +1171,56 @@ class _GrowthArrowPainter extends CustomPainter {
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
     canvas.drawPath(headPath.shift(const Offset(1, 2)), headShadow);
     canvas.drawPath(headPath, headPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _Slide2DashedPathPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    final paint = Paint()
+      ..color = const Color(0xFF93C5FD)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+
+    // 1. Path 1: Curving up to the top-left badge
+    final path1 = Path()
+      ..moveTo(w * 0.07, h * 0.46)
+      ..cubicTo(w * 0.05, h * 0.38, w * 0.06, h * 0.28, w * 0.14, h * 0.20);
+    _drawDashedPath(canvas, path1, paint, 4, 3);
+
+    // Arrowhead pointing towards top-left badge
+    final arrowPaint = Paint()
+      ..color = const Color(0xFF93C5FD)
+      ..style = PaintingStyle.fill;
+    final arrowPath1 = Path()
+      ..moveTo(w * 0.14, h * 0.20)
+      ..lineTo(w * 0.10, h * 0.21)
+      ..lineTo(w * 0.13, h * 0.24)
+      ..close();
+    canvas.drawPath(arrowPath1, arrowPaint);
+
+    // 2. Path 2: Curving down from the cards towards the bottom-right pie badge
+    final path2 = Path()
+      ..moveTo(w * 0.76, h * 0.70)
+      ..cubicTo(w * 0.82, h * 0.74, w * 0.88, h * 0.69, w * 0.94, h * 0.63);
+    _drawDashedPath(canvas, path2, paint, 4, 3);
+  }
+
+  void _drawDashedPath(Canvas canvas, Path path, Paint paint, double dashWidth, double dashSpace) {
+    for (final metric in path.computeMetrics()) {
+      double start = 0.0;
+      while (start < metric.length) {
+        final end = (start + dashWidth < metric.length) ? start + dashWidth : metric.length;
+        canvas.drawPath(metric.extractPath(start, end), paint);
+        start += dashWidth + dashSpace;
+      }
+    }
   }
 
   @override

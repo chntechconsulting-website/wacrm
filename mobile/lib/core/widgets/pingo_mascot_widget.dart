@@ -24,6 +24,7 @@ class PingoPoses {
   static const String saluteService = 'salute_service';
   static const String celebrateSuccess = 'celebrate_success';
   static const String inspectSearch = 'inspect_search';
+  static const String laptop = 'laptop';
 
   static String getAssetPath(String pose) {
     switch (pose.toLowerCase().replaceAll('-', '_')) {
@@ -35,7 +36,9 @@ class PingoPoses {
         return 'assets/mascot/pingo-celebrate.png';
       case 'idea':
       case 'idea_point':
-        return 'assets/mascot/pingo-idea.png';
+      case 'laptop':
+      case 'laptop_desk':
+        return 'assets/mascot/pingo-laptop.png';
       case 'inspect':
       case 'inspect_search':
         return 'assets/mascot/pingo-inspect.png';

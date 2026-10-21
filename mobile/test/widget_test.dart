@@ -36,6 +36,13 @@ void main() {
     expect(find.text('New Leads'), findsOneWidget);
     expect(find.text('Follow-ups'), findsOneWidget);
     expect(find.text('Converted'), findsOneWidget);
+    expect(find.text('24'), findsOneWidget);
+    expect(find.text('18'), findsOneWidget);
+    expect(find.text('5'), findsOneWidget);
+    expect(find.text('↑ 12%'), findsOneWidget);
+    expect(find.text('↑ 8%'), findsOneWidget);
+    expect(find.text('↑ 25%'), findsOneWidget);
+    expect(find.byIcon(Icons.trending_up_rounded), findsOneWidget);
 
     // Swipe to Slide 3
     await tester.drag(find.byType(PageView), const Offset(-500, 0));
