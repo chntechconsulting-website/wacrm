@@ -62,10 +62,10 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFA),
+      backgroundColor: Colors.white,
       body: Stack(
         children: [
-          // Background curved red & navy waves
+          // Background dual curved red & navy waves
           Positioned.fill(
             child: CustomPaint(
               painter: WaveBackgroundPainter(isDark: false),
@@ -77,15 +77,15 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
               children: [
                 // Top Bar with Skip Button
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const SizedBox(width: 48), // Spacer to balance
+                      const SizedBox(width: 48), // Spacer
                       TextButton(
                         onPressed: _navigateToLogin,
                         style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xFF64748B),
+                          foregroundColor: const Color(0xFF2563EB),
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         ),
                         child: const Text(
@@ -93,6 +93,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
+                            color: Color(0xFF2563EB),
                           ),
                         ),
                       ),
@@ -133,14 +134,14 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 1. Get Started Button (Positioned clearly above the footer on Slide 3)
+                      // 1. Get Started Button (Appears only on Slide 3 above footer)
                       AnimatedCrossFade(
                         firstChild: const SizedBox(height: 0),
                         secondChild: Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.only(bottom: 12),
                           child: SizedBox(
                             width: double.infinity,
-                            height: 48,
+                            height: 52,
                             child: ElevatedButton(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFFE5252A),
@@ -148,7 +149,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                                 elevation: 3,
                                 shadowColor: const Color(0xFFE5252A).withValues(alpha: 0.35),
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(24),
+                                  borderRadius: BorderRadius.circular(26),
                                 ),
                               ),
                               onPressed: _navigateToLogin,
@@ -174,11 +175,11 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                         duration: const Duration(milliseconds: 250),
                       ),
 
-                      // 2. "Powered by CHN" Branding (Fully visible in its own space)
+                      // 2. "Powered by CHN" Branding
                       _buildPoweredByChn(),
                       const SizedBox(height: 8),
 
-                      // 3. Interactive Carousel Dots Indicator (Dedicated space)
+                      // 3. 3 Circular Dot Indicators
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: List.generate(3, (index) {
@@ -191,14 +192,15 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                                 curve: Curves.easeInOut,
                               );
                             },
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 280),
+                            child: Container(
                               margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                              width: isActive ? 22 : 8,
+                              width: 8,
                               height: 8,
                               decoration: BoxDecoration(
-                                color: isActive ? const Color(0xFFE5252A) : const Color(0xFFFCA5A5).withValues(alpha: 0.6),
-                                borderRadius: BorderRadius.circular(4),
+                                shape: BoxShape.circle,
+                                color: isActive
+                                    ? const Color(0xFFE5252A)
+                                    : const Color(0xFFFFCDD2).withValues(alpha: 0.8),
                               ),
                             ),
                           );
@@ -226,7 +228,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
       child: Column(
         children: [
           const SizedBox(height: 4),
-          // Exact Authentic WA!CRM Logo
+          // WA!CRM Bold Logo
           Image.asset(
             'assets/images/logo.png',
             height: 38,
@@ -269,10 +271,9 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
             textAlign: TextAlign.center,
           ),
 
-          // Tightly balanced spacing - eliminates excessive empty space
           const SizedBox(height: 8),
 
-          // Slide 1 Hero Illustration (Naturally proportioned without clipping)
+          // Slide 1 Hero Illustration
           Expanded(
             child: Center(
               child: FittedBox(
@@ -284,78 +285,83 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                     alignment: Alignment.center,
                     clipBehavior: Clip.none,
                     children: [
-                      // 3D Podium Glow
+                      // Circular Floor Glow
                       Positioned(
                         bottom: 0,
-                        left: 20,
-                        right: 20,
-                        height: 70,
+                        left: 10,
+                        right: 10,
+                        height: 55,
                         child: Container(
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
+                            borderRadius: const BorderRadius.all(Radius.elliptical(160, 45)),
+                            gradient: RadialGradient(
+                              center: const Alignment(0, 0.2),
+                              radius: 0.9,
                               colors: [
-                                const Color(0xFFE5252A).withValues(alpha: 0.10),
-                                const Color(0xFF2563EB).withValues(alpha: 0.08),
+                                const Color(0xFFE5252A).withValues(alpha: 0.08),
+                                const Color(0xFF2563EB).withValues(alpha: 0.05),
+                                Colors.transparent,
                               ],
                             ),
-                            borderRadius: BorderRadius.circular(30),
                           ),
                         ),
                       ),
 
                       // Rising Red Growth Arrow
                       Positioned(
-                        top: 10,
-                        right: 20,
+                        top: 15,
+                        right: 15,
                         child: Transform.rotate(
-                          angle: -0.2,
+                          angle: -0.22,
                           child: const Icon(
                             Icons.trending_up_rounded,
-                            size: 72,
+                            size: 78,
                             color: Color(0xFFE5252A),
                           ),
                         ),
                       ),
 
-                      // 3D Bar Chart Pillars
+                      // 4 3D Bar Chart Pillars
                       Positioned(
-                        right: 18,
-                        bottom: 30,
+                        right: 16,
+                        bottom: 28,
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            _buildBar(36, const Color(0xFF93C5FD)),
-                            const SizedBox(width: 6),
-                            _buildBar(58, const Color(0xFF60A5FA)),
-                            const SizedBox(width: 6),
-                            _buildBar(88, const Color(0xFF3B82F6)),
+                            _buildBar(32, const Color(0xFFBFDBFE)),
+                            const SizedBox(width: 5),
+                            _buildBar(54, const Color(0xFF93C5FD)),
+                            const SizedBox(width: 5),
+                            _buildBar(80, const Color(0xFF60A5FA)),
+                            const SizedBox(width: 5),
+                            _buildBar(110, const Color(0xFF3B82F6)),
                           ],
                         ),
                       ),
 
                       // Floating circular badges
                       Positioned(
-                        top: 38,
+                        top: 36,
                         right: 88,
                         child: _buildCircleBadge(Icons.flag_rounded, const Color(0xFFEF4444), const Color(0xFFFFEEEE)),
                       ),
                       Positioned(
-                        bottom: 85,
-                        right: 98,
+                        bottom: 92,
+                        right: 100,
                         child: _buildCircleBadge(Icons.person_rounded, const Color(0xFF2563EB), const Color(0xFFEFF6FF)),
                       ),
                       Positioned(
-                        bottom: 35,
-                        right: 58,
+                        bottom: 30,
+                        right: 60,
                         child: _buildCircleBadge(Icons.pie_chart_rounded, const Color(0xFFE11D48), const Color(0xFFFFF1F2)),
                       ),
 
-                      // Pingo Mascot (Pointing high) - fully visible without clipping
+                      // Pingo Mascot (Pointing high)
                       const Positioned(
                         bottom: 0,
                         left: 10,
                         child: PingoMascotWidget(
-                          pose: PingoPoses.targetVictory,
+                          pose: PingoPoses.victory,
                           height: 235,
                         ),
                       ),
@@ -385,7 +391,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
           RichText(
             textAlign: TextAlign.center,
             text: const TextSpan(
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, height: 1.2),
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, height: 1.2),
               children: [
                 TextSpan(text: 'Your Leads,\n', style: TextStyle(color: Color(0xFF162A45))),
                 TextSpan(text: 'All in One Place', style: TextStyle(color: Color(0xFFE5252A))),
@@ -406,7 +412,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
 
           const SizedBox(height: 8),
 
-          // Slide 2 Hero Illustration (Pingo positioned cleanly beside cards with ZERO overlap)
+          // Slide 2 Hero Illustration
           Expanded(
             child: Center(
               child: FittedBox(
@@ -417,6 +423,20 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
+                      // Floor Shadow
+                      Positioned(
+                        bottom: 0,
+                        left: 20,
+                        width: 140,
+                        height: 30,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: const BorderRadius.all(Radius.elliptical(70, 15)),
+                            color: Colors.black.withValues(alpha: 0.05),
+                          ),
+                        ),
+                      ),
+
                       // Floating Metric Card 1: New Leads
                       Positioned(
                         top: 10,
@@ -443,7 +463,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                           title: 'Follow-ups',
                           value: '18',
                           change: '↑ 8%',
-                          changeColor: const Color(0xFF16A34A),
+                          changeColor: const Color(0xFFE5252A),
                         ),
                       ),
 
@@ -453,7 +473,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                         right: 0,
                         child: _buildMetricCard(
                           icon: Icons.handshake_rounded,
-                          iconColor: const Color(0xFF059669),
+                          iconColor: const Color(0xFF10B981),
                           iconBg: const Color(0xFFECFDF5),
                           title: 'Converted',
                           value: '5',
@@ -462,7 +482,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                         ),
                       ),
 
-                      // Pingo Mascot (Working at laptop) - comfortably sized beside cards, never covering them
+                      // Pingo Mascot (Sitting with laptop & pointing up) - comfortable beside cards
                       const Positioned(
                         bottom: 0,
                         left: 6,
@@ -497,7 +517,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
           RichText(
             textAlign: TextAlign.center,
             text: const TextSpan(
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, height: 1.2),
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800, height: 1.2),
               children: [
                 TextSpan(text: 'Turn Opportunities\n', style: TextStyle(color: Color(0xFF162A45))),
                 TextSpan(text: 'into Success', style: TextStyle(color: Color(0xFFE5252A))),
@@ -543,25 +563,25 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                         ),
                       ),
 
-                      // Center Mascot (Thumbs up victory)
+                      // Center Mascot (Thumbs up victory pose)
                       const Positioned(
-                        bottom: 6,
+                        bottom: 4,
                         child: PingoMascotWidget(
                           pose: PingoPoses.victory,
-                          height: 195,
+                          height: 215,
                         ),
                       ),
 
                       // Orbit 1: Calls (Top Left)
                       Positioned(
-                        top: 10,
+                        top: 8,
                         left: 20,
                         child: _buildOrbitBadge(Icons.phone_in_talk_rounded, 'Calls', const Color(0xFF2563EB)),
                       ),
 
                       // Orbit 2: Leads (Mid Left)
                       Positioned(
-                        top: 95,
+                        top: 96,
                         left: 4,
                         child: _buildOrbitBadge(Icons.people_alt_rounded, 'Leads', const Color(0xFF6366F1)),
                       ),
@@ -570,21 +590,21 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                       Positioned(
                         bottom: 24,
                         left: 22,
-                        child: _buildOrbitBadge(Icons.handshake_rounded, 'Deals', const Color(0xFF059669)),
+                        child: _buildOrbitBadge(Icons.handshake_rounded, 'Deals', const Color(0xFF10B981)),
                       ),
 
                       // Orbit 4: Quotation (Top Right)
                       Positioned(
-                        top: 10,
+                        top: 8,
                         right: 20,
                         child: _buildOrbitBadge(Icons.description_rounded, 'Quotation', const Color(0xFFE5252A)),
                       ),
 
                       // Orbit 5: Activities (Mid Right)
                       Positioned(
-                        top: 95,
+                        top: 96,
                         right: 4,
-                        child: _buildOrbitBadge(Icons.calendar_month_rounded, 'Activities', const Color(0xFFD97706)),
+                        child: _buildOrbitBadge(Icons.calendar_month_rounded, 'Activities', const Color(0xFFF59E0B)),
                       ),
 
                       // Orbit 6: Reports (Bottom Right)
@@ -656,11 +676,11 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
     required Color changeColor,
   }) {
     return Container(
-      width: 140,
+      width: 145,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFE2E8F0)),
         boxShadow: [
           BoxShadow(
@@ -673,10 +693,10 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(6),
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
               color: iconBg,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon, size: 16, color: iconColor),
           ),
@@ -689,7 +709,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 10,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w600,
                     color: Color(0xFF64748B),
                   ),
@@ -699,7 +719,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                     Text(
                       value,
                       style: const TextStyle(
-                        fontSize: 14,
+                        fontSize: 15,
                         fontWeight: FontWeight.w800,
                         color: Color(0xFF0F172A),
                       ),
@@ -708,7 +728,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
                     Text(
                       change,
                       style: TextStyle(
-                        fontSize: 9,
+                        fontSize: 9.5,
                         fontWeight: FontWeight.w700,
                         color: changeColor,
                       ),
@@ -763,7 +783,7 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
         const Text(
           'Powered by',
           style: TextStyle(
-            fontSize: 10,
+            fontSize: 10.5,
             fontWeight: FontWeight.w600,
             color: Color(0xFF64748B),
             letterSpacing: 0.2,
@@ -773,14 +793,14 @@ class _LandingWelcomeScreenState extends State<LandingWelcomeScreen> {
         // Authentic CHN Corporate Logo
         Image.asset(
           'assets/images/chn_logo.png',
-          height: 18,
+          height: 22,
           fit: BoxFit.contain,
           errorBuilder: (ctx, err, stack) => const Text(
             'CHN',
             style: TextStyle(
-              fontSize: 15,
+              fontSize: 16,
               fontWeight: FontWeight.w900,
-              color: Color(0xFF16427D),
+              color: Color(0xFF0065B3),
               letterSpacing: 1.5,
             ),
           ),
