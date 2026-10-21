@@ -119,7 +119,4 @@ npm run dev
 
 ---
 
-## 🔐 Default Administrator Login
 
-- **Username**: `admin`
-- **Password**: `admin123`
