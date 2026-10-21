@@ -6,33 +6,14 @@ import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/wacrm_badge.dart';
 import '../../../core/widgets/wacrm_button.dart';
 import '../../../core/widgets/wacrm_card.dart';
+import '../../../core/widgets/wacrm_drawer.dart';
 import '../providers/auth_provider.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   void _showLogoutDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm Sign Out', style: TextStyle(fontWeight: FontWeight.w700)),
-        content: const Text('Are you sure you want to sign out of WACRM?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () {
-              Navigator.pop(ctx);
-              context.read<AuthProvider>().logout();
-            },
-            child: const Text('Sign Out'),
-          ),
-        ],
-      ),
-    );
+    showWacrmLogoutDialog(context);
   }
 
   @override
@@ -40,8 +21,15 @@ class ProfileScreen extends StatelessWidget {
     final user = context.watch<AuthProvider>().currentUser;
 
     if (user == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
+        }
+      });
       return const Scaffold(
-        body: Center(child: Text('Not signed in')),
+        body: Center(
+          child: CircularProgressIndicator(color: AppColors.primary),
+        ),
       );
     }
 

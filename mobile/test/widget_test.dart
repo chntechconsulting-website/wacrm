@@ -220,4 +220,52 @@ void main() {
     expect(find.text('Lead Status'), findsOneWidget);
     expect(find.text('Update Status'), findsOneWidget);
   });
+
+  testWidgets('LeadsListScreen hamburger menu opens WacrmDrawer with modules and Sign Out', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => LeadsProvider()),
+        ],
+        child: const MaterialApp(
+          home: LeadsListScreen(),
+        ),
+      ),
+    );
+
+    // Menu icon is visible
+    final menuButton = find.byTooltip('Navigation Menu');
+    expect(menuButton, findsOneWidget);
+
+    // Tap menu button and advance animation
+    await tester.tap(menuButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    // Drawer is now fully opened
+    expect(find.text('MAIN NAVIGATION'), findsOneWidget);
+    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Leads Management'), findsOneWidget);
+    expect(find.text('Follow-ups & Reminders'), findsOneWidget);
+    expect(find.text('Customers'), findsOneWidget);
+    expect(find.text('Sign Out'), findsOneWidget);
+
+    // Tap Sign Out in the pinned drawer footer opens confirmation dialog
+    await tester.tap(find.text('Sign Out'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.text('Confirm Sign Out'), findsOneWidget);
+    expect(find.text('Are you sure you want to sign out of WACRM?'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
+
+    // Confirm sign out in dialog
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign Out'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Dialog dismissed
+    expect(find.text('Confirm Sign Out'), findsNothing);
+  });
 }

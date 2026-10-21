@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/widgets/pingo_mascot_widget.dart';
+import '../../core/widgets/wacrm_drawer.dart';
 import '../../core/widgets/wacrm_wave_nav_bar.dart';
 import '../activities/presentation/activities_screen.dart';
 import '../auth/presentation/profile_screen.dart';
@@ -23,11 +24,15 @@ import '../support/presentation/support_tickets_screen.dart';
 class MainNavigationShell extends StatefulWidget {
   const MainNavigationShell({super.key});
 
+  static MainNavigationShellState? of(BuildContext context) {
+    return context.findAncestorStateOfType<MainNavigationShellState>();
+  }
+
   @override
-  State<MainNavigationShell> createState() => _MainNavigationShellState();
+  State<MainNavigationShell> createState() => MainNavigationShellState();
 }
 
-class _MainNavigationShellState extends State<MainNavigationShell> {
+class MainNavigationShellState extends State<MainNavigationShell> {
   int _currentIndex = 0;
 
   @override
@@ -38,9 +43,13 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     });
   }
 
-  void _navigateToTab(int index) {
-    setState(() => _currentIndex = index);
+  void navigateToTab(int index) {
+    if (mounted) {
+      setState(() => _currentIndex = index);
+    }
   }
+
+  void _navigateToTab(int index) => navigateToTab(index);
 
   void _showMoreMenu(BuildContext context) {
     final user = context.read<AuthProvider>().currentUser;
@@ -258,6 +267,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     ];
 
     return Scaffold(
+      drawer: WacrmDrawer(currentTabIndex: _currentIndex),
       body: IndexedStack(
         index: _currentIndex.clamp(0, screens.length - 1),
         children: screens,

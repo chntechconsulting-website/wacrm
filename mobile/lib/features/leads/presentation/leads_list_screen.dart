@@ -5,6 +5,8 @@ import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/loading_indicator.dart';
 import '../../../core/widgets/pingo_mascot_widget.dart';
+import '../../../core/widgets/wacrm_drawer.dart';
+import '../../auth/presentation/profile_screen.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../notifications/presentation/notifications_screen.dart';
 import '../models/lead_model.dart';
@@ -22,6 +24,7 @@ class LeadsListScreen extends StatefulWidget {
 
 class _LeadsListScreenState extends State<LeadsListScreen> {
   final _searchController = TextEditingController();
+  final _searchFocusNode = FocusNode();
   final _scrollController = ScrollController();
 
   final List<Map<String, dynamic>> _filterTabs = [
@@ -50,6 +53,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -97,15 +101,16 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
+      drawer: const WacrmDrawer(currentTabIndex: 1),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
         leading: Builder(
           builder: (ctx) => IconButton(
             icon: const Icon(Icons.menu_rounded, color: Color(0xFF162A45), size: 24),
+            tooltip: 'Navigation Menu',
             onPressed: () {
-              // Open drawer if available
-              Scaffold.maybeOf(ctx)?.openDrawer();
+              Scaffold.of(ctx).openDrawer();
             },
           ),
         ),
@@ -118,8 +123,9 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.search_rounded, color: Color(0xFF162A45), size: 22),
+            tooltip: 'Search Leads',
             onPressed: () {
-              // Focus search field
+              _searchFocusNode.requestFocus();
             },
           ),
           IconButton(
@@ -141,6 +147,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
                 ),
               ],
             ),
+            tooltip: 'Notifications',
             onPressed: () {
               Navigator.push(
                 context,
@@ -151,20 +158,29 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
           Padding(
             padding: const EdgeInsets.only(right: 16, left: 4),
             child: Center(
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0xFF162A45),
-                ),
-                child: Center(
-                  child: Text(
-                    userInitials,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
+              child: InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                  );
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Color(0xFF162A45),
+                  ),
+                  child: Center(
+                    child: Text(
+                      userInitials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
@@ -431,6 +447,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
               ),
               child: TextField(
                 controller: _searchController,
+                focusNode: _searchFocusNode,
                 style: const TextStyle(fontSize: 13, color: Color(0xFF0F172A)),
                 decoration: InputDecoration(
                   hintText: 'Search leads, company, phone...',

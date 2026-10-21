@@ -8,6 +8,7 @@ import '../../../core/widgets/loading_indicator.dart';
 import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/wacrm_badge.dart';
 import '../../../core/widgets/wacrm_card.dart';
+import '../../../core/widgets/wacrm_drawer.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../providers/dashboard_provider.dart';
 
@@ -70,6 +71,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
+      drawer: const WacrmDrawer(currentTabIndex: 0),
       appBar: AppBar(
         title: Image.asset(
           'assets/images/logo.png',

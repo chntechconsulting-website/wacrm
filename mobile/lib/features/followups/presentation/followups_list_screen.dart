@@ -9,6 +9,7 @@ import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/pingo_popup_dialog.dart';
 import '../../../core/widgets/wacrm_badge.dart';
 import '../../../core/widgets/wacrm_card.dart';
+import '../../../core/widgets/wacrm_drawer.dart';
 import '../models/followup_model.dart';
 import '../providers/followups_provider.dart';
 import 'followup_create_edit_dialog.dart';
@@ -65,6 +66,7 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
+      drawer: const WacrmDrawer(currentTabIndex: 2),
       appBar: AppBar(
         title: const Text('Follow-ups & Reminders'),
         actions: [

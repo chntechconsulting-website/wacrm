@@ -6,7 +6,6 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/loading_indicator.dart';
-import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/wacrm_badge.dart';
 import '../../../core/widgets/wacrm_card.dart';
 import '../../auth/providers/auth_provider.dart';

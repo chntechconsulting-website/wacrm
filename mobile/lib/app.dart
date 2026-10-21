@@ -57,19 +57,35 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  final PageController _pageController = PageController();
+  PageController? _pageController;
+  bool _hasSeenLanding = false;
+  AuthStatus _lastStatus = AuthStatus.uninitialized;
 
   @override
   void dispose() {
-    _pageController.dispose();
+    _pageController?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
+    final currentStatus = authProvider.status;
 
-    switch (authProvider.status) {
+    // Detect logout transition: user was authenticated and signed out
+    if (_lastStatus == AuthStatus.authenticated && currentStatus == AuthStatus.unauthenticated) {
+      _hasSeenLanding = true;
+      _pageController?.dispose();
+      _pageController = PageController(initialPage: 1);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
+        }
+      });
+    }
+    _lastStatus = currentStatus;
+
+    switch (currentStatus) {
       case AuthStatus.uninitialized:
       case AuthStatus.loading:
         if (authProvider.currentUser != null) {
@@ -83,14 +99,17 @@ class _AuthGateState extends State<AuthGate> {
           ),
         );
       case AuthStatus.authenticated:
+        _hasSeenLanding = true;
         return const MainNavigationShell();
       case AuthStatus.unauthenticated:
+        _pageController ??= PageController(initialPage: _hasSeenLanding ? 1 : 0);
         return PageView(
-          controller: _pageController,
+          controller: _pageController!,
           children: [
             LandingWelcomeScreen(
               onContinue: () {
-                _pageController.animateToPage(
+                _hasSeenLanding = true;
+                _pageController?.animateToPage(
                   1,
                   duration: const Duration(milliseconds: 350),
                   curve: Curves.easeInOut,
