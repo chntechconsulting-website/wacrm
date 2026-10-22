@@ -15,6 +15,36 @@ class TestDooctiIntegration(unittest.TestCase):
         cls.client = TestClient(app)
         cls.db = SessionLocal()
 
+        # Seed dynamic extension mapping into database table
+        from models.integration import IntegrationConfig
+        import json
+        cfg = cls.db.query(IntegrationConfig).filter(IntegrationConfig.integration_type == "IVR").first()
+        if not cfg:
+            cfg = IntegrationConfig(
+                integration_type="IVR",
+                provider="DOOCTI",
+                name="Doocti Telephony",
+                is_active=True,
+                status="ACTIVE",
+                webhook_url="https://www.wapluscrm.in/api/doocti/call-log"
+            )
+            cls.db.add(cfg)
+        test_mapping = {
+            "1281": {"employee_id": 1, "username": "admin", "name": "System Administrator", "role": "ADMIN", "type": "ADMIN"},
+            "1282": {"employee_id": 9, "username": "chnm040", "name": "Chandra Mohan", "role": "SALES_EXECUTIVE", "type": "AGENT"},
+            "1283": {"employee_id": 8, "username": "chnm030", "name": "Gowtham", "role": "SALES_MANAGER", "type": "AGENT"},
+            "1286": {"employee_id": 10, "username": "chnm023", "name": "ram", "role": "SUPPORT_EXECUTIVE", "type": "AGENT"}
+        }
+        cfg.config_data = json.dumps({
+            "provider": "DOOCTI",
+            "webhook_url": "https://www.wapluscrm.in/api/doocti/call-log",
+            "did_numbers": ["07969671855", "07969671856", "07969671857"],
+            "admin_extension": "1281",
+            "agent_extensions": ["1282", "1283", "1286"],
+            "extension_mapping": test_mapping
+        })
+        cls.db.commit()
+
     @classmethod
     def tearDownClass(cls):
         cls.db.close()
@@ -255,6 +285,42 @@ class TestDooctiIntegration(unittest.TestCase):
         self.assertEqual(log.call_direction, "INBOUND")
         self.assertEqual(log.to_number, "07969671855")
         self.assertEqual(log.employee_id, 9)
+
+    def test_dynamic_update_from_admin_page(self):
+        # Verify Admin can change extension mappings dynamically via PUT /api/doocti/config
+        new_map = {
+            "1299": {
+                "employee_id": 8,
+                "username": "chnm030",
+                "name": "Gowtham",
+                "role": "SALES_MANAGER",
+                "type": "AGENT"
+            }
+        }
+        put_res = self.client.put("/api/doocti/config", json={"extension_mapping": new_map})
+        self.assertEqual(put_res.status_code, 200)
+
+        # Call with newly mapped extension 1299
+        call_id = "test_doocti_dynamic_1299"
+        res = self.client.post("/api/doocti/call-log", json={
+            "uniqueid": call_id,
+            "phone_number": "9876543290",
+            "station": "1299",
+            "status": "ANSWERED",
+            "duration": 30
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["employee_id"], 8)
+
+        # Restore test setup mapping
+        test_mapping = {
+            "1281": {"employee_id": 1, "username": "admin", "name": "System Administrator", "role": "ADMIN", "type": "ADMIN"},
+            "1282": {"employee_id": 9, "username": "chnm040", "name": "Chandra Mohan", "role": "SALES_EXECUTIVE", "type": "AGENT"},
+            "1283": {"employee_id": 8, "username": "chnm030", "name": "Gowtham", "role": "SALES_MANAGER", "type": "AGENT"},
+            "1286": {"employee_id": 10, "username": "chnm023", "name": "ram", "role": "SUPPORT_EXECUTIVE", "type": "AGENT"}
+        }
+        self.client.put("/api/doocti/config", json={"extension_mapping": test_mapping})
 
 if __name__ == "__main__":
     unittest.main()

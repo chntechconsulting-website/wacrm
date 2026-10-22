@@ -73,6 +73,24 @@ const IntegrationsPage = () => {
   const [refreshPageModal, setRefreshPageModal] = useState({ isOpen: false, page: null, newAccessToken: '' });
   const [refreshingPage, setRefreshingPage] = useState(false);
 
+  // WebRTC Extension to Employee Mapping State
+  const [employeesList, setEmployeesList] = useState([]);
+  const [newMapping, setNewMapping] = useState({
+    extension: '',
+    account_type: 'Agent',
+    employee_id: ''
+  });
+
+  const fetchEmployees = async () => {
+    try {
+      const res = await API.get('/employees');
+      const items = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+      setEmployeesList(items);
+    } catch (err) {
+      console.warn('Failed to fetch employees list for WebRTC mapping:', err);
+    }
+  };
+
   // Initial Data Fetch
   const fetchStatus = async () => {
     try {
@@ -114,6 +132,7 @@ const IntegrationsPage = () => {
     fetchStatus();
     fetchLogs();
     fetchMetaPages();
+    fetchEmployees();
   }, []);
 
   // Multi-Page Handlers
@@ -301,6 +320,20 @@ const IntegrationsPage = () => {
         if (!initialConfig.extensions || initialConfig.extensions === '1282, 1283') {
           initialConfig.extensions = '1281, 1282, 1283, 1286';
         }
+        // Fetch employees list
+        fetchEmployees();
+        // Fetch latest live extension mapping from backend if not yet in initialConfig
+        API.get('/doocti/config').then(res => {
+          if (res.data?.extension_mapping) {
+            setModalState(prev => ({
+              ...prev,
+              config: {
+                ...prev.config,
+                extension_mapping: res.data.extension_mapping || prev.config.extension_mapping || {}
+              }
+            }));
+          }
+        }).catch(() => {});
       }
     }
     setModalState({
@@ -315,6 +348,7 @@ const IntegrationsPage = () => {
   const closeModal = () => {
     setModalState({ isOpen: false, type: null, config: {} });
     setShowSecrets({});
+    setNewMapping({ extension: '', account_type: 'Agent', employee_id: '' });
   };
 
   const handleConfigChange = (key, value) => {
@@ -325,6 +359,73 @@ const IntegrationsPage = () => {
         [key]: value
       }
     }));
+  };
+
+  const handleAddExtensionMapping = () => {
+    const ext = String(newMapping.extension || '').trim();
+    if (!ext) {
+      showToast('error', 'Please enter a WebRTC Extension number (e.g. 1281, 1282).');
+      return;
+    }
+    if (!newMapping.employee_id) {
+      showToast('error', 'Please select a CRM Employee.');
+      return;
+    }
+    const emp = employeesList.find(e => String(e.id) === String(newMapping.employee_id));
+    if (!emp) {
+      showToast('error', 'Selected employee not found in employee directory.');
+      return;
+    }
+
+    const currentMap = { ...(modalState.config?.extension_mapping || {}) };
+    currentMap[ext] = {
+      employee_id: emp.id,
+      username: emp.username || '',
+      name: emp.name || '',
+      role: emp.role || '',
+      type: newMapping.account_type.toUpperCase()
+    };
+
+    const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
+    const agentExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'AGENT');
+
+    setModalState(prev => ({
+      ...prev,
+      config: {
+        ...prev.config,
+        extension_mapping: currentMap,
+        admin_extension: adminExts.join(', ') || prev.config.admin_extension || '1281',
+        extensions: agentExts.join(', ') || prev.config.extensions,
+        agent_extensions: agentExts
+      }
+    }));
+
+    setNewMapping({
+      extension: '',
+      account_type: 'Agent',
+      employee_id: ''
+    });
+    showToast('success', `Extension ${ext} assigned to ${emp.name} (${emp.role})`);
+  };
+
+  const handleRemoveExtensionMapping = (extToRemove) => {
+    const currentMap = { ...(modalState.config?.extension_mapping || {}) };
+    delete currentMap[extToRemove];
+
+    const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
+    const agentExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'AGENT');
+
+    setModalState(prev => ({
+      ...prev,
+      config: {
+        ...prev.config,
+        extension_mapping: currentMap,
+        admin_extension: adminExts.join(', ') || '',
+        extensions: agentExts.join(', ') || '',
+        agent_extensions: agentExts
+      }
+    }));
+    showToast('info', `Extension ${extToRemove} removed.`);
   };
 
   const handleIvrProviderChange = (newProvider) => {
@@ -387,6 +488,23 @@ const IntegrationsPage = () => {
         integration_type: modalState.type,
         config_data: modalState.config
       });
+
+      // Synchronize with /api/doocti/config if type is IVR and provider is DOOCTI
+      if (modalState.type === 'IVR' && modalState.config?.provider === 'DOOCTI') {
+        try {
+          await API.put('/doocti/config', {
+            extension_mapping: modalState.config.extension_mapping || {},
+            admin_extension: modalState.config.admin_extension,
+            agent_extensions: modalState.config.agent_extensions || (typeof modalState.config.extensions === 'string' ? modalState.config.extensions.split(',').map(s => s.trim()) : modalState.config.extensions),
+            did_numbers: typeof modalState.config.phone_number === 'string' ? modalState.config.phone_number.split(',').map(s => s.trim()) : modalState.config.did_numbers,
+            api_url: modalState.config.api_url,
+            account_id: modalState.config.account_id
+          });
+        } catch (subErr) {
+          console.warn('Secondary Doocti config sync notice:', subErr);
+        }
+      }
+
       showToast('success', `${modalState.name} configuration saved successfully!`);
       closeModal();
       fetchStatus();
@@ -704,7 +822,7 @@ const IntegrationsPage = () => {
       {/* Configuration Modal */}
       {modalState.isOpen && (
         <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className={`modal-content ${modalState.type === 'IVR' ? 'modal-content-wide' : ''}`} style={modalState.type === 'IVR' ? { maxWidth: '880px' } : {}} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Configure {modalState.name}</h3>
               <button className="modal-close-btn" onClick={closeModal}>
@@ -911,30 +1029,210 @@ const IntegrationsPage = () => {
                           </small>
                         </div>
 
-                        <div className="form-group">
-                          <label>Admin WebRTC Extension</label>
-                          <input 
-                            type="text" 
-                            value={modalState.config.admin_extension || '1281'} 
-                            onChange={(e) => handleConfigChange('admin_extension', e.target.value)}
-                            placeholder="1281"
-                          />
-                          <small style={{ color: '#64748b', fontSize: '0.74rem' }}>
-                            Dedicated Admin Extension: 1281 (Admin)
-                          </small>
-                        </div>
+                        {/* WebRTC Extension to Employee Assignment Table */}
+                        <div style={{ marginTop: '20px', borderTop: '1px solid #e2e8f0', paddingTop: '16px', marginBottom: '16px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                            <div>
+                              <h4 style={{ fontSize: '0.94rem', fontWeight: '700', color: '#0f172a', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <PhoneCall size={16} style={{ color: '#2563eb' }} />
+                                <span>WebRTC Extension Management & Employee Assignment</span>
+                              </h4>
+                              <p style={{ fontSize: '0.76rem', color: '#64748b', margin: 0 }}>
+                                Configure which WebRTC Extension routes to each WA!CRM employee. Inbound and outbound call logs are automatically isolated to the mapped employee.
+                              </p>
+                            </div>
+                          </div>
 
-                        <div className="form-group">
-                          <label>Agent WebRTC Extensions</label>
-                          <input 
-                            type="text" 
-                            value={modalState.config.extensions || '1282, 1283, 1286'} 
-                            onChange={(e) => handleConfigChange('extensions', e.target.value)}
-                            placeholder="1282, 1283, 1286"
-                          />
-                          <small style={{ color: '#64748b', fontSize: '0.74rem' }}>
-                            Agent Extensions: 1282 (Sales Executive), 1283 (Sales Manager), 1286 (Support Executive)
-                          </small>
+                          {/* Extensions Table */}
+                          <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', marginBottom: '14px', backgroundColor: '#ffffff' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', textAlign: 'left' }}>
+                              <thead>
+                                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569' }}>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>WebRTC Extension</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Account Type</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Employee ID</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Username</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Employee Name</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Role</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700', textAlign: 'center' }}>Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {Object.entries(modalState.config?.extension_mapping || {}).length === 0 ? (
+                                  <tr>
+                                    <td colSpan="7" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>
+                                      No extensions configured yet. Use the form below to assign an extension to an employee.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  Object.entries(modalState.config?.extension_mapping || {}).map(([ext, info]) => {
+                                    const isAdmin = (info.type || '').toUpperCase() === 'ADMIN';
+                                    return (
+                                      <tr key={ext} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                        <td style={{ padding: '9px 12px', fontWeight: '700', fontFamily: 'monospace', color: '#0f172a' }}>
+                                          <span style={{ backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', padding: '3px 8px', borderRadius: '4px' }}>
+                                            {ext}
+                                          </span>
+                                        </td>
+                                        <td style={{ padding: '9px 12px' }}>
+                                          <span style={{
+                                            padding: '3px 8px',
+                                            borderRadius: '999px',
+                                            fontSize: '0.72rem',
+                                            fontWeight: '700',
+                                            backgroundColor: isAdmin ? '#eff6ff' : '#f0fdf4',
+                                            color: isAdmin ? '#2563eb' : '#16a34a',
+                                            border: `1px solid ${isAdmin ? '#bfdbfe' : '#bbf7d0'}`
+                                          }}>
+                                            {isAdmin ? 'Admin' : 'Agent'}
+                                          </span>
+                                        </td>
+                                        <td style={{ padding: '9px 12px', color: '#64748b', fontWeight: '500' }}>
+                                          {info.employee_id}
+                                        </td>
+                                        <td style={{ padding: '9px 12px', color: '#334155', fontWeight: '600' }}>
+                                          {info.username}
+                                        </td>
+                                        <td style={{ padding: '9px 12px', color: '#0f172a', fontWeight: '600' }}>
+                                          {info.name}
+                                        </td>
+                                        <td style={{ padding: '9px 12px' }}>
+                                          <span style={{
+                                            padding: '2px 7px',
+                                            borderRadius: '4px',
+                                            fontSize: '0.7rem',
+                                            fontWeight: '600',
+                                            backgroundColor: '#f1f5f9',
+                                            color: '#475569',
+                                            border: '1px solid #e2e8f0'
+                                          }}>
+                                            {info.role}
+                                          </span>
+                                        </td>
+                                        <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemoveExtensionMapping(ext)}
+                                            style={{
+                                              background: 'none',
+                                              border: 'none',
+                                              color: '#ef4444',
+                                              cursor: 'pointer',
+                                              padding: '4px',
+                                              borderRadius: '4px'
+                                            }}
+                                            title="Delete mapping"
+                                          >
+                                            <Trash2 size={15} />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Add / Map Extension Form */}
+                          <div style={{
+                            backgroundColor: '#f8fafc',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: '10px',
+                            padding: '12px 14px',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: '12px',
+                            alignItems: 'flex-end'
+                          }}>
+                            <div style={{ flex: '2', minWidth: '180px' }}>
+                              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
+                                Select Employee
+                              </label>
+                              <select
+                                value={newMapping.employee_id}
+                                onChange={(e) => setNewMapping(prev => ({ ...prev, employee_id: e.target.value }))}
+                                style={{
+                                  width: '100%',
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #cbd5e1',
+                                  fontSize: '0.8rem',
+                                  backgroundColor: '#ffffff'
+                                }}
+                              >
+                                <option value="">-- Choose Employee --</option>
+                                {employeesList.map(emp => (
+                                  <option key={emp.id} value={emp.id}>
+                                    {emp.name} ({emp.username || `ID ${emp.id}`} - {emp.role})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div style={{ flex: '1', minWidth: '110px' }}>
+                              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
+                                WebRTC Extension
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. 1281"
+                                value={newMapping.extension}
+                                onChange={(e) => setNewMapping(prev => ({ ...prev, extension: e.target.value }))}
+                                style={{
+                                  width: '100%',
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #cbd5e1',
+                                  fontSize: '0.8rem',
+                                  backgroundColor: '#ffffff'
+                                }}
+                              />
+                            </div>
+
+                            <div style={{ flex: '1', minWidth: '110px' }}>
+                              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
+                                Account Type
+                              </label>
+                              <select
+                                value={newMapping.account_type}
+                                onChange={(e) => setNewMapping(prev => ({ ...prev, account_type: e.target.value }))}
+                                style={{
+                                  width: '100%',
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #cbd5e1',
+                                  fontSize: '0.8rem',
+                                  backgroundColor: '#ffffff'
+                                }}
+                              >
+                                <option value="Agent">Agent</option>
+                                <option value="Admin">Admin</option>
+                              </select>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={handleAddExtensionMapping}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '8px 14px',
+                                backgroundColor: '#2563eb',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '6px',
+                                fontWeight: '600',
+                                fontSize: '0.8rem',
+                                cursor: 'pointer',
+                                height: '35px'
+                              }}
+                            >
+                              <Plus size={15} />
+                              <span>Add / Map</span>
+                            </button>
+                          </div>
                         </div>
 
                         <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '12px 14px', marginTop: '10px' }}>

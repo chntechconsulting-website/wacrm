@@ -26,42 +26,11 @@ ADMIN_EXTENSION = "1281"
 AGENT_EXTENSIONS = ["1282", "1283", "1286"]
 ALL_EXTENSIONS = ["1281", "1282", "1283", "1286"]
 
-DEFAULT_EXTENSION_MAP = {
-    "1281": {
-        "employee_id": 1,
-        "username": "admin",
-        "name": "System Administrator",
-        "role": "ADMIN",
-        "type": "ADMIN"
-    },
-    "1282": {
-        "employee_id": 9,
-        "username": "chnm040",
-        "name": "Chandra Mohan",
-        "role": "SALES_EXECUTIVE",
-        "type": "AGENT"
-    },
-    "1283": {
-        "employee_id": 8,
-        "username": "chnm030",
-        "name": "Gowtham",
-        "role": "SALES_MANAGER",
-        "type": "AGENT"
-    },
-    "1286": {
-        "employee_id": 10,
-        "username": "chnm023",
-        "name": "ram",
-        "role": "SUPPORT_EXECUTIVE",
-        "type": "AGENT"
-    }
-}
-
 # -------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------
 def get_doocti_config(db: Session) -> Dict[str, Any]:
-    """Retrieve active Doocti config from database or fall back to verified constants."""
+    """Retrieve active Doocti config dynamically from database (configured via Admin page)."""
     cfg = db.query(IntegrationConfig).filter(IntegrationConfig.integration_type == "IVR").first()
     data = {}
     if cfg and cfg.config_data:
@@ -74,7 +43,10 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
     if isinstance(dids, str):
         dids = [d.strip() for d in dids.split(",") if d.strip()]
 
-    ext_map = data.get("extension_mapping") or DEFAULT_EXTENSION_MAP
+    ext_map = data.get("extension_mapping")
+    if ext_map is None:
+        ext_map = {}
+
     admin_ext = data.get("admin_extension") or ADMIN_EXTENSION
     agent_exts = data.get("agent_extensions") or AGENT_EXTENSIONS
     if isinstance(agent_exts, str):
@@ -169,7 +141,7 @@ def resolve_employee_for_call(
         if emp:
             return emp.id
 
-    ext_mapping = extension_map or DEFAULT_EXTENSION_MAP
+    ext_mapping = extension_map if extension_map is not None else get_doocti_config(db).get("extension_mapping", {})
     st_clean = str(station).strip() if station else ""
 
     # 1. Match from extension mapping dictionary
@@ -607,7 +579,7 @@ async def push_doocti_call_log(
     # Retrieve live telephony configuration & active DIDs / extension mapping
     doocti_cfg = get_doocti_config(db)
     configured_dids = doocti_cfg.get("did_numbers") or DOOCTI_DIDS
-    ext_mapping = doocti_cfg.get("extension_mapping") or DEFAULT_EXTENSION_MAP
+    ext_mapping = doocti_cfg.get("extension_mapping") or {}
     valid_extensions = list(ext_mapping.keys()) or ALL_EXTENSIONS
 
     # Optional webhook token authentication if secret_token is configured

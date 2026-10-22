@@ -228,7 +228,7 @@ const DooctiInAppDialer = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [tempConfig, setTempConfig] = useState(config);
 
-  // Dynamic user extension resolution based on logged-in user and extension mapping
+  // Dynamic user extension resolution based on logged-in user and extension mapping from Admin page
   useEffect(() => {
     if (!user) return;
     API.get('/doocti/config')
@@ -246,16 +246,8 @@ const DooctiInAppDialer = () => {
               break;
             }
           }
-          if (!matchedExt) {
-            if (user.role === 'ADMIN' || user.username === 'admin') {
-              matchedExt = res.data.admin_extension || '1281';
-            } else if (user.username === 'chnm040') {
-              matchedExt = '1282';
-            } else if (user.username === 'chnm030') {
-              matchedExt = '1283';
-            } else if (user.username === 'chnm023') {
-              matchedExt = '1286';
-            }
+          if (!matchedExt && (user.role === 'ADMIN' || user.username === 'admin')) {
+            matchedExt = res.data.admin_extension || Object.keys(mapping).find(k => (mapping[k].type || '').toUpperCase() === 'ADMIN');
           }
           if (matchedExt) {
             setConfig(prev => {
@@ -274,19 +266,7 @@ const DooctiInAppDialer = () => {
           }
         }
       })
-      .catch(() => {
-        let fallbackExt = '1282';
-        if (user.role === 'ADMIN' || user.username === 'admin') fallbackExt = '1281';
-        else if (user.username === 'chnm030') fallbackExt = '1283';
-        else if (user.username === 'chnm023') fallbackExt = '1286';
-        setConfig(prev => {
-          if (prev.userNumber !== fallbackExt) {
-            const updated = { ...prev, userId: fallbackExt, userNumber: fallbackExt };
-            return updated;
-          }
-          return prev;
-        });
-      });
+      .catch(() => {});
   }, [user]);
 
   // Keypad & Number State
