@@ -98,13 +98,13 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
                 "has_access": has_acc,
                 "can_view": has_acc,
                 "can_create": k in ["support_tickets", "calls", "whatsapp", "activities", "followups"],
-                "can_edit": k in ["support_tickets", "activities", "customers", "followups"],
+                "can_edit": k in ["support_tickets", "activities", "customers", "followups", "leads"],
                 "can_delete": False,
                 "can_export": k in ["support_tickets", "reports"],
                 "can_approve": False,
-                "can_assign": k in ["support_tickets"],
-                "can_call": k in ["calls", "customers"],
-                "can_whatsapp": k in ["whatsapp", "customers"],
+                "can_assign": k in ["support_tickets", "leads"],
+                "can_call": k in ["calls", "customers", "leads"],
+                "can_whatsapp": k in ["whatsapp", "customers", "leads"],
                 "view_scope": "team" if has_acc else "none"
             }
         return res
@@ -113,7 +113,7 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     if norm in ["SUPPORT_EXECUTIVE", "SUPPORT"]:
         sup_exec_mods = {
             "dashboard", "customers", "contacts", "support_tickets",
-            "calls", "whatsapp", "activities", "followups"
+            "calls", "whatsapp", "activities", "followups", "leads"
         }
         res = {}
         for mod in SYSTEM_MODULES:
@@ -123,13 +123,13 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
                 "has_access": has_acc,
                 "can_view": has_acc,
                 "can_create": k in ["support_tickets", "calls", "whatsapp", "activities", "followups"],
-                "can_edit": k in ["support_tickets", "activities", "followups"],
+                "can_edit": k in ["support_tickets", "activities", "followups", "leads"],
                 "can_delete": False,
                 "can_export": False,
                 "can_approve": False,
                 "can_assign": False,
-                "can_call": k in ["calls", "customers"],
-                "can_whatsapp": k in ["whatsapp", "customers"],
+                "can_call": k in ["calls", "customers", "leads"],
+                "can_whatsapp": k in ["whatsapp", "customers", "leads"],
                 "view_scope": "own" if has_acc else "none"
             }
         return res
@@ -749,6 +749,159 @@ def is_user_authorized_for_billing_doc(user: User, doc, db: Session, action: str
             if user.username and user.username.lower() in doc.prepared_by.lower():
                 return True
         return False
+
+
+def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
+    """
+    Checks if a given lead is authorized for a Support team member or Admin.
+    - ADMIN: Unrestricted access to all leads.
+    - SALES users: Unauthorized for Support Assigned view (return False).
+    - SUPPORT_MANAGER: Authorized if:
+        1. SupportHandoff exists and support_manager_id == current_emp.id, OR
+        2. SupportHandoff exists and assigned_agent_id in team_emp_ids, OR
+        3. lead.assigned_to in team_emp_ids, OR
+        4. LeadAssignment has assigned_to in team_emp_ids.
+    - SUPPORT_EXECUTIVE: Authorized if:
+        1. SupportHandoff exists and assigned_agent_id == current_emp.id, OR
+        2. lead.assigned_to == current_emp.id, OR
+        3. LeadAssignment has assigned_to == current_emp.id.
+    """
+    if not user or not lead:
+        return False
+
+    norm_role = (user.role or "").strip().upper()
+    if norm_role == "ADMIN":
+        return True
+
+    from services.hierarchy_service import (
+        normalize_role,
+        get_team_employee_ids_from_user,
+        ROLE_ADMIN,
+        ROLE_SALES_MANAGER,
+        ROLE_SALES_EXECUTIVE,
+        ROLE_SUPPORT_MANAGER,
+        ROLE_SUPPORT_EXECUTIVE
+    )
+
+    canonical_role = normalize_role(norm_role)
+    if canonical_role == ROLE_ADMIN:
+        return True
+
+    # Sales roles cannot access Support-only lead records
+    if canonical_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        return False
+
+    emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+    if not emp:
+        return False
+
+    from models.workflow import SupportHandoff
+    from models.lead import LeadAssignment
+
+    handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
+
+    if canonical_role == ROLE_SUPPORT_MANAGER:
+        team_emp_ids = get_team_employee_ids_from_user(user, db)
+        if emp.id not in team_emp_ids:
+            team_emp_ids.append(emp.id)
+
+        if handoff:
+            if handoff.support_manager_id == emp.id or (handoff.support_manager_id and handoff.support_manager_id in team_emp_ids):
+                return True
+            if handoff.assigned_agent_id and handoff.assigned_agent_id in team_emp_ids:
+                return True
+
+        if lead.assigned_to and lead.assigned_to in team_emp_ids:
+            return True
+
+        return False
+
+    elif canonical_role == ROLE_SUPPORT_EXECUTIVE:
+        if handoff and handoff.assigned_agent_id == emp.id:
+            return True
+
+        if lead.assigned_to == emp.id:
+            return True
+
+        return False
+
+    return False
+
+
+def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[int]]:
+    """
+    Returns list of Lead IDs authorized for the Support user, or None if ADMIN (unrestricted).
+    Returns [] if user has no authorized support leads or is unauthorized.
+    """
+    if not user:
+        return []
+
+    norm_role = (user.role or "").strip().upper()
+    if norm_role == "ADMIN":
+        return None
+
+    from services.hierarchy_service import (
+        normalize_role,
+        get_team_employee_ids_from_user,
+        ROLE_ADMIN,
+        ROLE_SALES_MANAGER,
+        ROLE_SALES_EXECUTIVE,
+        ROLE_SUPPORT_MANAGER,
+        ROLE_SUPPORT_EXECUTIVE
+    )
+
+    canonical_role = normalize_role(norm_role)
+    if canonical_role == ROLE_ADMIN:
+        return None
+
+    if canonical_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        return []
+
+    emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+    if not emp:
+        return []
+
+    from models.workflow import SupportHandoff
+    from models.lead import Lead
+    from sqlalchemy import or_
+
+    lead_ids = set()
+
+    if canonical_role == ROLE_SUPPORT_MANAGER:
+        team_emp_ids = get_team_employee_ids_from_user(user, db)
+        if emp.id not in team_emp_ids:
+            team_emp_ids.append(emp.id)
+
+        # 1. Handoffs where support_manager_id is in team or assigned_agent_id is in team
+        h_leads = db.query(SupportHandoff.lead_id).filter(
+            or_(
+                SupportHandoff.support_manager_id.in_(team_emp_ids),
+                SupportHandoff.assigned_agent_id.in_(team_emp_ids)
+            )
+        ).all()
+        for h in h_leads:
+            if h[0]:
+                lead_ids.add(h[0])
+
+        # 2. Leads directly assigned to team members
+        direct_leads = db.query(Lead.id).filter(Lead.assigned_to.in_(team_emp_ids)).all()
+        for d in direct_leads:
+            lead_ids.add(d[0])
+
+    elif canonical_role == ROLE_SUPPORT_EXECUTIVE:
+        # 1. Handoffs where assigned_agent_id == emp.id
+        h_leads = db.query(SupportHandoff.lead_id).filter(SupportHandoff.assigned_agent_id == emp.id).all()
+        for h in h_leads:
+            if h[0]:
+                lead_ids.add(h[0])
+
+        # 2. Leads directly assigned to emp
+        direct_leads = db.query(Lead.id).filter(Lead.assigned_to == emp.id).all()
+        for d in direct_leads:
+            lead_ids.add(d[0])
+
+    return list(lead_ids)
+
 
 
 

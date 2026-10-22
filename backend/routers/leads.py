@@ -39,7 +39,9 @@ from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
     get_authorized_call_employee_ids,
-    get_authorized_followup_employee_ids
+    get_authorized_followup_employee_ids,
+    is_support_lead_authorized,
+    get_support_authorized_lead_ids
 )
 from services.delete_request_service import handle_entity_deletion
 from services.audit import log_audit
@@ -47,9 +49,11 @@ from services.reinquiry_service import ReInquiryService
 from services.hierarchy_service import (
     get_team_employee_ids_from_user,
     normalize_role,
+    ROLE_ADMIN,
+    ROLE_SALES_MANAGER,
+    ROLE_SALES_EXECUTIVE,
     ROLE_SUPPORT_MANAGER,
-    ROLE_SUPPORT_EXECUTIVE,
-    ROLE_SALES_EXECUTIVE
+    ROLE_SUPPORT_EXECUTIVE
 )
 from services.excel_service import (
     generate_excel_template,
@@ -412,6 +416,16 @@ def get_leads_stats(
 
     followups_count = followups_query.filter(Followup.status == "Pending").count()
 
+    support_count = 0
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE, ROLE_ADMIN]:
+        support_lead_ids = get_support_authorized_lead_ids(current_user, db)
+        if support_lead_ids is not None:
+            support_count = len(support_lead_ids)
+        else:
+            from models.workflow import SupportHandoff
+            support_count = db.query(SupportHandoff.lead_id).distinct().count()
+
     return {
         "allLeads": all_count,
         "metaLeads": meta_count,
@@ -425,7 +439,8 @@ def get_leads_stats(
         "wonLeads": won_count,
         "myLeads": my_count,
         "callLogs": call_logs_count,
-        "followups": followups_count
+        "followups": followups_count,
+        "supportLeads": support_count
     }
 
 @router.get("/my")
@@ -610,6 +625,327 @@ def create_lead(
 
     return build_lead_out(lead)
 
+
+# =========================================================================
+# SUPPORT TEAM ASSIGNED LEADS ENDPOINTS
+# =========================================================================
+
+@router.get("/support/assigned")
+def get_support_assigned_leads(
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, alias="status"),
+    priority: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    assigned_agent_id: Optional[int] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Dedicated endpoint for Support Assigned Leads:
+    - Support Executive: sees only support leads assigned to them.
+    - Support Manager: sees support leads assigned to their authorized support team.
+    - Admin: sees all company-wide support leads.
+    - Sales users: Strictly 403 Forbidden.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        raise HTTPException(
+            status_code=403,
+            detail="Access forbidden: Sales users cannot access Support Assigned Leads."
+        )
+
+    if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        raise HTTPException(
+            status_code=403,
+            detail="Access forbidden: Only Support team and Admin can access Support Assigned Leads."
+        )
+
+    from models.workflow import SupportHandoff
+
+    authorized_lead_ids = get_support_authorized_lead_ids(current_user, db)
+
+    query = db.query(Lead)
+
+    if authorized_lead_ids is not None:
+        if not authorized_lead_ids:
+            return {"total": 0, "items": [], "page": 1, "limit": limit}
+        query = query.filter(Lead.id.in_(authorized_lead_ids))
+    else:
+        # Admin: Show leads with SupportHandoff OR assigned to a Support department employee
+        support_emp_ids = [e.id for e in db.query(Employee.id).filter(
+            or_(Employee.department == 'SUPPORT', Employee.role.in_(['SUPPORT_EXECUTIVE', 'SUPPORT_MANAGER', 'SUPPORT']))
+        ).all()]
+        handoff_lead_ids = [h[0] for h in db.query(SupportHandoff.lead_id).all() if h[0]]
+        query = query.filter(
+            or_(
+                Lead.id.in_(handoff_lead_ids),
+                Lead.assigned_to.in_(support_emp_ids)
+            )
+        )
+
+    # Optional filter by assigned_agent_id (for Manager/Admin)
+    if assigned_agent_id:
+        handoff_leads_for_agent = [
+            h[0] for h in db.query(SupportHandoff.lead_id).filter(SupportHandoff.assigned_agent_id == assigned_agent_id).all() if h[0]
+        ]
+        query = query.filter(
+            or_(
+                Lead.assigned_to == assigned_agent_id,
+                Lead.id.in_(handoff_leads_for_agent)
+            )
+        )
+
+    # Status filter
+    if status and status.upper() != "ALL":
+        st_clean = status.strip().upper()
+        handoffs_with_st = [
+            h[0] for h in db.query(SupportHandoff.lead_id).filter(SupportHandoff.onboarding_status.ilike(f"%{st_clean}%")).all() if h[0]
+        ]
+        query = query.filter(
+            or_(
+                Lead.status.ilike(f"%{st_clean}%"),
+                Lead.id.in_(handoffs_with_st)
+            )
+        )
+
+    # Priority filter
+    if priority and priority.upper() != "ALL":
+        query = query.filter(Lead.priority.ilike(priority.strip()))
+
+    # Source filter
+    if source and source.upper() != "ALL":
+        query = query.filter(Lead.source.ilike(f"%{source.strip()}%"))
+
+    # Search filter
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        handoff_matches = [
+            h[0] for h in db.query(SupportHandoff.lead_id).filter(
+                or_(
+                    SupportHandoff.customer_name.ilike(term),
+                    SupportHandoff.company_name.ilike(term),
+                    SupportHandoff.product_service.ilike(term),
+                    SupportHandoff.customer_requirements.ilike(term),
+                    SupportHandoff.phone.ilike(term),
+                    SupportHandoff.email.ilike(term),
+                )
+            ).all() if h[0]
+        ]
+        query = query.filter(
+            or_(
+                Lead.name.ilike(term),
+                Lead.first_name.ilike(term),
+                Lead.last_name.ilike(term),
+                Lead.phone.ilike(term),
+                Lead.email.ilike(term),
+                Lead.company.ilike(term),
+                Lead.city.ilike(term),
+                Lead.state.ilike(term),
+                Lead.location.ilike(term),
+                Lead.requirement_notes.ilike(term),
+                Lead.id.in_(handoff_matches)
+            )
+        )
+
+    total = query.count()
+    leads = query.order_by(desc(Lead.updated_at)).offset(skip).limit(limit).all()
+
+    # Pre-fetch handoffs for these leads in bulk
+    lead_ids_list = [l.id for l in leads]
+    handoffs_map = {}
+    if lead_ids_list:
+        handoff_objs = db.query(SupportHandoff).filter(SupportHandoff.lead_id.in_(lead_ids_list)).all()
+        for h in handoff_objs:
+            handoffs_map[h.lead_id] = h
+
+    items = []
+    for l in leads:
+        h = handoffs_map.get(l.id)
+        
+        assigned_exec_id = None
+        assigned_exec_name = None
+        if h and h.assigned_agent_id:
+            assigned_exec_id = h.assigned_agent_id
+            assigned_exec_name = h.assigned_agent_name
+        elif l.assigned_employee and (l.assigned_employee.department == 'SUPPORT' or 'SUPPORT' in (l.assigned_employee.role or '')):
+            assigned_exec_id = l.assigned_to
+            assigned_exec_name = l.assigned_employee.name
+
+        assigned_mgr_id = h.support_manager_id if h else None
+        assigned_mgr_name = h.support_manager_name if h else None
+        if not assigned_mgr_name and assigned_exec_id:
+            exec_emp = l.assigned_employee or db.query(Employee).filter(Employee.id == assigned_exec_id).first()
+            if exec_emp and exec_emp.manager_id:
+                mgr = db.query(Employee).filter(Employee.id == exec_emp.manager_id).first()
+                if mgr:
+                    assigned_mgr_id = mgr.id
+                    assigned_mgr_name = mgr.name
+
+        assignment_date = None
+        if l.assigned_at:
+            assignment_date = l.assigned_at.isoformat()
+        elif h and h.won_at:
+            assignment_date = h.won_at.isoformat()
+        elif h and h.created_at:
+            assignment_date = h.created_at.isoformat()
+        elif l.created_at:
+            assignment_date = l.created_at.isoformat()
+
+        contact_person = l.name or f"{l.first_name or ''} {l.last_name or ''}".strip() or (h.customer_name if h else "Unknown")
+        company_name = l.company or (h.company_name if h else None)
+        product_service = (h.product_service if h else None) or l.latest_source or "Support & Services"
+        support_requirements = (h.customer_requirements if h else None) or (h.support_notes if h else None) or l.requirement_notes
+
+        items.append({
+            "id": l.id,
+            "lead_id": l.id,
+            "support_handoff_id": h.id if h else None,
+            "name": l.name,
+            "first_name": l.first_name,
+            "last_name": l.last_name,
+            "contact_person": contact_person,
+            "company_name": company_name,
+            "company": company_name,
+            "phone": l.phone or (h.phone if h else ""),
+            "email": l.email or (h.email if h else ""),
+            "city": l.city,
+            "state": l.state,
+            "location": l.location or (f"{l.city or ''}, {l.state or ''}".strip(', ') if (l.city or l.state) else (h.address if (h and hasattr(h, 'address')) else None)),
+            "source": l.source,
+            "status": l.status,
+            "onboarding_status": h.onboarding_status if h else "PENDING_ONBOARDING",
+            "priority": l.priority or "MEDIUM",
+            "product_service": product_service,
+            "support_requirements": support_requirements,
+            "requirement_notes": l.requirement_notes,
+            "assigned_support_executive_id": assigned_exec_id,
+            "assigned_support_executive_name": assigned_exec_name,
+            "assigned_support_manager_id": assigned_mgr_id,
+            "assigned_support_manager_name": assigned_mgr_name,
+            "assignment_date": assignment_date,
+            "created_at": l.created_at.isoformat() if l.created_at else None,
+            "last_updated": l.updated_at.isoformat() if l.updated_at else (l.created_at.isoformat() if l.created_at else None),
+            "next_followup_date": l.followup_date.isoformat() if l.followup_date else None,
+            "next_followup_time": l.followup_time,
+            "notes": (h.support_notes if h else None) or l.requirement_notes,
+            "activities_count": len(l.activities) if l.activities else 0
+        })
+
+    return {
+        "total": total,
+        "items": items,
+        "page": (skip // limit) + 1,
+        "limit": limit
+    }
+
+
+@router.get("/support/team-members")
+def get_support_team_members(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns list of support employees for assignment and filtering.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Sales users cannot view Support team members."
+        )
+
+    support_emps = db.query(Employee).filter(
+        or_(
+            Employee.department == "SUPPORT",
+            Employee.role.in_(["SUPPORT_EXECUTIVE", "SUPPORT_MANAGER", "SUPPORT"])
+        )
+    ).all()
+
+    return [
+        {
+            "id": e.id,
+            "name": e.name,
+            "role": e.role,
+            "department": e.department,
+            "manager_id": e.manager_id
+        }
+        for e in support_emps
+    ]
+
+
+@router.put("/{lead_id}/support-assign")
+def assign_support_lead(
+    lead_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Assign a Support Executive to a lead / support handoff.
+    Allowed for Support Managers and Admin.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Only Support Managers and Admin can assign support leads."
+        )
+
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    new_agent_id = payload.get("assigned_agent_id")
+    if not new_agent_id:
+        raise HTTPException(status_code=400, detail="assigned_agent_id is required")
+
+    agent = db.query(Employee).filter(Employee.id == new_agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Support Executive not found")
+
+    from models.workflow import SupportHandoff
+    handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
+    if handoff:
+        handoff.assigned_agent_id = agent.id
+        handoff.assigned_agent_name = agent.name
+        if not handoff.support_manager_id and agent.manager_id:
+            mgr = db.query(Employee).filter(Employee.id == agent.manager_id).first()
+            if mgr:
+                handoff.support_manager_id = mgr.id
+                handoff.support_manager_name = mgr.name
+
+    lead.assigned_to = agent.id
+    lead.assigned_at = datetime.utcnow()
+
+    current_emp = get_employee_for_user(current_user, db)
+    assigner_id = current_emp.id if current_emp else None
+
+    assignment = LeadAssignment(
+        lead_id=lead.id,
+        assigned_to=agent.id,
+        assigned_by=assigner_id,
+        assigned_at=datetime.utcnow(),
+        assignment_method="MANUAL_SUPPORT",
+        notes=f"Assigned to Support Executive {agent.name} by {current_user.username}"
+    )
+    db.add(assignment)
+
+    log_lead_activity(
+        db=db,
+        lead_id=lead.id,
+        performed_by_id=assigner_id,
+        activity_type="ASSIGNED_TO_SUPPORT",
+        description=f"Assigned to Support Executive {agent.name} by {current_user.username}"
+    )
+
+    db.commit()
+    db.refresh(lead)
+
+    return {"success": True, "lead_id": lead.id, "assigned_to": agent.id, "assigned_to_name": agent.name}
+
+
 @router.get("/{lead_id}", response_model=LeadOut)
 def get_lead(
     lead_id: int,
@@ -622,10 +958,12 @@ def get_lead(
 
     norm_role = normalize_role(current_user.role)
     if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Support team cannot access Sales leads."
-        )
+        if not is_support_lead_authorized(lead, current_user, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Support team cannot access this Sales lead."
+            )
+        return build_lead_out(lead)
 
     if not user_has_permission(current_user, "leads", "view", db):
         raise HTTPException(
@@ -666,31 +1004,33 @@ def update_lead(
 
     norm_role = normalize_role(current_user.role)
     if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Support team cannot access Sales leads."
-        )
+        if not is_support_lead_authorized(lead, current_user, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Support team cannot access this Sales lead."
+            )
 
     current_emp = get_employee_for_user(current_user, db)
     emp_id = current_emp.id if current_emp else None
     emp_name = current_emp.name if current_emp else current_user.username
 
     scope = get_user_view_scope(current_user, "leads", db)
-    if scope == "own":
-        if not current_emp or lead.assigned_to != current_emp.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only update leads assigned to you."
-            )
-        if not user_has_permission(current_user, "leads", "assign", db):
-            lead_in.source = None
-    elif scope == "team":
-        team_ids = get_team_employee_ids_from_user(current_user, db)
-        if lead.assigned_to is not None and lead.assigned_to not in team_ids and (current_emp and lead.assigned_by != current_emp.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only update leads assigned to your team."
-            )
+    if norm_role not in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        if scope == "own":
+            if not current_emp or lead.assigned_to != current_emp.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You can only update leads assigned to you."
+                )
+            if not user_has_permission(current_user, "leads", "assign", db):
+                lead_in.source = None
+        elif scope == "team":
+            team_ids = get_team_employee_ids_from_user(current_user, db)
+            if lead.assigned_to is not None and lead.assigned_to not in team_ids and (current_emp and lead.assigned_by != current_emp.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You can only update leads assigned to your team."
+                )
 
     if lead_in.first_name is not None: lead.first_name = lead_in.first_name
     if lead_in.last_name is not None: lead.last_name = lead_in.last_name
@@ -834,7 +1174,14 @@ def change_lead_status(
     emp_id = current_emp.id if current_emp else None
     emp_name = current_emp.name if current_emp else current_user.username
 
-    if current_user.role == "EMPLOYEE":
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        if not is_support_lead_authorized(lead, current_user, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You can only update status for leads assigned to you."
+            )
+    elif current_user.role == "EMPLOYEE" or norm_role == ROLE_SALES_EXECUTIVE:
         if not current_emp or lead.assigned_to != current_emp.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

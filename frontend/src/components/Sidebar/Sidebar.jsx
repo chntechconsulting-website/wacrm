@@ -9,7 +9,8 @@ import './Sidebar.css';
 
 import { 
   Home, 
-  Users, 
+  Users,
+  UserCheck, 
   PlusSquare, 
   CloudUpload, 
   Share2, 
@@ -318,6 +319,7 @@ const Sidebar = ({
     leads: true,
     communication: true,
     sales: true,
+    support: true,
     monitoring: true,
     reports: true,
     settings: true
@@ -330,8 +332,10 @@ const Sidebar = ({
       setOpenSections(prev => ({ ...prev, leads: true }));
     } else if (path.startsWith('/communication')) {
       setOpenSections(prev => ({ ...prev, communication: true }));
-    } else if (path.startsWith('/waquotes') || path.startsWith('/finance') || path.startsWith('/support')) {
+    } else if (path.startsWith('/waquotes') || path.startsWith('/finance')) {
       setOpenSections(prev => ({ ...prev, sales: true }));
+    } else if (path.startsWith('/support')) {
+      setOpenSections(prev => ({ ...prev, support: true }));
     } else if (path.startsWith('/employee-monitoring')) {
       setOpenSections(prev => ({ ...prev, monitoring: true }));
     } else if (path === '/reports' || path === '/analytics') {
@@ -357,7 +361,8 @@ const Sidebar = ({
     excelLeads: 0,
     myLeads: 0,
     callLogs: 0,
-    followups: 0
+    followups: 0,
+    supportLeads: 0
   });
 
   // Fetch live stats from API
@@ -375,7 +380,8 @@ const Sidebar = ({
             excelLeads: res.data.excelLeads ?? 0,
             myLeads: res.data.myLeads ?? 0,
             callLogs: res.data.callLogs ?? 0,
-            followups: res.data.followups ?? 0
+            followups: res.data.followups ?? 0,
+            supportLeads: res.data.supportLeads ?? 0
           });
         }
       } catch (e) {
@@ -427,7 +433,7 @@ const Sidebar = ({
     if (isSupportRole && ['dashboard', 'customers', 'contacts', 'support_tickets', 'calls', 'whatsapp', 'activities'].includes(moduleKey)) {
       return true;
     }
-    if (isSupportManager && ['reports', 'leads'].includes(moduleKey)) {
+    if (isSupportManager && ['reports'].includes(moduleKey)) {
       return true;
     }
     if (isFinance && ['dashboard', 'payments', 'invoices', 'customers', 'reports'].includes(moduleKey)) {
@@ -538,7 +544,7 @@ const Sidebar = ({
           </NavLink>
 
           {/* Section: LEADS */}
-          {(hasModule('leads') || isSalesRole) && (
+          {((hasModule('leads') || isSalesRole) && !isSupportRole) && (
             <SidebarSection
               title="LEADS"
               isOpen={openSections.leads}
@@ -664,16 +670,36 @@ const Sidebar = ({
                   onClick={handleItemClick}
                 />
               )}
-              {hasModule('support_tickets') && (
-                <SidebarItem
-                  to="/support"
-                  exactMatch={true}
-                  icon={LifeBuoy}
-                  label="Support Onboarding"
-                  isCollapsed={isCollapsed}
-                  onClick={handleItemClick}
-                />
-              )}
+
+            </SidebarSection>
+          )}
+
+          {/* Section: SUPPORT */}
+          {(isSupportRole || isAdmin || hasModule('support_tickets')) && (
+            <SidebarSection
+              title="SUPPORT"
+              isOpen={openSections.support}
+              onToggle={() => toggleSection('support')}
+              isCollapsed={isCollapsed}
+            >
+              <SidebarItem
+                to="/support/assigned-leads"
+                exactMatch={true}
+                icon={UserCheck}
+                label="Assigned Leads"
+                badgeCount={counts.supportLeads}
+                badgeVariant="yellow"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/support"
+                exactMatch={true}
+                icon={LifeBuoy}
+                label="Support Onboarding"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
             </SidebarSection>
           )}
 

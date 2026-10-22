@@ -57,6 +57,7 @@ import WAQuotesPage from './pages/WAQuotes/WAQuotesPage';
 // WORKFLOW Pages (Sales -> Finance -> Support)
 import FinanceQueuePage from './pages/Workflow/FinanceQueuePage';
 import SupportQueuePage from './pages/Workflow/SupportQueuePage';
+import SupportAssignedLeadsPage from './pages/Support/SupportAssignedLeadsPage';
 
 // 404 Not Found Page
 import NotFoundPage from './pages/NotFound/NotFoundPage';
@@ -109,6 +110,8 @@ function App() {
               {/* WORKFLOW (Sales -> Finance -> Support) Section Routes */}
               <Route path="/finance" element={<ErrorBoundary><FinanceQueuePage /></ErrorBoundary>} />
               <Route path="/support" element={<ErrorBoundary><SupportQueuePage /></ErrorBoundary>} />
+              <Route path="/support/assigned-leads" element={<ErrorBoundary><SupportAssignedLeadsPage /></ErrorBoundary>} />
+              <Route path="/support/leads" element={<ErrorBoundary><SupportAssignedLeadsPage /></ErrorBoundary>} />
 
               {/* REPORTS & ANALYTICS Section Routes */}
               <Route path="/reports" element={<ReportsPage />} />
