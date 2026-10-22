@@ -35,7 +35,12 @@ from schemas.lead import (
 )
 from schemas.workflow import DealWonRequest
 from services.auth import get_current_user, require_roles, require_permission
-from services.permission_service import user_has_permission, get_user_view_scope, get_authorized_call_employee_ids
+from services.permission_service import (
+    user_has_permission, 
+    get_user_view_scope, 
+    get_authorized_call_employee_ids,
+    get_authorized_followup_employee_ids
+)
 from services.delete_request_service import handle_entity_deletion
 from services.audit import log_audit
 from services.reinquiry_service import ReInquiryService
@@ -353,10 +358,22 @@ def get_leads_stats(
 
     scope = get_user_view_scope(current_user, "leads", db)
 
+    # Strictly scope follow-ups count to authorized employees
+    authorized_fu_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_fu_emp_ids is not None:
+        if not authorized_fu_emp_ids:
+            followups_query = followups_query.filter(Followup.id == -1)
+        else:
+            followups_query = followups_query.filter(
+                or_(
+                    Followup.assigned_to.in_(authorized_fu_emp_ids),
+                    Followup.created_by.in_(authorized_fu_emp_ids)
+                )
+            )
+
     if only_my or scope == "own":
         if current_emp:
             base_query = base_query.filter(Lead.assigned_to == current_emp.id)
-            followups_query = followups_query.filter(Followup.assigned_to == current_emp.id)
         else:
             return {
                 "allLeads": 0, "metaLeads": 0, "websiteLeads": 0, "manualLeads": 0,
@@ -365,7 +382,6 @@ def get_leads_stats(
     elif scope == "team" and current_emp:
         team_ids = get_team_employee_ids(current_emp.id, db)
         base_query = base_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
-        followups_query = followups_query.filter(Followup.assigned_to.in_(team_ids))
 
     all_count = base_query.count()
     meta_count = base_query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta")).count()

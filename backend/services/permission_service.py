@@ -88,7 +88,7 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     if norm == "SUPPORT_MANAGER":
         sup_mgr_mods = {
             "dashboard", "customers", "contacts", "support_tickets",
-            "calls", "whatsapp", "activities", "reports", "leads"
+            "calls", "whatsapp", "activities", "reports", "leads", "followups"
         }
         res = {}
         for mod in SYSTEM_MODULES:
@@ -97,8 +97,8 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
             res[k] = {
                 "has_access": has_acc,
                 "can_view": has_acc,
-                "can_create": k in ["support_tickets", "calls", "whatsapp", "activities"],
-                "can_edit": k in ["support_tickets", "activities", "customers"],
+                "can_create": k in ["support_tickets", "calls", "whatsapp", "activities", "followups"],
+                "can_edit": k in ["support_tickets", "activities", "customers", "followups"],
                 "can_delete": False,
                 "can_export": k in ["support_tickets", "reports"],
                 "can_approve": False,
@@ -113,7 +113,7 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     if norm in ["SUPPORT_EXECUTIVE", "SUPPORT"]:
         sup_exec_mods = {
             "dashboard", "customers", "contacts", "support_tickets",
-            "calls", "whatsapp", "activities"
+            "calls", "whatsapp", "activities", "followups"
         }
         res = {}
         for mod in SYSTEM_MODULES:
@@ -122,8 +122,8 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
             res[k] = {
                 "has_access": has_acc,
                 "can_view": has_acc,
-                "can_create": k in ["support_tickets", "calls", "whatsapp", "activities"],
-                "can_edit": k in ["support_tickets", "activities"],
+                "can_create": k in ["support_tickets", "calls", "whatsapp", "activities", "followups"],
+                "can_edit": k in ["support_tickets", "activities", "followups"],
                 "can_delete": False,
                 "can_export": False,
                 "can_approve": False,
@@ -405,6 +405,12 @@ def seed_default_roles_if_needed(db: Session):
                     view_scope=d.get("view_scope", "none")
                 )
                 db.add(new_rp)
+            elif role_obj.name.upper() in ["SUPPORT_EXECUTIVE", "SUPPORT", "SUPPORT_MANAGER"] and mod_key == "followups" and not p.has_access:
+                p.has_access = True
+                p.can_view = True
+                p.can_create = True
+                p.can_edit = True
+                p.view_scope = "team" if "MANAGER" in role_obj.name.upper() else "own"
     db.commit()
 
     # 3. Seed Support Manager user 'Kumar' if not existing
@@ -495,4 +501,56 @@ def get_authorized_call_employee_ids(user: User, db: Session) -> Optional[List[i
         return [e[0] for e in dept_emps]
     else:  # "own"
         return [emp.id]
+
+
+def get_authorized_followup_employee_ids(user: User, db: Session) -> Optional[List[int]]:
+    """
+    Returns authorized employee IDs for follow-up viewing, creation, and modification:
+      - None: Admin with full company-wide visibility.
+      - List[int]: Manager (team subordinate employee IDs + self) or Executive ([self.id]).
+      - []: Unauthorized user or user without employee profile.
+    """
+    if not user:
+        return []
+
+    norm_role = (user.role or "").strip().upper()
+    if norm_role == "ADMIN":
+        return None
+
+    emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+    if not emp:
+        return []
+
+    from services.hierarchy_service import (
+        normalize_role, 
+        get_team_employee_ids_from_user, 
+        ROLE_ADMIN, 
+        ROLE_SALES_MANAGER, 
+        ROLE_SALES_EXECUTIVE, 
+        ROLE_SUPPORT_MANAGER, 
+        ROLE_SUPPORT_EXECUTIVE
+    )
+
+    canonical_role = normalize_role(norm_role)
+    if canonical_role == ROLE_ADMIN:
+        return None
+
+    # Check permission scope for 'followups'
+    scope = get_user_view_scope(user, "followups", db)
+    if scope == "company":
+        return None
+    if scope == "none":
+        return []
+
+    if canonical_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER, "MANAGER"] or scope == "team":
+        team_ids = get_team_employee_ids_from_user(user, db)
+        if emp.id not in team_ids:
+            team_ids.append(emp.id)
+        return team_ids
+    elif scope == "department" and getattr(emp, "department", None):
+        dept_emps = db.query(Employee.id).filter(Employee.department == emp.department).all()
+        return [e[0] for e in dept_emps]
+    else:  # "own", SALES_EXECUTIVE, SUPPORT_EXECUTIVE, EMPLOYEE
+        return [emp.id]
+
 

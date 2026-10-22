@@ -29,6 +29,8 @@ const STATUSES = ['Pending', 'Completed', 'Cancelled'];
 
 const Followups = () => {
   const { user: currentUser } = useAuth();
+  const normRole = (currentUser?.role || '').toUpperCase();
+  const isManagerOrAdmin = ['ADMIN', 'MANAGER', 'SALES_MANAGER', 'SUPPORT_MANAGER'].includes(normRole);
   const [followups, setFollowups] = useState([]);
   const [leads, setLeads] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -94,7 +96,7 @@ const Followups = () => {
   useEffect(() => {
     fetchFollowups();
     fetchDropdownData();
-  }, [statusFilter, priorityFilter]);
+  }, [statusFilter, priorityFilter, currentUser?.id, currentUser?.employee_id]);
 
   const handleOpenScheduleModal = () => {
     setFormData({
@@ -140,7 +142,7 @@ const Followups = () => {
       const payload = {
         ...formData,
         lead_id: parseInt(formData.lead_id),
-        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to) : null
+        assigned_to: isManagerOrAdmin && formData.assigned_to ? parseInt(formData.assigned_to) : (currentUser?.employee_id || null)
       };
 
       await API.post('/followups/', payload);
@@ -508,16 +510,25 @@ const Followups = () => {
 
                 <div className="form-group">
                   <label>Assign to Rep</label>
-                  <select 
-                    value={formData.assigned_to} 
-                    onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
-                    style={{ paddingLeft: '14px' }}
-                  >
-                    <option value="">Default (Lead Rep)</option>
-                    {employees.map(emp => (
-                      <option key={emp.id} value={emp.id}>{emp.name}</option>
-                    ))}
-                  </select>
+                  {isManagerOrAdmin ? (
+                    <select 
+                      value={formData.assigned_to} 
+                      onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
+                      style={{ paddingLeft: '14px' }}
+                    >
+                      <option value="">Default (Lead Rep)</option>
+                      {employees.map(emp => (
+                        <option key={emp.id} value={emp.id}>{emp.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input 
+                      type="text" 
+                      disabled 
+                      value={currentUser?.name || currentUser?.employee_name || currentUser?.username || 'Myself'} 
+                      style={{ paddingLeft: '14px', backgroundColor: 'var(--bg-muted, #f1f5f9)', cursor: 'not-allowed' }}
+                    />
+                  )}
                 </div>
               </div>
 

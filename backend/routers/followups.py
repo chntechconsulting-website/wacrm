@@ -20,6 +20,15 @@ from schemas.followup import (
 )
 from services.auth import get_current_user
 from services.notification_service import create_notification
+from services.permission_service import get_authorized_followup_employee_ids
+from services.hierarchy_service import (
+    normalize_role,
+    ROLE_ADMIN,
+    ROLE_SALES_MANAGER,
+    ROLE_SALES_EXECUTIVE,
+    ROLE_SUPPORT_MANAGER,
+    ROLE_SUPPORT_EXECUTIVE
+)
 
 router = APIRouter(prefix="/followups", tags=["Followups"])
 
@@ -108,17 +117,16 @@ def get_active_reminders(
         Followup.reminder_dismissed == False
     )
 
-    if current_user.role == "EMPLOYEE":
-        if not current_emp:
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if not authorized_emp_ids:
             return []
-        query = query.filter(Followup.assigned_to == current_emp.id)
-    elif current_user.role == "MANAGER":
-        if current_emp:
-            team_ids = get_team_employee_ids(current_emp.id, db)
-            query = query.filter(Followup.assigned_to.in_(team_ids))
-        else:
-            return []
-    # ADMIN has full visibility over authorized pending followups
+        query = query.filter(
+            or_(
+                Followup.assigned_to.in_(authorized_emp_ids),
+                Followup.created_by.in_(authorized_emp_ids)
+            )
+        )
 
     pending_followups = query.all()
     active_reminders: List[FollowupReminderOut] = []
@@ -198,14 +206,10 @@ def snooze_followup_reminder(
         raise HTTPException(status_code=404, detail="Follow-up not found")
 
     current_emp = get_employee_for_user(current_user, db)
-    if current_user.role == "EMPLOYEE":
-        if not current_emp or f.assigned_to != current_emp.id:
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if not current_emp or (f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids):
             raise HTTPException(status_code=403, detail="Not authorized to snooze this reminder")
-    elif current_user.role == "MANAGER":
-        if current_emp:
-            team_ids = get_team_employee_ids(current_emp.id, db)
-            if f.assigned_to not in team_ids:
-                raise HTTPException(status_code=403, detail="Not authorized to snooze this reminder")
 
     mins = snooze_req.minutes if snooze_req.minutes > 0 else 15
     f.snoozed_until = datetime.now() + timedelta(minutes=mins)
@@ -233,14 +237,10 @@ def dismiss_followup_reminder(
         raise HTTPException(status_code=404, detail="Follow-up not found")
 
     current_emp = get_employee_for_user(current_user, db)
-    if current_user.role == "EMPLOYEE":
-        if not current_emp or f.assigned_to != current_emp.id:
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if not current_emp or (f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids):
             raise HTTPException(status_code=403, detail="Not authorized to dismiss this reminder")
-    elif current_user.role == "MANAGER":
-        if current_emp:
-            team_ids = get_team_employee_ids(current_emp.id, db)
-            if f.assigned_to not in team_ids:
-                raise HTTPException(status_code=403, detail="Not authorized to dismiss this reminder")
 
     f.reminder_dismissed = True
     db.commit()
@@ -273,15 +273,22 @@ def list_followups(
     query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id)
     current_emp = get_employee_for_user(current_user, db)
 
-    # Role permission filter: Sales employees only see followups assigned to them; Managers see their team
-    if current_user.role == "EMPLOYEE" and current_emp:
-        query = query.filter(Followup.assigned_to == current_emp.id)
-    elif current_user.role == "MANAGER" and current_emp:
-        team_ids = get_team_employee_ids(current_emp.id, db)
-        query = query.filter(Followup.assigned_to.in_(team_ids))
+    # Strictly filter by authenticated employee role and team visibility scope
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if not authorized_emp_ids:
+            return []
+        query = query.filter(
+            or_(
+                Followup.assigned_to.in_(authorized_emp_ids),
+                Followup.created_by.in_(authorized_emp_ids)
+            )
+        )
 
     eff_assigned_to = assigned_to_filter if assigned_to_filter is not None else assigned_to
     if eff_assigned_to:
+        if authorized_emp_ids is not None and eff_assigned_to not in authorized_emp_ids:
+            return []
         query = query.filter(Followup.assigned_to == eff_assigned_to)
 
     eff_status = status_filter or status
@@ -328,6 +335,28 @@ def list_followups(
     followups = query.order_by(Followup.followup_date.asc()).all()
     return [build_followup_out(f) for f in followups]
 
+
+@router.get("/{followup_id}", response_model=FollowupOut)
+def get_followup(
+    followup_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    f = db.query(Followup).filter(Followup.id == followup_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="Follow-up not found")
+
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You are not authorized to view this follow-up."
+            )
+
+    return build_followup_out(f)
+
+
 @router.post("", response_model=FollowupOut, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=FollowupOut, status_code=status.HTTP_201_CREATED)
 def create_followup(
@@ -343,15 +372,37 @@ def create_followup(
     creator_id = current_emp.id if current_emp else None
     creator_name = current_emp.name if current_emp else current_user.username
 
-    # EMPLOYEE SECURITY ENFORCEMENT
-    if current_user.role == "EMPLOYEE":
-        if not current_emp or lead.assigned_to != current_emp.id:
+    norm_role = normalize_role(current_user.role)
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+
+    # 1. Executive role authorization check
+    if norm_role in [ROLE_SALES_EXECUTIVE, ROLE_SUPPORT_EXECUTIVE]:
+        if not current_emp:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only create followups for leads assigned to you."
+                detail="Access denied. No employee profile found for user."
+            )
+        # Sales Executive can only schedule followups for leads assigned to them or unassigned
+        if lead.assigned_to and lead.assigned_to != current_emp.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You can only schedule followups for leads assigned to you."
             )
         target_assigned_to = current_emp.id
-    else:
+    # 2. Manager role authorization check
+    elif norm_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER, "MANAGER"]:
+        if authorized_emp_ids is not None and lead.assigned_to and lead.assigned_to not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You can only schedule followups for leads in your team."
+            )
+        target_assigned_to = f_in.assigned_to or lead.assigned_to or creator_id or 1
+        if authorized_emp_ids is not None and target_assigned_to not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign follow-up to an employee outside your authorized team."
+            )
+    else:  # ADMIN
         target_assigned_to = f_in.assigned_to or lead.assigned_to or creator_id or 1
 
     # Check for existing pending followups for this lead to avoid duplicate pending entries
@@ -431,14 +482,22 @@ def update_followup(
     emp_id = current_emp.id if current_emp else None
     emp_name = current_emp.name if current_emp else current_user.username
 
-    # EMPLOYEE SECURITY ENFORCEMENT
-    if current_user.role == "EMPLOYEE":
-        if not current_emp or (f.assigned_to != current_emp.id and f.lead.assigned_to != current_emp.id):
+    # ROLE-BASED ACCESS CONTROL FOR UPDATE
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if not current_emp or (f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only update followups assigned to you."
+                detail="Access denied. You can only update follow-ups within your authorized scope."
             )
-        f_in.assigned_to = None
+        norm_role = normalize_role(current_user.role)
+        if norm_role in [ROLE_SALES_EXECUTIVE, ROLE_SUPPORT_EXECUTIVE]:
+            f_in.assigned_to = None  # Executives cannot reassign follow-ups
+        elif f_in.assigned_to is not None and f_in.assigned_to not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot assign follow-up to an employee outside your authorized team."
+            )
 
     old_status = f.status
     date_changed = (f_in.followup_date is not None and f_in.followup_date != f.followup_date) or \
@@ -486,6 +545,14 @@ def delete_followup(
     f = db.query(Followup).filter(Followup.id == followup_id).first()
     if not f:
         raise HTTPException(status_code=404, detail="Follow-up not found")
+
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You cannot delete follow-ups outside your authorized scope."
+            )
 
     lead_title = f.lead.name if f.lead else f"Lead #{f.lead_id}"
 
