@@ -480,37 +480,53 @@ def get_doocti_contacts(
     }
 
 # -------------------------------------------------------------
-# 3. Status APIs (PDF Page 9)
+# 3. Status & Disposition APIs (PDF Page 8 & 9)
+# Endpoints called by Doocti WebPhone & Proxy Engine
 # -------------------------------------------------------------
 @router.get("/lead-statuses")
-def get_lead_statuses():
+@router.get("/get/leadstatus")
+@router.get("/leadstatus")
+@router.get("/crm/get/leadstatus")
+def get_lead_statuses(module: Optional[str] = None):
+    statuses = [
+        {"label": "New Lead", "value": "NEW"},
+        {"label": "Assigned", "value": "ASSIGNED"},
+        {"label": "Contacted", "value": "CONTACTED"},
+        {"label": "Interested", "value": "INTERESTED"},
+        {"label": "Follow Up", "value": "FOLLOW_UP"},
+        {"label": "Qualified", "value": "QUALIFIED"},
+        {"label": "Converted", "value": "CONVERTED"},
+        {"label": "Not Interested", "value": "NOT_INTERESTED"},
+        {"label": "Lost", "value": "LOST"}
+    ]
     return {
-        "status": "success",
-        "statuses": [
-            {"code": "NEW", "label": "New Lead"},
-            {"code": "ASSIGNED", "label": "Assigned"},
-            {"code": "CONTACTED", "label": "Contacted"},
-            {"code": "INTERESTED", "label": "Interested"},
-            {"code": "FOLLOW_UP", "label": "Follow Up"},
-            {"code": "QUALIFIED", "label": "Qualified"},
-            {"code": "CONVERTED", "label": "Converted to Customer"},
-            {"code": "NOT_INTERESTED", "label": "Not Interested"},
-            {"code": "LOST", "label": "Lost"}
-        ]
+        "status": 200,
+        "statusCode": 200,
+        "data": statuses,
+        "statuses": statuses
     }
 
 @router.get("/call-statuses")
-def get_call_statuses():
+@router.get("/dispostion")
+@router.get("/disposition")
+@router.get("/crm/dispostion")
+@router.get("/crm/disposition")
+def get_call_statuses(module: Optional[str] = None):
+    dispos = [
+        {"label": "Answered", "value": "ANSWERED"},
+        {"label": "Interested", "value": "INTERESTED"},
+        {"label": "Follow Up", "value": "FOLLOW_UP"},
+        {"label": "Not Interested", "value": "NOT_INTERESTED"},
+        {"label": "Busy", "value": "BUSY"},
+        {"label": "No Answer", "value": "NO_ANSWER"},
+        {"label": "Wrong Number", "value": "WRONG_NUMBER"},
+        {"label": "Call Back Later", "value": "CALL_BACK"}
+    ]
     return {
-        "status": "success",
-        "statuses": [
-            {"code": "ANSWERED", "label": "Answered / Connected"},
-            {"code": "MISSED", "label": "Missed Call"},
-            {"code": "BUSY", "label": "Busy / Line Engaged"},
-            {"code": "NO_ANSWER", "label": "No Answer / Unreachable"},
-            {"code": "SWITCHED_OFF", "label": "Switched Off"},
-            {"code": "FAILED", "label": "Call Failed"}
-        ]
+        "status": 200,
+        "statusCode": 200,
+        "data": dispos,
+        "statuses": dispos
     }
 
 # -------------------------------------------------------------

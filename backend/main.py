@@ -1,6 +1,7 @@
 import os
 import logging
-from fastapi import FastAPI
+from typing import Optional
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -110,6 +111,24 @@ app.include_router(doocti.router, prefix=settings.API_V1_STR)
 app.include_router(doocti.router, prefix="/api") # Allow /api/doocti/... paths
 app.include_router(doocti.router, prefix="/api/v1") # Allow /api/v1/doocti/... paths
 app.include_router(doocti.router)  # Also allow direct /doocti/... paths
+
+crm_proxy_router = APIRouter(prefix="/crm", tags=["Doocti Direct CRM Proxy"])
+
+@crm_proxy_router.get("/dispostion")
+@crm_proxy_router.get("/disposition")
+def crm_proxy_disposition(module: Optional[str] = None):
+    from routers.doocti import get_call_statuses
+    return get_call_statuses(module)
+
+@crm_proxy_router.get("/get/leadstatus")
+@crm_proxy_router.get("/leadstatus")
+def crm_proxy_lead_status(module: Optional[str] = None):
+    from routers.doocti import get_lead_statuses
+    return get_lead_statuses(module)
+
+app.include_router(crm_proxy_router)
+app.include_router(crm_proxy_router, prefix="/api")
+app.include_router(crm_proxy_router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 def startup_db_client():
