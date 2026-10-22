@@ -228,6 +228,67 @@ const DooctiInAppDialer = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [tempConfig, setTempConfig] = useState(config);
 
+  // Dynamic user extension resolution based on logged-in user and extension mapping
+  useEffect(() => {
+    if (!user) return;
+    API.get('/doocti/config')
+      .then(res => {
+        if (res.data?.status === 'success') {
+          const mapping = res.data.extension_mapping || {};
+          let matchedExt = null;
+          for (const [ext, info] of Object.entries(mapping)) {
+            if (
+              info.employee_id === user.employee_id ||
+              info.employee_id === user.id ||
+              (info.username && info.username.toLowerCase() === (user.username || '').toLowerCase())
+            ) {
+              matchedExt = ext;
+              break;
+            }
+          }
+          if (!matchedExt) {
+            if (user.role === 'ADMIN' || user.username === 'admin') {
+              matchedExt = res.data.admin_extension || '1281';
+            } else if (user.username === 'chnm040') {
+              matchedExt = '1282';
+            } else if (user.username === 'chnm030') {
+              matchedExt = '1283';
+            } else if (user.username === 'chnm023') {
+              matchedExt = '1286';
+            }
+          }
+          if (matchedExt) {
+            setConfig(prev => {
+              if (prev.userNumber !== matchedExt) {
+                const updated = {
+                  ...prev,
+                  userId: matchedExt,
+                  userNumber: matchedExt,
+                  userEmail: mapping[matchedExt]?.email || prev.userEmail || 'chntechnolog_agent01@doocti.com'
+                };
+                localStorage.setItem('doocti_config', JSON.stringify(updated));
+                return updated;
+              }
+              return prev;
+            });
+          }
+        }
+      })
+      .catch(() => {
+        let fallbackExt = '1282';
+        if (user.role === 'ADMIN' || user.username === 'admin') fallbackExt = '1281';
+        else if (user.username === 'chnm030') fallbackExt = '1283';
+        else if (user.username === 'chnm023') fallbackExt = '1286';
+        setConfig(prev => {
+          if (prev.userNumber !== fallbackExt) {
+            const updated = { ...prev, userId: fallbackExt, userNumber: fallbackExt };
+            return updated;
+          }
+          return prev;
+        });
+      });
+  }, [user]);
+
   // Keypad & Number State
   const [dialNumber, setDialNumber] = useState('');
   const [matchedLead, setMatchedLead] = useState(null);

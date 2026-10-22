@@ -4,7 +4,7 @@ import re
 import datetime
 import logging
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc, or_
@@ -17,6 +17,205 @@ from utils.timezone import get_ist_now, IST_TIMEZONE
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/doocti", tags=["Doocti IVR Connector"])
+
+# -------------------------------------------------------------
+# Telephony Configuration Constants
+# -------------------------------------------------------------
+DOOCTI_DIDS = ["07969671855", "07969671856", "07969671857"]
+ADMIN_EXTENSION = "1281"
+AGENT_EXTENSIONS = ["1282", "1283", "1286"]
+ALL_EXTENSIONS = ["1281", "1282", "1283", "1286"]
+
+DEFAULT_EXTENSION_MAP = {
+    "1281": {
+        "employee_id": 1,
+        "username": "admin",
+        "name": "System Administrator",
+        "role": "ADMIN",
+        "type": "ADMIN"
+    },
+    "1282": {
+        "employee_id": 9,
+        "username": "chnm040",
+        "name": "Chandra Mohan",
+        "role": "SALES_EXECUTIVE",
+        "type": "AGENT"
+    },
+    "1283": {
+        "employee_id": 8,
+        "username": "chnm030",
+        "name": "Gowtham",
+        "role": "SALES_MANAGER",
+        "type": "AGENT"
+    },
+    "1286": {
+        "employee_id": 10,
+        "username": "chnm023",
+        "name": "ram",
+        "role": "SUPPORT_EXECUTIVE",
+        "type": "AGENT"
+    }
+}
+
+# -------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------
+def get_doocti_config(db: Session) -> Dict[str, Any]:
+    """Retrieve active Doocti config from database or fall back to verified constants."""
+    cfg = db.query(IntegrationConfig).filter(IntegrationConfig.integration_type == "IVR").first()
+    data = {}
+    if cfg and cfg.config_data:
+        try:
+            data = json.loads(cfg.config_data) if isinstance(cfg.config_data, str) else dict(cfg.config_data)
+        except Exception:
+            data = {}
+
+    dids = data.get("did_numbers") or DOOCTI_DIDS
+    if isinstance(dids, str):
+        dids = [d.strip() for d in dids.split(",") if d.strip()]
+
+    ext_map = data.get("extension_mapping") or DEFAULT_EXTENSION_MAP
+    admin_ext = data.get("admin_extension") or ADMIN_EXTENSION
+    agent_exts = data.get("agent_extensions") or AGENT_EXTENSIONS
+    if isinstance(agent_exts, str):
+        agent_exts = [e.strip() for e in agent_exts.split(",") if e.strip()]
+
+    return {
+        "provider": data.get("provider", "DOOCTI"),
+        "webhook_url": data.get("webhook_url", "https://www.wapluscrm.in/api/doocti/call-log"),
+        "did_numbers": dids,
+        "admin_extension": admin_ext,
+        "agent_extensions": agent_exts,
+        "extension_mapping": ext_map,
+        "api_url": data.get("api_url", "https://beta3-app.doocti.com/"),
+        "account_id": data.get("account_id", "chntechnolog"),
+        "secret_token": data.get("secret_token") or data.get("api_key")
+    }
+
+def clean_phone(phone: Optional[Any]) -> str:
+    """Normalize phone string extracting standard 10-digit number."""
+    if not phone:
+        return ""
+    cleaned = "".join(filter(str.isdigit, str(phone)))
+    if len(cleaned) == 12 and cleaned.startswith("91"):
+        cleaned = cleaned[2:]
+    elif len(cleaned) == 11 and cleaned.startswith("0"):
+        cleaned = cleaned[1:]
+    elif len(cleaned) > 10:
+        cleaned = cleaned[-10:]
+    return cleaned
+
+def is_did_number(number: Optional[Any], did_list: Optional[List[str]] = None) -> bool:
+    """Check if given number matches any configured DID."""
+    if not number:
+        return False
+    clean_target = clean_phone(number)
+    if not clean_target:
+        return False
+    dids = did_list or DOOCTI_DIDS
+    for did in dids:
+        clean_d = clean_phone(did)
+        if clean_d and (clean_target == clean_d or clean_target.endswith(clean_d) or clean_d.endswith(clean_target)):
+            return True
+    return False
+
+def is_extension_number(number: Optional[Any], ext_list: Optional[List[str]] = None) -> bool:
+    """Check if number is one of our WebRTC extensions (1281, 1282, 1283, 1286)."""
+    if not number:
+        return False
+    st = str(number).strip()
+    exts = ext_list or ALL_EXTENSIONS
+    return st in exts
+
+def sanitize_payload_for_logging(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Mask sensitive tokens, passwords and secrets before writing to logs."""
+    sensitive_keys = {"secret", "token", "password", "key", "authorization", "auth", "secret_token", "api_key"}
+    sanitized = {}
+    for k, v in payload.items():
+        if any(sk in str(k).lower() for sk in sensitive_keys):
+            sanitized[k] = "***REDACTED***"
+        elif isinstance(v, dict):
+            sanitized[k] = sanitize_payload_for_logging(v)
+        else:
+            sanitized[k] = v
+    return sanitized
+
+def extract_string_val(val: Any) -> str:
+    """Safely extracts string value even if Doocti sends a dict/object."""
+    if not val:
+        return ""
+    if isinstance(val, dict):
+        return str(val.get("value") or val.get("name") or val.get("identity") or val.get("id") or "").strip()
+    return str(val).strip()
+
+def resolve_employee_for_call(
+    db: Session,
+    station: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    agent_email: Optional[str] = None,
+    explicit_emp_id: Optional[Any] = None,
+    extension_map: Optional[Dict[str, Any]] = None
+) -> Optional[int]:
+    """
+    Accurately maps the call event to a WA!CRM Employee ID:
+    1. Explicit employee_id from payload (if valid)
+    2. Configured extension mapping (1281 -> Admin, 1282 -> Chandra Mohan, 1283 -> Gowtham, 1286 -> ram)
+    3. Employee database email lookup
+    4. Employee database username or extension/phone lookup
+    5. Fallback mapping
+    """
+    if explicit_emp_id and str(explicit_emp_id).isdigit():
+        emp = db.query(Employee).filter(Employee.id == int(explicit_emp_id)).first()
+        if emp:
+            return emp.id
+
+    ext_mapping = extension_map or DEFAULT_EXTENSION_MAP
+    st_clean = str(station).strip() if station else ""
+
+    # 1. Match from extension mapping dictionary
+    if st_clean and st_clean in ext_mapping:
+        mapped_emp_id = ext_mapping[st_clean].get("employee_id")
+        if mapped_emp_id:
+            emp = db.query(Employee).filter(Employee.id == mapped_emp_id).first()
+            if emp:
+                return emp.id
+
+    # 2. Match from agent_email
+    if agent_email:
+        clean_email = agent_email.strip().lower()
+        emp = db.query(Employee).filter(Employee.email.ilike(clean_email)).first()
+        if emp:
+            return emp.id
+
+    # 3. Match from station / extension in Employee table (phone or username)
+    if st_clean:
+        clean_st = clean_phone(st_clean)
+        emp = db.query(Employee).filter(
+            or_(
+                Employee.username == st_clean,
+                Employee.phone == st_clean,
+                Employee.phone.like(f"%{clean_st}%") if clean_st else False
+            )
+        ).first()
+        if emp:
+            return emp.id
+
+    # 4. Match from agent_name
+    if agent_name:
+        emp = db.query(Employee).filter(
+            or_(
+                Employee.name.ilike(f"%{agent_name.strip()}%"),
+                Employee.username.ilike(agent_name.strip())
+            )
+        ).first()
+        if emp:
+            return emp.id
+
+    # 5. Fallback mapping for recognized WebRTC extensions
+    if st_clean in ext_mapping:
+        return ext_mapping[st_clean].get("employee_id")
+
+    return None
 
 # -------------------------------------------------------------
 # Helpers
@@ -405,8 +604,30 @@ async def push_doocti_call_log(
         if k not in raw_data or raw_data[k] is None or raw_data[k] == "":
             raw_data[k] = v
 
+    # Retrieve live telephony configuration & active DIDs / extension mapping
+    doocti_cfg = get_doocti_config(db)
+    configured_dids = doocti_cfg.get("did_numbers") or DOOCTI_DIDS
+    ext_mapping = doocti_cfg.get("extension_mapping") or DEFAULT_EXTENSION_MAP
+    valid_extensions = list(ext_mapping.keys()) or ALL_EXTENSIONS
+
+    # Optional webhook token authentication if secret_token is configured
+    expected_token = doocti_cfg.get("secret_token")
+    if expected_token:
+        provided_token = (
+            request.headers.get("X-Doocti-Token") or 
+            request.headers.get("Authorization") or 
+            request.query_params.get("token") or 
+            raw_data.get("token") or 
+            raw_data.get("secret_token")
+        )
+        if provided_token and str(provided_token).replace("Bearer ", "").strip() != str(expected_token).strip():
+            logger.warning(f"⛔ [DOOCTI CDR] Webhook authentication failed from IP={client_ip}")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Doocti webhook token")
+
+    # Sanitize payload for log auditing to prevent credential leakage
+    safe_payload = sanitize_payload_for_logging(raw_data)
     logger.info(f"☎️ [DOOCTI CALL EVENT INGESTED] Method={request.method} Content-Type='{content_type}' Client={client_ip}")
-    logger.info(f"   Payload: {raw_data}")
+    logger.info(f"   Payload: {safe_payload}")
 
     # 1. Identify Call Session ID / uniqueid
     call_id = (
@@ -424,57 +645,87 @@ async def push_doocti_call_log(
     # Pre-lookup existing log by provider_call_id for idempotent updates / delayed recording delivery
     existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first() if call_id else None
 
-    call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or (existing_log.call_direction if existing_log else "OUTBOUND")).upper()
-
-    # 2. Agent & Station extraction
-    agent_name = str(
+    # 2. Agent & Station extraction (handling both scalar and dict values)
+    agent_name = extract_string_val(
         raw_data.get("agent") or 
         raw_data.get("agent_name") or 
         raw_data.get("user_name") or 
-        raw_data.get("user") or 
-        ""
-    ).strip()
-    station_str = str(
+        raw_data.get("user")
+    )
+    station_str = extract_string_val(
         raw_data.get("station") or 
         raw_data.get("agent_number") or 
         raw_data.get("extension") or 
-        raw_data.get("ext") or 
-        ""
-    ).strip()
-    clean_station = clean_phone(station_str)
-    agent_email = str(
+        raw_data.get("ext")
+    )
+    agent_email = extract_string_val(
         raw_data.get("agent_email") or 
         raw_data.get("user_email") or 
-        raw_data.get("email") or 
-        ""
-    ).strip()
+        raw_data.get("email")
+    )
 
-    # 3. Identify target customer phone number
+    # 3. Direction & DID detection
+    explicit_dir = (raw_data.get("call_direction") or raw_data.get("direction") or "").strip().upper()
+    dest_val = extract_string_val(raw_data.get("destination") or raw_data.get("to_number") or raw_data.get("callee"))
+    caller_val = extract_string_val(raw_data.get("caller") or raw_data.get("from_number") or raw_data.get("source"))
+    did_val = extract_string_val(raw_data.get("did") or raw_data.get("did_number"))
+
+    # Match active DID number if present
+    matched_did = None
+    for cand in [did_val, dest_val, caller_val, raw_data.get("phone_number")]:
+        if cand and is_did_number(cand, configured_dids):
+            matched_did = cand
+            break
+
+    if explicit_dir in ["INBOUND", "OUTBOUND"]:
+        call_dir = explicit_dir
+    elif is_did_number(dest_val, configured_dids) or is_did_number(did_val, configured_dids):
+        call_dir = "INBOUND"
+    elif is_did_number(caller_val, configured_dids) or (station_str and is_extension_number(caller_val, valid_extensions)):
+        call_dir = "OUTBOUND"
+    elif existing_log and existing_log.call_direction:
+        call_dir = existing_log.call_direction
+    else:
+        call_dir = "OUTBOUND"
+
+    # Identify if caller or destination was an extension
+    if not station_str:
+        if is_extension_number(caller_val, valid_extensions):
+            station_str = caller_val
+        elif is_extension_number(dest_val, valid_extensions):
+            station_str = dest_val
+
+    clean_station = clean_phone(station_str)
+
+    # 4. Identify target customer phone number
     if call_dir == "INBOUND":
-        customer_phone = str(
+        customer_phone = extract_string_val(
             raw_data.get("customer_number") or 
             raw_data.get("phone_number") or 
             raw_data.get("from_number") or 
             raw_data.get("caller") or 
-            (existing_log.from_number if existing_log else "") or
-            ""
-        ).strip()
+            (existing_log.from_number if existing_log else "")
+        )
     else:
-        customer_phone = str(
+        customer_phone = extract_string_val(
             raw_data.get("phone_number") or 
             raw_data.get("customer_number") or 
             raw_data.get("to_number") or 
             raw_data.get("phone") or 
             raw_data.get("number") or 
-            (existing_log.to_number if existing_log else "") or
-            ""
-        ).strip()
+            (existing_log.to_number if existing_log else "")
+        )
     clean_target = clean_phone(customer_phone)
 
-    # 3b. REJECT GHOST CALLS: Prevent self-extension loop, empty phone numbers, or invalid calls
+    # 4b. REJECT GHOST CALLS: Prevent self-extension loop, empty phone numbers, or invalid internal loops
     # ONLY reject if it is a NEW call (no existing CallLog matches this uniqueid/call_id)
     if not existing_log:
-        if not clean_target or len(clean_target) < 6 or (clean_station and clean_target == clean_station) or clean_target in ["1282", "1283"]:
+        if (
+            not clean_target or 
+            len(clean_target) < 6 or 
+            (clean_station and clean_target == clean_station) or 
+            is_extension_number(clean_target, valid_extensions)
+        ):
             logger.warning(f"⚠️ [DOOCTI CDR] Ignored ghost/invalid call log payload: clean_target='{clean_target}', station='{station_str}', dir={call_dir}")
             return {
                 "status": "ignored",
@@ -482,18 +733,17 @@ async def push_doocti_call_log(
                 "clean_target": clean_target
             }
 
-    # 4. Fallback call_id generation if none provided
+    # 5. Fallback call_id generation if none provided
     if not call_id:
         st_tag = station_str or "doocti"
         ph_tag = clean_target or "unknown"
         call_id = f"doocti_{st_tag}_{ph_tag}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
 
-    # 5. Duration parsing (seconds)
+    # 6. Duration parsing (seconds)
     has_explicit_duration = any(raw_data.get(k) is not None for k in ["duration", "duration_seconds", "billsec"])
     dur_raw = (
         raw_data.get("duration") 
         if raw_data.get("duration") is not None 
-
         else (raw_data.get("duration_seconds") if raw_data.get("duration_seconds") is not None else raw_data.get("billsec"))
     )
     dur_sec = 0
@@ -505,7 +755,7 @@ async def push_doocti_call_log(
     elif existing_log and existing_log.duration_seconds:
         dur_sec = existing_log.duration_seconds
 
-    # 6. Timestamp parsing (Indian Standard Time Asia/Kolkata)
+    # 7. Timestamp parsing (Indian Standard Time Asia/Kolkata)
     started_at = parse_doocti_time(raw_data.get("start_time") or raw_data.get("started_at")) or (existing_log.started_at if existing_log else None)
     answered_at = parse_doocti_time(raw_data.get("answer_time") or raw_data.get("answered_at")) or (existing_log.answered_at if existing_log else None)
     ended_at = parse_doocti_time(raw_data.get("end_time") or raw_data.get("ended_at")) or (existing_log.ended_at if existing_log else None)
@@ -515,7 +765,7 @@ async def push_doocti_call_log(
     if not started_at:
         started_at = ended_at - datetime.timedelta(seconds=dur_sec) if dur_sec > 0 else ended_at
 
-    # 7. Recording path / URL
+    # 8. Recording path / URL
     rec_url = str(
         raw_data.get("recording_path") or 
         raw_data.get("recording_url") or 
@@ -523,7 +773,7 @@ async def push_doocti_call_log(
         ""
     ).strip() or None
 
-    # 8. Call Status normalization
+    # 9. Call Status normalization
     has_explicit_status = any(raw_data.get(k) for k in ["status", "call_status", "disposition", "call_state"])
     if not has_explicit_status and existing_log:
         status_str = existing_log.call_status or "COMPLETED"
@@ -624,51 +874,20 @@ async def push_doocti_call_log(
 
     # 10. Resolve Employee (Agent) - Essential for Employee Call Logs Permissions!
     explicit_emp_id = raw_data.get("employee_id")
-    resolved_emp_id = None
-    if explicit_emp_id and str(explicit_emp_id).isdigit():
-        emp = db.query(Employee).filter(Employee.id == int(explicit_emp_id)).first()
-        if emp:
-            resolved_emp_id = emp.id
-
-    if not resolved_emp_id and agent_email:
-        emp = db.query(Employee).filter(Employee.email.ilike(agent_email)).first()
-        if emp:
-            resolved_emp_id = emp.id
-
-    if not resolved_emp_id and agent_name:
-        emp = db.query(Employee).filter(
-            or_(
-                Employee.name.ilike(f"%{agent_name}%"),
-                Employee.username.ilike(agent_name),
-                Employee.email.ilike(agent_name)
-            )
-        ).first()
-        if emp:
-            resolved_emp_id = emp.id
-
-    if not resolved_emp_id and station_str:
-        clean_st = clean_phone(station_str)
-        emp = db.query(Employee).filter(
-            or_(
-                Employee.phone.like(f"%{clean_st}%"),
-                Employee.username == station_str
-            )
-        ).first()
-        if emp:
-            resolved_emp_id = emp.id
+    resolved_emp_id = resolve_employee_for_call(
+        db=db,
+        station=station_str,
+        agent_name=agent_name,
+        agent_email=agent_email,
+        explicit_emp_id=explicit_emp_id,
+        extension_map=ext_mapping
+    )
 
     # If still not resolved, check if lead is assigned to an employee
     if not resolved_emp_id and resolved_lead_id:
         target_lead = db.query(Lead).filter(Lead.id == resolved_lead_id).first()
         if target_lead and target_lead.assigned_to:
             resolved_emp_id = target_lead.assigned_to
-
-    # If still not resolved and station is 1282 or Doocti default agent, map to default employee
-    if not resolved_emp_id:
-        if station_str in ["1282", "1283"] or "chntechnolog_agent01" in agent_email:
-            default_emp = db.query(Employee).filter(Employee.user_id == 1).first() or db.query(Employee).first()
-            if default_emp:
-                resolved_emp_id = default_emp.id
 
     # Fallback to first active employee so record is never orphaned
     if not resolved_emp_id:
@@ -682,6 +901,8 @@ async def push_doocti_call_log(
         notes_parts.append(f"Agent: {agent_name}")
     if station_str:
         notes_parts.append(f"Station: {station_str}")
+    if matched_did:
+        notes_parts.append(f"DID: {matched_did}")
     if raw_status:
         notes_parts.append(f"DooCTI Status: {raw_status}")
     if raw_data.get("disposition"):
@@ -693,7 +914,7 @@ async def push_doocti_call_log(
     combined_notes = " | ".join(notes_parts) if notes_parts else "DooCTI Call completed."
 
     # Direction
-    call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or "OUTBOUND").upper()
+    call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or call_dir or "OUTBOUND").upper()
 
     # 12. Check if CallLog already exists for this call_id (handling idempotency / updates)
     if not existing_log and call_id:
@@ -782,9 +1003,9 @@ async def push_doocti_call_log(
     else:
         if call_dir == "INBOUND":
             from_num = customer_phone or clean_target
-            to_num = station_str or "1282"
+            to_num = matched_did or station_str or (configured_dids[0] if configured_dids else "07969671855")
         else:
-            from_num = station_str or "1282"
+            from_num = matched_did or station_str or (configured_dids[0] if configured_dids else "07969671855")
             to_num = customer_phone or clean_target
 
         call_entry = CallLog(
@@ -926,5 +1147,88 @@ def disconnect_doocti_call(
         "provider_call_id": call.provider_call_id,
         "call_status": call.call_status,
         "duration": call.duration_seconds or 0
+    }
+
+# -------------------------------------------------------------
+# 7. Integration Telephony Configuration APIs
+# -------------------------------------------------------------
+class DooctiConfigUpdatePayload(BaseModel):
+    model_config = {"extra": "ignore"}
+    did_numbers: Optional[List[str]] = None
+    admin_extension: Optional[str] = None
+    agent_extensions: Optional[List[str]] = None
+    extension_mapping: Optional[Dict[str, Any]] = None
+    api_url: Optional[str] = None
+    account_id: Optional[str] = None
+    secret_token: Optional[str] = None
+    webhook_url: Optional[str] = None
+
+@router.get("/config")
+def get_doocti_telephony_config(db: Session = Depends(get_db)):
+    """Returns active Doocti telephony configuration including DIDs and extension mappings."""
+    cfg = get_doocti_config(db)
+    # Mask secret token in response
+    if cfg.get("secret_token"):
+        cfg["secret_token"] = "***REDACTED***"
+    return {
+        "status": "success",
+        **cfg
+    }
+
+@router.put("/config")
+def update_doocti_telephony_config(
+    payload: DooctiConfigUpdatePayload,
+    db: Session = Depends(get_db)
+):
+    """Updates Doocti telephony configuration in IntegrationConfig."""
+    cfg_row = db.query(IntegrationConfig).filter(IntegrationConfig.integration_type == "IVR").first()
+    if not cfg_row:
+        cfg_row = IntegrationConfig(
+            integration_type="IVR",
+            provider="DOOCTI",
+            name="Doocti Telephony",
+            is_active=True,
+            status="ACTIVE",
+            webhook_url="https://www.wapluscrm.in/api/doocti/call-log",
+            config_data=json.dumps({})
+        )
+        db.add(cfg_row)
+        db.commit()
+        db.refresh(cfg_row)
+
+    data = {}
+    if cfg_row.config_data:
+        try:
+            data = json.loads(cfg_row.config_data) if isinstance(cfg_row.config_data, str) else dict(cfg_row.config_data)
+        except Exception:
+            data = {}
+
+    if payload.did_numbers is not None:
+        data["did_numbers"] = payload.did_numbers
+    if payload.admin_extension is not None:
+        data["admin_extension"] = payload.admin_extension
+    if payload.agent_extensions is not None:
+        data["agent_extensions"] = payload.agent_extensions
+    if payload.extension_mapping is not None:
+        data["extension_mapping"] = payload.extension_mapping
+    if payload.api_url is not None:
+        data["api_url"] = payload.api_url
+    if payload.account_id is not None:
+        data["account_id"] = payload.account_id
+    if payload.secret_token is not None:
+        data["secret_token"] = payload.secret_token
+    if payload.webhook_url is not None:
+        data["webhook_url"] = payload.webhook_url
+        cfg_row.webhook_url = payload.webhook_url
+
+    cfg_row.provider = "DOOCTI"
+    cfg_row.config_data = json.dumps(data)
+    cfg_row.updated_at = get_ist_now()
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Doocti telephony configuration updated successfully",
+        "config": get_doocti_config(db)
     }
 

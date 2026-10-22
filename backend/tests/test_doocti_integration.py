@@ -128,16 +128,133 @@ class TestDooctiIntegration(unittest.TestCase):
 
     def test_ghost_call_rejection(self):
         # Self-extension dialing should be rejected
-        response = self.client.post("/api/doocti/call-log", json={
-            "uniqueid": "test_doocti_ghost_005",
-            "phone_number": "1282",
-            "station": "1282",
-            "status": "ANSWERED"
-        })
+        for ext in ["1281", "1282", "1283", "1286"]:
+            response = self.client.post("/api/doocti/call-log", json={
+                "uniqueid": f"test_doocti_ghost_{ext}",
+                "phone_number": ext,
+                "station": ext,
+                "status": "ANSWERED"
+            })
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["status"], "ignored")
+            self.assertIn("Ghost call rejected", data["message"])
+
+    def test_get_config_endpoint(self):
+        response = self.client.get("/api/doocti/config")
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["status"], "ignored")
-        self.assertIn("Ghost call rejected", data["message"])
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["admin_extension"], "1281")
+        self.assertIn("07969671855", data["did_numbers"])
+        self.assertIn("07969671856", data["did_numbers"])
+        self.assertIn("07969671857", data["did_numbers"])
+        self.assertIn("1282", data["agent_extensions"])
+        self.assertIn("1283", data["agent_extensions"])
+        self.assertIn("1286", data["agent_extensions"])
+        # Extension mapping checks
+        mapping = data.get("extension_mapping", {})
+        self.assertEqual(mapping.get("1281", {}).get("employee_id"), 1)
+        self.assertEqual(mapping.get("1282", {}).get("employee_id"), 9)
+        self.assertEqual(mapping.get("1283", {}).get("employee_id"), 8)
+        self.assertEqual(mapping.get("1286", {}).get("employee_id"), 10)
+
+    def test_extension_1281_admin_mapping(self):
+        call_id = "test_doocti_admin_1281"
+        payload = {
+            "uniqueid": call_id,
+            "phone_number": "9876543210",
+            "station": "1281",
+            "status": "ANSWERED",
+            "duration": 60,
+            "call_direction": "OUTBOUND"
+        }
+        res = self.client.post("/api/doocti/call-log", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["employee_id"], 1)
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.employee_id, 1)
+
+    def test_extension_1282_sales_exec_mapping(self):
+        call_id = "test_doocti_agent_1282"
+        payload = {
+            "uniqueid": call_id,
+            "phone_number": "9876543211",
+            "station": "1282",
+            "status": "ANSWERED",
+            "duration": 45,
+            "call_direction": "OUTBOUND"
+        }
+        res = self.client.post("/api/doocti/call-log", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["employee_id"], 9)
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.employee_id, 9)
+
+    def test_extension_1283_sales_manager_mapping(self):
+        call_id = "test_doocti_agent_1283"
+        payload = {
+            "uniqueid": call_id,
+            "phone_number": "9876543212",
+            "station": "1283",
+            "status": "ANSWERED",
+            "duration": 80,
+            "call_direction": "OUTBOUND"
+        }
+        res = self.client.post("/api/doocti/call-log", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["employee_id"], 8)
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.employee_id, 8)
+
+    def test_extension_1286_support_exec_mapping(self):
+        call_id = "test_doocti_agent_1286"
+        payload = {
+            "uniqueid": call_id,
+            "phone_number": "9876543213",
+            "station": "1286",
+            "status": "ANSWERED",
+            "duration": 110,
+            "call_direction": "OUTBOUND"
+        }
+        res = self.client.post("/api/doocti/call-log", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["employee_id"], 10)
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.employee_id, 10)
+
+    def test_inbound_call_did_routing(self):
+        call_id = "test_doocti_inbound_did_001"
+        payload = {
+            "uniqueid": call_id,
+            "phone_number": "9876543214",
+            "destination": "07969671855",
+            "station": "1282",
+            "status": "ANSWERED",
+            "duration": 50
+        }
+        res = self.client.post("/api/doocti/call-log", json=payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.call_direction, "INBOUND")
+        self.assertEqual(log.to_number, "07969671855")
+        self.assertEqual(log.employee_id, 9)
 
 if __name__ == "__main__":
     unittest.main()

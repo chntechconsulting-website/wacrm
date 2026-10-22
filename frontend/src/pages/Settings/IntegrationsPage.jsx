@@ -292,8 +292,14 @@ const IntegrationsPage = () => {
         if (initialConfig.account_id?.toLowerCase().includes('smartflo')) {
           initialConfig.account_id = 'chntechnolog';
         }
-        if (initialConfig.phone_number === '918069879797') {
-          initialConfig.phone_number = '07969659985';
+        if (!initialConfig.phone_number || initialConfig.phone_number === '918069879797' || initialConfig.phone_number === '07969659985') {
+          initialConfig.phone_number = '07969671855, 07969671856, 07969671857';
+        }
+        if (!initialConfig.admin_extension) {
+          initialConfig.admin_extension = '1281';
+        }
+        if (!initialConfig.extensions || initialConfig.extensions === '1282, 1283') {
+          initialConfig.extensions = '1281, 1282, 1283, 1286';
         }
       }
     }
@@ -332,11 +338,17 @@ const IntegrationsPage = () => {
         if (!updatedConfig.account_id || updatedConfig.account_id.toLowerCase().includes('smartflo')) {
           updatedConfig.account_id = 'chntechnolog';
         }
-        if (!updatedConfig.phone_number || updatedConfig.phone_number === '918069879797') {
-          updatedConfig.phone_number = '07969659985';
+        if (!updatedConfig.phone_number || updatedConfig.phone_number === '918069879797' || updatedConfig.phone_number === '07969659985') {
+          updatedConfig.phone_number = '07969671855, 07969671856, 07969671857';
         }
-        if (!updatedConfig.extensions) {
-          updatedConfig.extensions = '1282, 1283';
+        if (!updatedConfig.admin_extension) {
+          updatedConfig.admin_extension = '1281';
+        }
+        if (!updatedConfig.agent_extensions) {
+          updatedConfig.agent_extensions = '1282, 1283, 1286';
+        }
+        if (!updatedConfig.extensions || updatedConfig.extensions === '1282, 1283') {
+          updatedConfig.extensions = '1281, 1282, 1283, 1286';
         }
       } else if (newProvider === 'SMARTFLO') {
         if (!updatedConfig.api_url || updatedConfig.api_url.includes('doocti')) {
@@ -887,23 +899,42 @@ const IntegrationsPage = () => {
                         </div>
 
                         <div className="form-group">
-                          <label>DID Number (Inbound / Virtual Number)</label>
+                          <label>DID Numbers (Inbound / Outbound Virtual Numbers)</label>
                           <input 
                             type="text" 
-                            value={modalState.config.phone_number || '07969659985'} 
+                            value={modalState.config.phone_number || '07969671855, 07969671856, 07969671857'} 
                             onChange={(e) => handleConfigChange('phone_number', e.target.value)}
-                            placeholder="07969659985"
+                            placeholder="07969671855, 07969671856, 07969671857"
                           />
+                          <small style={{ color: '#64748b', fontSize: '0.74rem' }}>
+                            Configured DIDs: 07969671855, 07969671856, 07969671857
+                          </small>
+                        </div>
+
+                        <div className="form-group">
+                          <label>Admin WebRTC Extension</label>
+                          <input 
+                            type="text" 
+                            value={modalState.config.admin_extension || '1281'} 
+                            onChange={(e) => handleConfigChange('admin_extension', e.target.value)}
+                            placeholder="1281"
+                          />
+                          <small style={{ color: '#64748b', fontSize: '0.74rem' }}>
+                            Dedicated Admin Extension: 1281 (Admin)
+                          </small>
                         </div>
 
                         <div className="form-group">
                           <label>Agent WebRTC Extensions</label>
                           <input 
                             type="text" 
-                            value={modalState.config.extensions || '1282, 1283'} 
+                            value={modalState.config.extensions || '1282, 1283, 1286'} 
                             onChange={(e) => handleConfigChange('extensions', e.target.value)}
-                            placeholder="1282, 1283"
+                            placeholder="1282, 1283, 1286"
                           />
+                          <small style={{ color: '#64748b', fontSize: '0.74rem' }}>
+                            Agent Extensions: 1282 (Sales Executive), 1283 (Sales Manager), 1286 (Support Executive)
+                          </small>
                         </div>
 
                         <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '12px 14px', marginTop: '10px' }}>
@@ -911,13 +942,13 @@ const IntegrationsPage = () => {
                             Doocti Integration CRM Endpoints:
                           </span>
                           <p style={{ fontSize: '0.73rem', color: '#14532d', margin: '4px 0' }}>
+                            <b>Call Log Push Webhook:</b> <code style={{ backgroundColor: '#ffffff', padding: '2px 6px', borderRadius: '4px' }}>https://www.wapluscrm.in/api/doocti/call-log</code>
+                          </p>
+                          <p style={{ fontSize: '0.73rem', color: '#14532d', margin: '4px 0' }}>
                             <b>Lead Search & Auto-create:</b> <code style={{ backgroundColor: '#ffffff', padding: '2px 6px', borderRadius: '4px' }}>{`${window.location.origin}/api/doocti/lead-by-number`}</code>
                           </p>
                           <p style={{ fontSize: '0.73rem', color: '#14532d', margin: '4px 0' }}>
                             <b>Contacts Fetch API:</b> <code style={{ backgroundColor: '#ffffff', padding: '2px 6px', borderRadius: '4px' }}>{`${window.location.origin}/api/doocti/contacts`}</code>
-                          </p>
-                          <p style={{ fontSize: '0.73rem', color: '#14532d', margin: '4px 0' }}>
-                            <b>Call Log Push API:</b> <code style={{ backgroundColor: '#ffffff', padding: '2px 6px', borderRadius: '4px' }}>{`${window.location.origin}/api/doocti/call-log`}</code>
                           </p>
                           <p style={{ fontSize: '0.73rem', color: '#14532d', margin: '4px 0' }}>
                             <b>Lead Update API:</b> <code style={{ backgroundColor: '#ffffff', padding: '2px 6px', borderRadius: '4px' }}>{`${window.location.origin}/api/doocti/lead/update`}</code>
