@@ -242,6 +242,22 @@ def startup_db_client():
                         print(f"Auto-added missing column '{col_name}' to 'field_visits' table.")
             except Exception as ex:
                 print(f"Field visits column sync check: {ex}")
+            # quotations table schema sync
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM quotations"))
+                q_cols = [row[0] for row in result.fetchall()]
+                missing_q_cols = {
+                    "created_by": "INT NULL",
+                    "created_by_user_id": "INT NULL",
+                    "assigned_to": "INT NULL"
+                }
+                for col_name, col_type in missing_q_cols.items():
+                    if col_name not in q_cols:
+                        conn.execute(text(f"ALTER TABLE quotations ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                        print(f"Auto-added missing column '{col_name}' to 'quotations' table.")
+            except Exception as ex:
+                print(f"Quotations column sync check: {ex}")
     except Exception as e:
         print(f"Error creating/synchronizing database tables: {e}")
 

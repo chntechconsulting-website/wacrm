@@ -15,7 +15,13 @@ from models.activity import LeadActivity
 from models.quotation import Quotation, WAHRMSBundle
 from models.audit_log import AuditLog
 from services.auth import get_current_user, require_roles
-from services.permission_service import is_finance_or_admin, is_finance_team
+from services.permission_service import (
+    is_finance_or_admin, 
+    is_finance_team,
+    user_has_permission,
+    apply_billing_scope_filter,
+    is_user_authorized_for_billing_doc
+)
 from services.hierarchy_service import (
     normalize_role,
     get_team_employee_ids_from_user,
@@ -474,17 +480,60 @@ def get_waquote_summary(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Fetches real-time financial metrics and billing summaries directly from local database.
+    Fetches real-time financial metrics and billing summaries directly from local database,
+    strictly scoped to the authenticated user's role, department, and team authorization.
+    Avoids double-counting when a quotation becomes a proforma or tax invoice.
     """
-    local_docs = db.query(Quotation).all()
-    
-    local_total_billed = sum(d.grand_total for d in local_docs if d.status == 'issued')
-    local_paid = sum(d.amount_paid for d in local_docs if d.status == 'issued')
-    local_unpaid = max(0.0, local_total_billed - local_paid)
-    local_quotes = [d for d in local_docs if d.doc_type == 'quotation']
-    local_proformas = [d for d in local_docs if d.doc_type == 'proforma']
-    local_invoices = [d for d in local_docs if d.doc_type == 'invoice']
-    
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        if not user_has_permission(current_user, "quotations", "view", db) and not user_has_permission(current_user, "invoices", "view", db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Support team cannot access Sales billing documents."
+            )
+
+    authorized_query = apply_billing_scope_filter(db.query(Quotation), current_user, db)
+    local_docs = authorized_query.all()
+
+    # Partition documents by type (excluding cancelled records)
+    all_active_invoices = [d for d in local_docs if d.doc_type == "invoice" and d.status != "cancelled"]
+    all_active_proformas = [d for d in local_docs if d.doc_type == "proforma" and d.status != "cancelled"]
+    all_active_quotes = [d for d in local_docs if d.doc_type == "quotation" and d.status != "cancelled"]
+
+    # Prevent double-counting: an active proforma is superseded if an active invoice references it
+    superseded_proforma_ids = set()
+    for inv in all_active_invoices:
+        if inv.source_quotation_id:
+            superseded_proforma_ids.add(inv.source_quotation_id)
+        if inv.source_quotation_number:
+            for pf in all_active_proformas:
+                if pf.doc_number == inv.source_quotation_number:
+                    superseded_proforma_ids.add(pf.id)
+
+    # Billing pool consists of authoritative issued Tax Invoices and independent/pending Proformas
+    billing_pool = list(all_active_invoices) + [pf for pf in all_active_proformas if pf.id not in superseded_proforma_ids]
+
+    local_total_billed = sum(float(d.grand_total or 0.0) for d in billing_pool)
+    local_paid = sum(float(d.amount_paid or (d.grand_total if d.payment_status == 'paid' else 0.0)) for d in billing_pool)
+    local_unpaid = sum(max(0.0, float(d.grand_total or 0.0) - float(d.amount_paid or (d.grand_total if d.payment_status == 'paid' else 0.0))) for d in billing_pool)
+    collection_rate = round((local_paid / local_total_billed * 100), 1) if local_total_billed > 0 else 0.0
+
+    # Quotations summary (proposals/estimates - not counted as billed or collected payments)
+    quotes_count = len(all_active_quotes)
+    quotes_val = sum(float(d.grand_total or 0.0) for d in all_active_quotes)
+
+    # Proformas summary
+    proformas_count = len(all_active_proformas)
+    proformas_val = sum(float(d.grand_total or 0.0) for d in all_active_proformas)
+    proformas_unpaid_val = sum(max(0.0, float(d.grand_total or 0.0) - float(d.amount_paid or (d.grand_total if d.payment_status == 'paid' else 0.0))) for d in all_active_proformas)
+    proformas_unpaid_count = sum(1 for d in all_active_proformas if float(d.grand_total or 0.0) > float(d.amount_paid or (d.grand_total if d.payment_status == 'paid' else 0.0)))
+
+    # Invoices summary
+    invoices_count = len(all_active_invoices)
+    invoices_val = sum(float(d.grand_total or 0.0) for d in all_active_invoices)
+    invoices_unpaid_val = sum(max(0.0, float(d.grand_total or 0.0) - float(d.amount_paid or (d.grand_total if d.payment_status == 'paid' else 0.0))) for d in all_active_invoices)
+    invoices_unpaid_count = sum(1 for d in all_active_invoices if float(d.grand_total or 0.0) > float(d.amount_paid or (d.grand_total if d.payment_status == 'paid' else 0.0)))
+
     return {
         "ok": True,
         "metrics": {
@@ -492,19 +541,31 @@ def get_waquote_summary(
                 "totalBilled": local_total_billed,
                 "totalPaid": local_paid,
                 "totalUnpaid": local_unpaid,
-                "totalOutstanding": local_unpaid
+                "totalOutstanding": local_unpaid,
+                "collectionRatePercent": collection_rate
             },
             "quotations": {
-                "totalCount": len(local_quotes),
-                "totalAmount": sum(d.grand_total for d in local_quotes)
+                "total": quotes_count,
+                "totalCount": quotes_count,
+                "totalAmount": quotes_val
             },
             "proformas": {
-                "totalCount": len(local_proformas),
-                "totalAmount": sum(d.grand_total for d in local_proformas)
+                "total": proformas_count,
+                "totalCount": proformas_count,
+                "totalAmount": proformas_val,
+                "unpaid": {
+                    "count": proformas_unpaid_count,
+                    "amount": proformas_unpaid_val
+                }
             },
             "invoices": {
-                "totalCount": len(local_invoices),
-                "totalAmount": sum(d.grand_total for d in local_invoices)
+                "total": invoices_count,
+                "totalCount": invoices_count,
+                "totalAmount": invoices_val,
+                "unpaid": {
+                    "count": invoices_unpaid_count,
+                    "amount": invoices_unpaid_val
+                }
             }
         }
     }
@@ -529,54 +590,30 @@ def list_waquote_documents(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Search and list quotations, proformas, invoices, and POs directly from local CRM database.
-    Supports filtering by product_category ('wahrms' vs 'biometric'), customer_id, and lead_id.
+    Search and list quotations, proformas, invoices, and POs directly from local CRM database,
+    strictly filtered by authenticated role and department scope.
     """
-    q = db.query(Quotation)
     norm_role = normalize_role(current_user.role)
-
-    # Support roles cannot access Sales quotations
     if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Support team cannot access Sales quotations."
-        )
+        if not user_has_permission(current_user, "quotations", "view", db) and not user_has_permission(current_user, "invoices", "view", db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Support team cannot access Sales billing documents."
+            )
 
-    emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
-    # Scoping for Sales roles
-    if norm_role == ROLE_SALES_EXECUTIVE:
-        emp_id = emp.id if emp else -1
-        emp_name = emp.name if emp and emp.name else current_user.username
-        my_lead_ids = [lid for (lid,) in db.query(Lead.id).filter(Lead.assigned_to == emp_id).all()]
-        q = q.filter(
-            or_(
-                Quotation.lead_id.in_(my_lead_ids),
-                Quotation.prepared_by.ilike(f"%{emp_name}%"),
-                Quotation.prepared_by.ilike(f"%{current_user.username}%")
-            )
-        )
-    elif norm_role == ROLE_SALES_MANAGER:
-        team_emp_ids = get_team_employee_ids_from_user(current_user, db)
-        team_emps = db.query(Employee).filter(Employee.id.in_(team_emp_ids)).all()
-        team_names = [e.name for e in team_emps if e.name] + [current_user.username]
-        team_lead_ids = [lid for (lid,) in db.query(Lead.id).filter(Lead.assigned_to.in_(team_emp_ids)).all()]
-        name_filters = [Quotation.prepared_by.ilike(f"%{name}%") for name in team_names]
-        q = q.filter(
-            or_(
-                Quotation.lead_id.in_(team_lead_ids),
-                Quotation.lead_id == None,
-                *name_filters
-            )
-        )
+    q = apply_billing_scope_filter(db.query(Quotation), current_user, db)
+
+    def _clean_str(val):
+        return val.strip().lower() if isinstance(val, str) else None
 
     # Resolve camelCase and snake_case query params uniformly
-    doc_type_val = (docType or doc_type or "all").strip().lower()
-    cat_val = (productCategory or product_category or "all").strip().lower()
-    pay_val = (paymentStatus or payment_status or "all").strip().lower()
-    search_val = (search or "").strip()
-    cust_id_val = customerId if customerId is not None else customer_id
-    lead_id_val = leadId if leadId is not None else lead_id
-    stat_val = (status_filter or "all").strip().lower()
+    doc_type_val = _clean_str(docType) or _clean_str(doc_type) or "all"
+    cat_val = _clean_str(productCategory) or _clean_str(product_category) or "all"
+    pay_val = _clean_str(paymentStatus) or _clean_str(payment_status) or "all"
+    search_val = search.strip() if isinstance(search, str) else ""
+    cust_id_val = customerId if isinstance(customerId, int) else (customer_id if isinstance(customer_id, int) else None)
+    lead_id_val = leadId if isinstance(leadId, int) else (lead_id if isinstance(lead_id, int) else None)
+    stat_val = _clean_str(status_filter) or "all"
 
     if doc_type_val and doc_type_val != "all":
         if doc_type_val in ["po", "purchase_order"]:
@@ -831,6 +868,10 @@ def create_document(
     doc_type_norm = (payload.doc_type or "quotation").lower().strip()
     cat_norm = (payload.product_category or "wahrms").lower().strip()
 
+    current_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    creator_emp_id = current_emp.id if current_emp else None
+    norm_role = normalize_role(current_user.role)
+
     # STRICT PERMISSION: Only Finance Team can create or issue Tax Invoices
     if doc_type_norm == "invoice":
         if not is_finance_team(current_user, db):
@@ -838,6 +879,42 @@ def create_document(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access Denied: Only the Finance Team can create or issue Tax Invoices. Sales and other teams may create Quotations and Proforma Invoices."
             )
+
+    # Support roles cannot create Sales quotations/proformas unless explicitly authorized
+    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        if not user_has_permission(current_user, "quotations", "create", db) and not user_has_permission(current_user, "invoices", "create", db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access Denied: Support team members cannot create Sales quotations or billing documents."
+            )
+
+    # Lead authorization check: Reps can only create billing docs for authorized leads
+    target_assigned_to = creator_emp_id
+    lead = None
+    if payload.lead_id:
+        lead = db.query(Lead).filter(Lead.id == payload.lead_id).first()
+        if not lead:
+            raise HTTPException(status_code=404, detail=f"Lead #{payload.lead_id} not found.")
+
+        if norm_role == ROLE_SALES_EXECUTIVE:
+            if current_emp and lead.assigned_to and lead.assigned_to != current_emp.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access Denied: You can only create billing documents for leads assigned to you."
+                )
+            target_assigned_to = current_emp.id if current_emp else None
+        elif norm_role == ROLE_SALES_MANAGER:
+            team_emp_ids = get_team_employee_ids_from_user(current_user, db)
+            if current_emp and current_emp.id not in team_emp_ids:
+                team_emp_ids.append(current_emp.id)
+            if lead.assigned_to and lead.assigned_to not in team_emp_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access Denied: You can only create billing documents for leads in your sales team."
+                )
+            target_assigned_to = lead.assigned_to or creator_emp_id
+        else:
+            target_assigned_to = lead.assigned_to or creator_emp_id
 
     # DUPLICATE QUOTATION PREVENTION (Per Product Category)
     if doc_type_norm == "quotation" and not payload.allow_duplicate:
@@ -953,6 +1030,9 @@ def create_document(
         amount_paid=payload.amount_paid,
         line_items=payload.line_items,
         terms_and_conditions=payload.terms_and_conditions,
+        created_by=creator_emp_id,
+        created_by_user_id=current_user.id,
+        assigned_to=target_assigned_to,
         notes=payload.notes,
         prepared_by=payload.prepared_by or (current_user.employee.name if (current_user and current_user.employee) else (current_user.username if current_user else "")),
         pdf_url=payload.pdf_url,
@@ -1074,40 +1154,11 @@ def get_waquote_document(
     if not r:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    norm_role = normalize_role(current_user.role)
-    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+    if not is_user_authorized_for_billing_doc(current_user, r, db, "view"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Support team cannot access Sales quotations."
+            detail="Access denied: You are not authorized to view this billing document."
         )
-
-    emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
-    if norm_role == ROLE_SALES_EXECUTIVE:
-        emp_id = emp.id if emp else -1
-        emp_name = emp.name if emp and emp.name else current_user.username
-        lead_assigned_to_me = False
-        if r.lead_id:
-            ld = db.query(Lead).filter(Lead.id == r.lead_id).first()
-            if ld and ld.assigned_to == emp_id:
-                lead_assigned_to_me = True
-        prepared_by_me = (r.prepared_by and (emp_name.lower() in r.prepared_by.lower() or current_user.username.lower() in r.prepared_by.lower()))
-        if not lead_assigned_to_me and not prepared_by_me:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: You can only view quotations belonging to you."
-            )
-    elif norm_role == ROLE_SALES_MANAGER:
-        team_emp_ids = get_team_employee_ids_from_user(current_user, db)
-        lead_in_team = True
-        if r.lead_id:
-            ld = db.query(Lead).filter(Lead.id == r.lead_id).first()
-            if ld and ld.assigned_to and ld.assigned_to not in team_emp_ids:
-                lead_in_team = False
-        if not lead_in_team:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: You can only view quotations of your sales team."
-            )
 
     issue_formatted = r.issue_date.strftime("%d/%m/%Y") if r.issue_date else "—"
     due_formatted = r.due_date.strftime("%d/%m/%Y") if r.due_date else "—"
@@ -1187,6 +1238,12 @@ def update_waquote_document(
         r = db.query(Quotation).filter(Quotation.doc_number == doc_id.strip()).first()
     if not r:
         raise HTTPException(status_code=404, detail="Document not found.")
+
+    if not is_user_authorized_for_billing_doc(current_user, r, db, "edit"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to update this billing document."
+        )
 
     target_type = (payload.doc_type or r.doc_type).lower().strip()
     # STRICT PERMISSION: If modifying an invoice or attempting to change a doc to an invoice
@@ -1308,6 +1365,12 @@ def generate_proforma_from_quotation(
     if not q:
         raise HTTPException(status_code=404, detail="Source Quotation not found.")
 
+    if not is_user_authorized_for_billing_doc(current_user, q, db, "view"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to generate a proforma from this quotation."
+        )
+
     # Check if a non-cancelled Proforma already exists for this quotation
     existing_pf = db.query(Quotation).filter(
         Quotation.doc_type == "proforma",
@@ -1347,6 +1410,8 @@ def generate_proforma_from_quotation(
         doc_num = f"{prefix}/{fy_str}/{count:04d}"
 
     cat_val = getattr(q, 'product_category', 'wahrms') or 'wahrms'
+    current_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    creator_emp_id = current_emp.id if current_emp else None
 
     new_pf = Quotation(
         doc_type="proforma",
@@ -1354,6 +1419,9 @@ def generate_proforma_from_quotation(
         product_category=cat_val,
         source_quotation_id=q.id,
         source_quotation_number=q.doc_number,
+        created_by=creator_emp_id,
+        created_by_user_id=current_user.id,
+        assigned_to=creator_emp_id or q.assigned_to,
         doc_number=doc_num,
         status="sent",
         payment_status="unpaid",
@@ -1379,7 +1447,7 @@ def generate_proforma_from_quotation(
         line_items=q.line_items or [],
         terms_and_conditions=q.terms_and_conditions,
         notes=q.notes or f"Generated from Quotation #{q.doc_number}",
-        prepared_by=current_user.full_name or current_user.username if current_user else q.prepared_by,
+        prepared_by=getattr(current_user, 'full_name', None) or getattr(current_user, 'name', None) or (current_user.username if current_user else q.prepared_by),
         issue_date=now,
         due_date=now + timedelta(days=15),
         created_at=now,
@@ -1398,9 +1466,10 @@ def generate_proforma_from_quotation(
     if new_pf.lead_id:
         act = LeadActivity(
             lead_id=new_pf.lead_id,
-            user_id=current_user.id if current_user else None,
-            type="PROFORMA_GENERATED",
-            content=f"Generated {cat_val.upper()} Proforma Invoice #{new_pf.doc_number} (Rs. {new_pf.grand_total:,.2f}) from Quotation #{q.doc_number}."
+            employee_id=creator_emp_id,
+            performed_by=creator_emp_id,
+            activity_type="PROFORMA_GENERATED",
+            description=f"Generated {cat_val.upper()} Proforma Invoice #{new_pf.doc_number} (Rs. {new_pf.grand_total:,.2f}) from Quotation #{q.doc_number}."
         )
         db.add(act)
         db.commit()
@@ -1560,6 +1629,12 @@ def download_quotation_pdf(
     if not r:
         raise HTTPException(status_code=404, detail="Quotation document not found.")
 
+    if not is_user_authorized_for_billing_doc(current_user, r, db, "view"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to download this quotation."
+        )
+
     from services.pdf_service import generate_quotation_pdf
     pdf_bytes = generate_quotation_pdf(r)
     clean_num = (r.doc_number or f"QT-{r.id}").replace("/", "-").replace("\\", "-")
@@ -1592,6 +1667,12 @@ def download_proforma_pdf(
         r = db.query(Quotation).filter(Quotation.doc_number == doc_id.strip()).first()
     if not r:
         raise HTTPException(status_code=404, detail="Proforma Invoice document not found.")
+
+    if not is_user_authorized_for_billing_doc(current_user, r, db, "view"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to download this proforma invoice."
+        )
 
     from services.pdf_service import generate_proforma_pdf
     pdf_bytes = generate_proforma_pdf(r)
@@ -1684,6 +1765,12 @@ def download_tax_invoice_pdf(
 
     if not r:
         raise HTTPException(status_code=404, detail="Tax Invoice document not found.")
+
+    if not is_user_authorized_for_billing_doc(current_user, r, db, "view"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to download this tax invoice."
+        )
 
     from services.pdf_service import generate_tax_invoice_pdf
     pdf_bytes = generate_tax_invoice_pdf(r)

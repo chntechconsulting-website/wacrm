@@ -554,3 +554,201 @@ def get_authorized_followup_employee_ids(user: User, db: Session) -> Optional[Li
         return [emp.id]
 
 
+def apply_billing_scope_filter(query, user: User, db: Session):
+    """
+    Applies strict role, department, team, and ownership filters to a Quotation/billing query.
+    - ADMIN: Unrestricted company-wide.
+    - FINANCE: Company-wide billing scope for accounting & reconciliation.
+    - SALES_MANAGER: Scoped to their authorized Sales team (created by team, assigned to team, lead in team, prepared by team).
+    - SALES_EXECUTIVE: Scoped to their own documents (created by self, assigned to self, lead assigned to self, prepared by self).
+    - SUPPORT_MANAGER / SUPPORT_EXECUTIVE: Excluded from Sales billing documents unless explicitly authorized.
+    """
+    from models.quotation import Quotation
+    from models.lead import Lead
+    from sqlalchemy import or_
+
+    if not user:
+        return query.filter(Quotation.id == -1)
+
+    norm_role = (user.role or "").strip().upper()
+    if norm_role == "ADMIN":
+        return query
+
+    # Finance Department / Role check
+    if is_finance_team(user, db) or norm_role in ["FINANCE", "FINANCE_EXECUTIVE", "FINANCE_MANAGER", "ACCOUNTS"]:
+        return query
+
+    from services.hierarchy_service import (
+        normalize_role,
+        get_team_employee_ids_from_user,
+        get_team_user_ids,
+        ROLE_ADMIN,
+        ROLE_SALES_MANAGER,
+        ROLE_SALES_EXECUTIVE,
+        ROLE_SUPPORT_MANAGER,
+        ROLE_SUPPORT_EXECUTIVE
+    )
+
+    canonical_role = normalize_role(norm_role)
+    if canonical_role == ROLE_ADMIN:
+        return query
+
+    # Check explicit permission matrix for quotations
+    scope = get_user_view_scope(user, "quotations", db)
+    if scope == "company":
+        return query
+
+    # Support roles cannot access Sales quotations/invoices unless explicitly granted
+    if canonical_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        if not user_has_permission(user, "quotations", "view", db) and not user_has_permission(user, "invoices", "view", db):
+            return query.filter(Quotation.id == -1)
+
+    emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+    if not emp:
+        return query.filter(Quotation.id == -1)
+
+    if canonical_role in [ROLE_SALES_MANAGER, "MANAGER"] or scope == "team":
+        team_emp_ids = get_team_employee_ids_from_user(user, db)
+        if emp.id not in team_emp_ids:
+            team_emp_ids.append(emp.id)
+        team_user_ids = get_team_user_ids(user, db)
+        if user.id not in team_user_ids:
+            team_user_ids.append(user.id)
+        team_lead_ids = [lid for (lid,) in db.query(Lead.id).filter(Lead.assigned_to.in_(team_emp_ids)).all()]
+        team_emps = db.query(Employee).filter(Employee.id.in_(team_emp_ids)).all()
+        team_names = [e.name for e in team_emps if e.name] + [user.username]
+        name_filters = [Quotation.prepared_by.ilike(f"%{name}%") for name in team_names if name]
+
+        conditions = [
+            Quotation.created_by.in_(team_emp_ids),
+            Quotation.created_by_user_id.in_(team_user_ids),
+            Quotation.assigned_to.in_(team_emp_ids),
+            Quotation.lead_id.in_(team_lead_ids)
+        ] + name_filters
+        return query.filter(or_(*conditions))
+
+    elif scope == "department" and getattr(emp, "department", None):
+        dept_emps = db.query(Employee.id).filter(Employee.department == emp.department).all()
+        dept_emp_ids = [e[0] for e in dept_emps]
+        dept_lead_ids = [lid for (lid,) in db.query(Lead.id).filter(Lead.assigned_to.in_(dept_emp_ids)).all()]
+        return query.filter(
+            or_(
+                Quotation.created_by.in_(dept_emp_ids),
+                Quotation.assigned_to.in_(dept_emp_ids),
+                Quotation.lead_id.in_(dept_lead_ids)
+            )
+        )
+    else:
+        # Sales Executive / own scope
+        emp_id = emp.id
+        emp_name = emp.name if emp.name else user.username
+        my_lead_ids = [lid for (lid,) in db.query(Lead.id).filter(Lead.assigned_to == emp_id).all()]
+        conditions = [
+            Quotation.created_by == emp_id,
+            Quotation.created_by_user_id == user.id,
+            Quotation.assigned_to == emp_id,
+            Quotation.lead_id.in_(my_lead_ids)
+        ]
+        if emp_name:
+            conditions.append(Quotation.prepared_by.ilike(f"%{emp_name}%"))
+        if user.username:
+            conditions.append(Quotation.prepared_by.ilike(f"%{user.username}%"))
+        return query.filter(or_(*conditions))
+
+
+def is_user_authorized_for_billing_doc(user: User, doc, db: Session, action: str = "view") -> bool:
+    """
+    Verifies if the authenticated user has permission to access (view, edit, download) a specific Quotation.
+    """
+    if not user or not doc:
+        return False
+
+    norm_role = (user.role or "").strip().upper()
+    if norm_role == "ADMIN":
+        return True
+
+    # If action is edit or create on Tax Invoice, only Finance or Admin can do so
+    if getattr(doc, "doc_type", "") == "invoice" and action in ["edit", "create", "delete"]:
+        return is_finance_team(user, db) or norm_role in ["ADMIN", "FINANCE"]
+
+    # Finance can view all billing documents for accounts reconciliation
+    if is_finance_team(user, db) or norm_role in ["FINANCE", "FINANCE_EXECUTIVE", "FINANCE_MANAGER", "ACCOUNTS"]:
+        return True
+
+    from services.hierarchy_service import (
+        normalize_role,
+        get_team_employee_ids_from_user,
+        get_team_user_ids,
+        ROLE_ADMIN,
+        ROLE_SALES_MANAGER,
+        ROLE_SALES_EXECUTIVE,
+        ROLE_SUPPORT_MANAGER,
+        ROLE_SUPPORT_EXECUTIVE
+    )
+    from models.lead import Lead
+
+    canonical_role = normalize_role(norm_role)
+    if canonical_role == ROLE_ADMIN:
+        return True
+
+    # Support roles cannot access Sales billing documents
+    if canonical_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        if not user_has_permission(user, "quotations", "view", db) and not user_has_permission(user, "invoices", "view", db):
+            return False
+
+    emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+    if not emp:
+        return False
+
+    scope = get_user_view_scope(user, "quotations", db)
+    if scope == "company":
+        return True
+
+    if canonical_role in [ROLE_SALES_MANAGER, "MANAGER"] or scope == "team":
+        team_emp_ids = get_team_employee_ids_from_user(user, db)
+        if emp.id not in team_emp_ids:
+            team_emp_ids.append(emp.id)
+        team_user_ids = get_team_user_ids(user, db)
+        if user.id not in team_user_ids:
+            team_user_ids.append(user.id)
+
+        if doc.created_by and doc.created_by in team_emp_ids:
+            return True
+        if doc.created_by_user_id and doc.created_by_user_id in team_user_ids:
+            return True
+        if doc.assigned_to and doc.assigned_to in team_emp_ids:
+            return True
+        if doc.lead_id:
+            lead = db.query(Lead).filter(Lead.id == doc.lead_id).first()
+            if lead and lead.assigned_to and lead.assigned_to in team_emp_ids:
+                return True
+
+        if doc.prepared_by:
+            team_emps = db.query(Employee).filter(Employee.id.in_(team_emp_ids)).all()
+            for e in team_emps:
+                if e.name and e.name.lower() in doc.prepared_by.lower():
+                    return True
+            if user.username and user.username.lower() in doc.prepared_by.lower():
+                return True
+        return False
+    else:
+        # Sales Executive
+        if doc.created_by and doc.created_by == emp.id:
+            return True
+        if doc.created_by_user_id and doc.created_by_user_id == user.id:
+            return True
+        if doc.assigned_to and doc.assigned_to == emp.id:
+            return True
+        if doc.lead_id:
+            lead = db.query(Lead).filter(Lead.id == doc.lead_id).first()
+            if lead and lead.assigned_to == emp.id:
+                return True
+        if doc.prepared_by:
+            if emp.name and emp.name.lower() in doc.prepared_by.lower():
+                return True
+            if user.username and user.username.lower() in doc.prepared_by.lower():
+                return True
+        return False
+
+
+

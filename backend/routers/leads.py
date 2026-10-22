@@ -1221,7 +1221,22 @@ def download_lead_quotation(
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
+    current_emp = get_employee_for_user(current_user, db)
+    norm_role = (current_user.role or "").strip().upper()
+    if norm_role in ["SUPPORT_MANAGER", "SUPPORT_EXECUTIVE", "SUPPORT"]:
+        raise HTTPException(status_code=403, detail="Access denied. Support team cannot access sales quotations.")
+    if norm_role in ["SALES_EXECUTIVE", "EMPLOYEE", "SALES"]:
+        if current_emp and lead.assigned_to and lead.assigned_to != current_emp.id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only download quotations for leads assigned to you.")
+    elif norm_role in ["SALES_MANAGER", "MANAGER"]:
+        from services.hierarchy_service import get_team_employee_ids_from_user
+        team_ids = get_team_employee_ids_from_user(current_user, db)
+        if current_emp and current_emp.id not in team_ids:
+            team_ids.append(current_emp.id)
+        if lead.assigned_to and lead.assigned_to not in team_ids:
+            raise HTTPException(status_code=403, detail="Access denied. You can only download quotations for leads in your team.")
+
     from models.quotation import Quotation
     doc = db.query(Quotation).filter(Quotation.lead_id == lead.id, Quotation.doc_type == "quotation").order_by(desc(Quotation.created_at)).first()
     if not doc:
@@ -1277,7 +1292,22 @@ def download_lead_proforma(
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    
+
+    current_emp = get_employee_for_user(current_user, db)
+    norm_role = (current_user.role or "").strip().upper()
+    if norm_role in ["SUPPORT_MANAGER", "SUPPORT_EXECUTIVE", "SUPPORT"]:
+        raise HTTPException(status_code=403, detail="Access denied. Support team cannot access sales quotations.")
+    if norm_role in ["SALES_EXECUTIVE", "EMPLOYEE", "SALES"]:
+        if current_emp and lead.assigned_to and lead.assigned_to != current_emp.id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only download quotations for leads assigned to you.")
+    elif norm_role in ["SALES_MANAGER", "MANAGER"]:
+        from services.hierarchy_service import get_team_employee_ids_from_user
+        team_ids = get_team_employee_ids_from_user(current_user, db)
+        if current_emp and current_emp.id not in team_ids:
+            team_ids.append(current_emp.id)
+        if lead.assigned_to and lead.assigned_to not in team_ids:
+            raise HTTPException(status_code=403, detail="Access denied. You can only download quotations for leads in your team.")
+
     from models.quotation import Quotation
     doc = db.query(Quotation).filter(Quotation.lead_id == lead.id, Quotation.doc_type == "proforma").order_by(desc(Quotation.created_at)).first()
     if not doc:

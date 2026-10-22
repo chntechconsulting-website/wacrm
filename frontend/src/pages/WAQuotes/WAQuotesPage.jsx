@@ -97,6 +97,7 @@ const WAQuotesPage = () => {
       }
     } catch (err) {
       console.error('Failed to load WA Quote summary', err);
+      setSummary(null);
     } finally {
       setSummaryLoading(false);
     }
@@ -131,16 +132,23 @@ const WAQuotesPage = () => {
       }
     } catch (err) {
       console.error('Failed to load documents', err);
-      setError('Could not load billing documents.');
+      if (err.response?.status === 403) {
+        setError('Access restricted: You do not have permission to view sales billing documents.');
+      } else {
+        setError('Could not load billing documents.');
+      }
       setDocuments([]);
     } finally {
       setLoading(false);
     }
   };
 
+  // Re-fetch and clear cache when user/account changes
   useEffect(() => {
+    setDocuments([]);
+    setSummary(null);
     fetchSummary();
-  }, []);
+  }, [user?.id, user?.employee_id]);
 
   const isFirstMount = useRef(true);
 
@@ -155,7 +163,7 @@ const WAQuotesPage = () => {
       fetchDocuments(searchQuery);
     }, 300);
     return () => clearTimeout(timer);
-  }, [activeTab, paymentFilter, categoryFilter, searchQuery]);
+  }, [activeTab, paymentFilter, categoryFilter, searchQuery, user?.id, user?.employee_id]);
 
   // Handle immediate form submit
   const handleSearchSubmit = (e) => {

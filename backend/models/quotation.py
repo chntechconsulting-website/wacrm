@@ -19,6 +19,13 @@ class Quotation(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), index=True, nullable=True)
     source_quotation_id = Column(Integer, ForeignKey("quotations.id"), index=True, nullable=True)
     source_quotation_number = Column(String(100), nullable=True)
+    created_by = Column(Integer, ForeignKey("employees.id"), index=True, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    assigned_to = Column(Integer, ForeignKey("employees.id"), index=True, nullable=True)
+    
+    creator_employee = relationship("Employee", foreign_keys=[created_by])
+    creator_user = relationship("User", foreign_keys=[created_by_user_id])
+    assigned_employee = relationship("Employee", foreign_keys=[assigned_to])
     
     # Customer snapshot
     customer_name = Column(String(150), nullable=False)
