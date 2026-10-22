@@ -7,6 +7,7 @@ class LeadModel {
   final String? source;
   final String status;
   final String? priority;
+  final String? rating;
   final String? requirement;
   final int? assignedTo;
   final String? assignedToName;
@@ -26,6 +27,7 @@ class LeadModel {
     this.source,
     required this.status,
     this.priority,
+    this.rating,
     this.requirement,
     this.assignedTo,
     this.assignedToName,
@@ -47,6 +49,7 @@ class LeadModel {
       source: json['source'] ?? 'Manual',
       status: json['status'] ?? 'NEW',
       priority: json['priority'] ?? 'MEDIUM',
+      rating: json['rating'],
       requirement: json['requirement'] ?? json['notes'],
       assignedTo: json['assigned_to'],
       assignedToName: json['assigned_to_name'] ?? json['employee_name'],
@@ -128,6 +131,76 @@ class EmployeeOption {
       name: json['name'] ?? '',
       email: json['email'],
       role: json['role'],
+    );
+  }
+}
+
+class SupportManagerOption {
+  final int id;
+  final String name;
+  final String? username;
+  final String? email;
+  final String? role;
+  final String? department;
+
+  SupportManagerOption({
+    required this.id,
+    required this.name,
+    this.username,
+    this.email,
+    this.role,
+    this.department,
+  });
+
+  factory SupportManagerOption.fromJson(Map<String, dynamic> json) {
+    return SupportManagerOption(
+      id: json['id'] ?? 0,
+      name: json['name'] ?? json['username'] ?? 'Support Manager',
+      username: json['username'],
+      email: json['email'],
+      role: json['role'],
+      department: json['department'],
+    );
+  }
+}
+
+class ProformaOption {
+  final int id;
+  final String docNumber;
+  final double grandTotal;
+  final int licenceCount;
+  final String paymentStatus;
+  final double amountPaid;
+  final String? productSummary;
+  final String? productCategory;
+  final String? selectedBundle;
+  final int biometricDeviceCount;
+
+  ProformaOption({
+    required this.id,
+    required this.docNumber,
+    required this.grandTotal,
+    this.licenceCount = 1,
+    this.paymentStatus = 'PAYMENT_PENDING',
+    this.amountPaid = 0.0,
+    this.productSummary,
+    this.productCategory,
+    this.selectedBundle,
+    this.biometricDeviceCount = 0,
+  });
+
+  factory ProformaOption.fromJson(Map<String, dynamic> json) {
+    return ProformaOption(
+      id: json['id'] ?? 0,
+      docNumber: json['doc_number'] ?? 'PI-${json['id']}',
+      grandTotal: (json['grand_total'] as num?)?.toDouble() ?? (json['total_amount'] as num?)?.toDouble() ?? 0.0,
+      licenceCount: (json['licence_count'] as num?)?.toInt() ?? 1,
+      paymentStatus: json['payment_status'] ?? 'PAYMENT_PENDING',
+      amountPaid: (json['amount_paid'] as num?)?.toDouble() ?? 0.0,
+      productSummary: json['product_summary'] ?? json['product_category'] ?? 'WAHRMS Business Solution',
+      productCategory: json['product_category'] ?? 'WAHRMS',
+      selectedBundle: json['selected_bundle'],
+      biometricDeviceCount: (json['biometric_device_count'] as num?)?.toInt() ?? 0,
     );
   }
 }

@@ -259,7 +259,13 @@ def dismiss_followup_reminder(
 @router.get("/", response_model=List[FollowupOut])
 def list_followups(
     status_filter: Optional[str] = None,
+    status: Optional[str] = None,
     priority_filter: Optional[str] = None,
+    priority: Optional[str] = None,
+    date_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    assigned_to_filter: Optional[int] = None,
+    assigned_to: Optional[int] = None,
     upcoming_only: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -274,15 +280,50 @@ def list_followups(
         team_ids = get_team_employee_ids(current_emp.id, db)
         query = query.filter(Followup.assigned_to.in_(team_ids))
 
-    if status_filter:
-        query = query.filter(Followup.status == status_filter)
+    eff_assigned_to = assigned_to_filter if assigned_to_filter is not None else assigned_to
+    if eff_assigned_to:
+        query = query.filter(Followup.assigned_to == eff_assigned_to)
 
-    if priority_filter:
-        query = query.filter(Followup.priority == priority_filter)
+    eff_status = status_filter or status
+    if eff_status and eff_status.upper() != "ALL":
+        query = query.filter(Followup.status == eff_status)
+
+    eff_priority = priority_filter or priority
+    if eff_priority and eff_priority.upper() != "ALL":
+        query = query.filter(Followup.priority == eff_priority)
 
     if upcoming_only:
         today = date.today()
         query = query.filter(Followup.followup_date >= today, Followup.status == "Pending")
+
+    if date_filter and date_filter.upper() != "ALL":
+        today = date.today()
+        df = date_filter.strip().lower()
+        if df == "today":
+            query = query.filter(Followup.followup_date == today)
+        elif df == "upcoming":
+            query = query.filter(Followup.followup_date >= today, Followup.status == "Pending")
+        elif df == "overdue":
+            query = query.filter(Followup.followup_date < today, Followup.status == "Pending")
+        elif df == "completed":
+            query = query.filter(Followup.status == "Completed")
+        else:
+            try:
+                target_d = datetime.strptime(date_filter.strip(), "%Y-%m-%d").date()
+                query = query.filter(Followup.followup_date == target_d)
+            except Exception:
+                pass
+
+    if search:
+        search_fmt = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Lead.name.ilike(search_fmt),
+                Lead.phone.ilike(search_fmt),
+                Lead.company.ilike(search_fmt),
+                Followup.notes.ilike(search_fmt)
+            )
+        )
 
     followups = query.order_by(Followup.followup_date.asc()).all()
     return [build_followup_out(f) for f in followups]

@@ -4,8 +4,10 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/pingo_popup_dialog.dart';
 import '../../../core/widgets/wacrm_badge.dart';
+import '../../followups/presentation/followup_create_edit_dialog.dart';
 import '../models/lead_model.dart';
 import '../providers/leads_provider.dart';
+import 'deal_won_dialog.dart';
 
 class LeadStatusDialog extends StatefulWidget {
   final LeadModel lead;
@@ -29,19 +31,42 @@ class _LeadStatusDialogState extends State<LeadStatusDialog> {
   bool _isUpdating = false;
 
   final List<String> _statuses = [
-    'NEW',
-    'ASSIGNED',
+    'NEW LEAD',
+    'RE-INQUIRY',
     'CONTACTED',
     'INTERESTED',
-    'FOLLOW_UP',
     'QUALIFIED',
-    'CONVERTED',
+    'DEMO / MEETING',
+    'PROPOSAL SENT',
+    'NEGOTIATION',
+    'FOLLOW-UP',
+    'WON',
     'LOST',
   ];
 
   void _selectStatus(String newStatus) async {
+    if (_isUpdating) return;
+
     if (newStatus == widget.lead.status) {
       Navigator.pop(context);
+      return;
+    }
+
+    // 1. If status is WON (or legacy CONVERTED), trigger Deal WON Workflow
+    if (newStatus == 'WON' || newStatus == 'CONVERTED') {
+      Navigator.pop(context);
+      DealWonDialog.show(context, widget.lead);
+      return;
+    }
+
+    // 2. If status is FOLLOW-UP, trigger Follow-up Scheduling Dialog
+    if (newStatus == 'FOLLOW-UP' || newStatus == 'FOLLOW_UP') {
+      Navigator.pop(context);
+      FollowupCreateEditDialog.show(
+        context,
+        preselectedLeadId: widget.lead.id,
+        preselectedLeadName: widget.lead.name,
+      );
       return;
     }
 
@@ -60,6 +85,13 @@ class _LeadStatusDialogState extends State<LeadStatusDialog> {
           title: 'Status Updated!',
           subtitle: 'Lead status has been changed to ${newStatus.replaceAll('_', ' ')} successfully.',
           pose: pose,
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(provider.errorMessage ?? 'Failed to update status'),
+            backgroundColor: AppColors.danger,
+          ),
         );
       }
     }

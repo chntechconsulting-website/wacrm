@@ -137,6 +137,35 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('LandingWelcomeScreen adapts cleanly without overflow on mid-size screen (390x844)', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: LandingWelcomeScreen(),
+      ),
+    );
+
+    expect(find.text('Manage Leads. Close Deals. Grow Together.'), findsOneWidget);
+    expect(find.text('Skip'), findsOneWidget);
+    expect(find.text('Powered by'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Swipe to Slide 2
+    await tester.drag(find.byType(PageView), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('New Leads'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Swipe to Slide 3
+    await tester.drag(find.byType(PageView), const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('Get Started'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('LeadsListScreen renders hero banner, search bar, and filter tabs', (WidgetTester tester) async {
     await tester.pumpWidget(
       MultiProvider(
@@ -162,7 +191,7 @@ void main() {
     expect(find.text('New'), findsOneWidget);
     expect(find.text('In Progress'), findsOneWidget);
     expect(find.text('Hot'), findsOneWidget);
-    expect(find.text('Converted'), findsOneWidget);
+    expect(find.text('Won'), findsOneWidget);
   });
 
   testWidgets('LeadDetailScreen renders profile card, 5 quick actions, tabs, basic info, and status', (WidgetTester tester) async {

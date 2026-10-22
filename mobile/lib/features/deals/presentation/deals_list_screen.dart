@@ -24,12 +24,22 @@ class DealsListScreen extends StatefulWidget {
 }
 
 class _DealsListScreenState extends State<DealsListScreen> {
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _statusFilter = 'ALL'; // 'ALL', 'PENDING', 'PAID'
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<DealsProvider>().fetchFinanceHandoffs();
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _confirmPayment(FinanceHandoffModel handoff) async {
@@ -114,6 +124,29 @@ class _DealsListScreenState extends State<DealsListScreen> {
     final provider = context.watch<DealsProvider>();
     final handoffs = provider.financeHandoffs;
 
+    final pendingCount = handoffs.where((h) => h.paymentStatus != 'PAID' && h.invoiceNumber == null).length;
+    final paidCount = handoffs.where((h) => h.paymentStatus == 'PAID' || h.invoiceNumber != null).length;
+
+    final filteredHandoffs = handoffs.where((h) {
+      if (_statusFilter == 'PENDING' && (h.paymentStatus == 'PAID' || h.invoiceNumber != null)) {
+        return false;
+      }
+      if (_statusFilter == 'PAID' && !(h.paymentStatus == 'PAID' || h.invoiceNumber != null)) {
+        return false;
+      }
+      if (_searchQuery.isNotEmpty) {
+        final q = _searchQuery.toLowerCase();
+        final matchLead = h.leadName.toLowerCase().contains(q);
+        final matchCompany = h.companyName?.toLowerCase().contains(q) ?? false;
+        final matchProforma = h.proformaNumber.toLowerCase().contains(q);
+        final matchInvoice = h.invoiceNumber?.toLowerCase().contains(q) ?? false;
+        if (!matchLead && !matchCompany && !matchProforma && !matchInvoice) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -125,29 +158,82 @@ class _DealsListScreenState extends State<DealsListScreen> {
           ),
         ],
       ),
-      body: provider.isLoading && handoffs.isEmpty
-          ? const LoadingIndicator(message: 'Loading deals...')
-          : provider.errorMessage != null && handoffs.isEmpty
-              ? ErrorView(
-                  message: provider.errorMessage!,
-                  onRetry: () => provider.fetchFinanceHandoffs(),
-                )
-              : handoffs.isEmpty
-                  ? const EmptyState(
-                      title: 'No Pending Finance Deals',
-                      subtitle: 'When leads are marked WON with a proforma, they will appear here.',
-                      pingoPose: PingoPoses.inspect,
-                    )
-                  : RefreshIndicator(
-                      color: AppColors.primary,
-                      onRefresh: () => provider.fetchFinanceHandoffs(showLoading: false),
-                      child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: handoffs.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          final h = handoffs[index];
-                          final isPaid = h.paymentStatus == 'PAID' || h.invoiceNumber != null;
+      body: Column(
+        children: [
+          // Search & Filter Row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search deals by client, proforma, invoice...',
+                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _searchQuery = '');
+                        },
+                      )
+                    : null,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+              ),
+              onChanged: (val) => setState(() => _searchQuery = val.trim()),
+            ),
+          ),
+
+          // Filter Chips (All, Pending, Paid)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                _buildStatusChip('ALL', 'All Deals (${handoffs.length})'),
+                const SizedBox(width: 8),
+                _buildStatusChip('PENDING', 'Pending ($pendingCount)'),
+                const SizedBox(width: 8),
+                _buildStatusChip('PAID', 'Paid ($paidCount)'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          Expanded(
+            child: provider.isLoading && handoffs.isEmpty
+                ? const LoadingIndicator(message: 'Loading deals...')
+                : provider.errorMessage != null && handoffs.isEmpty
+                    ? ErrorView(
+                        message: provider.errorMessage!,
+                        onRetry: () => provider.fetchFinanceHandoffs(),
+                      )
+                    : filteredHandoffs.isEmpty
+                        ? EmptyState(
+                            title: 'No Deals Found',
+                            subtitle: _searchQuery.isNotEmpty
+                                ? 'No deals match "$_searchQuery".'
+                                : 'When leads are marked WON with a proforma, they will appear here.',
+                            pingoPose: PingoPoses.inspect,
+                          )
+                        : RefreshIndicator(
+                            color: AppColors.primary,
+                            onRefresh: () => provider.fetchFinanceHandoffs(showLoading: false),
+                            child: ListView.separated(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: filteredHandoffs.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 12),
+                              itemBuilder: (context, index) {
+                                final h = filteredHandoffs[index];
+                                final isPaid = h.paymentStatus == 'PAID' || h.invoiceNumber != null;
 
                           return WacrmCard(
                             padding: const EdgeInsets.all(16),
@@ -256,6 +342,31 @@ class _DealsListScreenState extends State<DealsListScreen> {
                         },
                       ),
                     ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusChip(String key, String label) {
+    final isSelected = _statusFilter == key;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      selectedColor: AppColors.primary,
+      backgroundColor: Colors.white,
+      labelStyle: TextStyle(
+        fontSize: 12,
+        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+        color: isSelected ? Colors.white : AppColors.textMain,
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isSelected ? AppColors.primary : const Color(0xFFE2E8F0),
+        ),
+      ),
+      onSelected: (_) => setState(() => _statusFilter = key),
     );
   }
 }

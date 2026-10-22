@@ -14,7 +14,14 @@ class LeadsProvider extends ChangeNotifier {
 
   String? _searchQuery;
   String _selectedStatus = 'ALL';
+  String _selectedSource = 'ALL';
   String _selectedPriority = 'ALL';
+  int? _assignedToFilter;
+  bool? _isReinquiryFilter;
+  String? _dateFilter;
+  String? _startDate;
+  String? _endDate;
+  Map<String, int> _leadStats = {};
   int _currentSkip = 0;
   static const int _pageSize = 20;
 
@@ -25,7 +32,21 @@ class LeadsProvider extends ChangeNotifier {
   bool get hasMore => _hasMore;
   String? get errorMessage => _errorMessage;
   String get selectedStatus => _selectedStatus;
+  String get selectedSource => _selectedSource;
   String get selectedPriority => _selectedPriority;
+  int? get assignedToFilter => _assignedToFilter;
+  bool? get isReinquiryFilter => _isReinquiryFilter;
+  String? get dateFilter => _dateFilter;
+  String? get searchQuery => _searchQuery;
+  Map<String, int> get leadStats => _leadStats;
+  LeadsRepository get repository => _repository;
+
+  Future<void> fetchLeadStats() async {
+    try {
+      _leadStats = await _repository.getLeadStats();
+      notifyListeners();
+    } catch (_) {}
+  }
 
   Future<void> fetchLeads({bool refresh = false}) async {
     if (refresh) {
@@ -46,7 +67,13 @@ class LeadsProvider extends ChangeNotifier {
         limit: _pageSize,
         search: _searchQuery,
         status: _selectedStatus == 'ALL' ? null : _selectedStatus,
+        source: _selectedSource == 'ALL' ? null : _selectedSource,
         priority: _selectedPriority == 'ALL' ? null : _selectedPriority,
+        assignedTo: _assignedToFilter,
+        isReinquiry: _isReinquiryFilter,
+        dateFilter: _dateFilter,
+        startDate: _startDate,
+        endDate: _endDate,
       );
 
       if (refresh) {
@@ -71,7 +98,7 @@ class LeadsProvider extends ChangeNotifier {
   }
 
   void search(String query) {
-    _searchQuery = query.trim();
+    _searchQuery = query.trim().isEmpty ? null : query.trim();
     fetchLeads(refresh: true);
   }
 
@@ -80,9 +107,67 @@ class LeadsProvider extends ChangeNotifier {
     fetchLeads(refresh: true);
   }
 
+  void setSourceFilter(String source) {
+    _selectedSource = source;
+    fetchLeads(refresh: true);
+  }
+
   void setPriorityFilter(String priority) {
     _selectedPriority = priority;
     fetchLeads(refresh: true);
+  }
+
+  void setAssignedToFilter(int? empId) {
+    _assignedToFilter = empId;
+    fetchLeads(refresh: true);
+  }
+
+  void setIsReinquiryFilter(bool? reinquiry) {
+    _isReinquiryFilter = reinquiry;
+    fetchLeads(refresh: true);
+  }
+
+  void setDateFilter(String? date) {
+    _dateFilter = date;
+    fetchLeads(refresh: true);
+  }
+
+  void clearFilters() {
+    _selectedStatus = 'ALL';
+    _selectedSource = 'ALL';
+    _selectedPriority = 'ALL';
+    _assignedToFilter = null;
+    _isReinquiryFilter = null;
+    _dateFilter = null;
+    _startDate = null;
+    _endDate = null;
+    _searchQuery = null;
+    fetchLeads(refresh: true);
+    fetchLeadStats();
+  }
+
+  Future<List<SupportManagerOption>> getSupportManagers() async {
+    return _repository.getSupportManagers();
+  }
+
+  Future<List<ProformaOption>> getLeadProformas(int leadId) async {
+    return _repository.getLeadProformas(leadId);
+  }
+
+  Future<bool> markDealWon(int leadId, Map<String, dynamic> payload) async {
+    try {
+      await _repository.markLeadWon(leadId, payload);
+      final index = _leads.indexWhere((l) => l.id == leadId);
+      if (index != -1) {
+        _leads[index] = _leads[index].copyWith(status: 'WON');
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _errorMessage = e.toString().replaceAll('ApiException: ', '');
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<void> fetchEmployees() async {

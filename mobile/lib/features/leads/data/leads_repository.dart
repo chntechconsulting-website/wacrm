@@ -15,6 +15,11 @@ class LeadsRepository {
     String? status,
     String? source,
     String? priority,
+    int? assignedTo,
+    bool? isReinquiry,
+    String? dateFilter,
+    String? startDate,
+    String? endDate,
   }) async {
     final effectivePage = page ?? ((limit > 0 ? (skip ~/ limit) : 0) + 1);
     final effectivePerPage = perPage ?? limit;
@@ -26,9 +31,34 @@ class LeadsRepository {
       'per_page': effectivePerPage,
     };
     if (search != null && search.isNotEmpty) params['search'] = search;
-    if (status != null && status.isNotEmpty && status != 'ALL') params['status'] = status;
-    if (source != null && source.isNotEmpty && source != 'ALL') params['source'] = source;
-    if (priority != null && priority.isNotEmpty && priority != 'ALL') params['priority'] = priority;
+    if (status != null && status.isNotEmpty && status != 'ALL') {
+      params['status_filter'] = status;
+      params['status'] = status;
+    }
+    if (source != null && source.isNotEmpty && source != 'ALL') {
+      params['source_filter'] = source;
+      params['source'] = source;
+    }
+    if (priority != null && priority.isNotEmpty && priority != 'ALL') {
+      params['priority_filter'] = priority;
+      params['priority'] = priority;
+    }
+    if (assignedTo != null) {
+      params['assigned_to_filter'] = assignedTo;
+      params['assigned_to'] = assignedTo;
+    }
+    if (isReinquiry != null) {
+      params['is_reinquiry_filter'] = isReinquiry;
+    }
+    if (dateFilter != null && dateFilter.isNotEmpty && dateFilter != 'ALL') {
+      params['date_filter'] = dateFilter;
+    }
+    if (startDate != null && startDate.isNotEmpty) {
+      params['start_date'] = startDate;
+    }
+    if (endDate != null && endDate.isNotEmpty) {
+      params['end_date'] = endDate;
+    }
 
     final response = await _client.get(ApiEndpoints.leads, queryParameters: params);
     if (response is List) {
@@ -43,6 +73,55 @@ class LeadsRepository {
       }
     }
     return [];
+  }
+
+  Future<Map<String, int>> getLeadStats({bool onlyMy = false}) async {
+    try {
+      final response = await _client.get(
+        ApiEndpoints.leadStats,
+        queryParameters: onlyMy ? {'only_my': true} : null,
+      );
+      if (response is Map) {
+        return {
+          'allLeads': (response['allLeads'] as num?)?.toInt() ?? 0,
+          'metaLeads': (response['metaLeads'] as num?)?.toInt() ?? 0,
+          'websiteLeads': (response['websiteLeads'] as num?)?.toInt() ?? 0,
+          'manualLeads': (response['manualLeads'] as num?)?.toInt() ?? 0,
+          'excelLeads': (response['excelLeads'] as num?)?.toInt() ?? 0,
+          'reinquiryLeads': (response['reinquiryLeads'] as num?)?.toInt() ?? 0,
+          'newLeads': (response['newLeads'] as num?)?.toInt() ?? 0,
+          'inProgressLeads': (response['inProgressLeads'] as num?)?.toInt() ?? 0,
+          'hotLeads': (response['hotLeads'] as num?)?.toInt() ?? 0,
+          'wonLeads': (response['wonLeads'] as num?)?.toInt() ?? 0,
+          'myLeads': (response['myLeads'] as num?)?.toInt() ?? 0,
+        };
+      }
+    } catch (_) {}
+    return {};
+  }
+
+  Future<List<SupportManagerOption>> getSupportManagers() async {
+    final response = await _client.get(ApiEndpoints.supportManagers);
+    if (response is List) {
+      return response.map((json) => SupportManagerOption.fromJson(json)).toList();
+    }
+    return [];
+  }
+
+  Future<List<ProformaOption>> getLeadProformas(int leadId) async {
+    final response = await _client.get(ApiEndpoints.leadProformas(leadId));
+    if (response is List) {
+      return response.map((json) => ProformaOption.fromJson(json)).toList();
+    }
+    return [];
+  }
+
+  Future<dynamic> markLeadWon(int leadId, Map<String, dynamic> payload) async {
+    final response = await _client.post(
+      ApiEndpoints.leadWon(leadId),
+      body: payload,
+    );
+    return response;
   }
 
   Future<LeadModel> getLeadById(int id) async {

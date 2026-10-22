@@ -4,10 +4,12 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/widgets/wacrm_wave_nav_bar.dart';
 import '../../activities/presentation/activities_screen.dart';
 import '../../field_visits/presentation/field_visit_form_screen.dart';
+import '../../followups/presentation/followup_create_edit_dialog.dart';
 import '../../quotations/presentation/quotations_list_screen.dart';
 import '../../whatsapp/data/whatsapp_repository.dart';
 import '../models/lead_model.dart';
 import '../providers/leads_provider.dart';
+import 'deal_won_dialog.dart';
 import 'lead_assign_dialog.dart';
 import 'lead_create_edit_screen.dart';
 import 'lead_status_dialog.dart';
@@ -144,6 +146,50 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
     }
   }
 
+  Future<void> _updateLeadStatus() async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) => LeadStatusDialog(lead: _lead),
+    );
+    if (changed == true && mounted) {
+      context.read<LeadsProvider>().fetchLeads(refresh: true);
+      context.read<LeadsProvider>().fetchLeadStats();
+      _fetchLatestLead();
+    }
+  }
+
+  Future<void> _markDealWon() async {
+    final won = await DealWonDialog.show(context, _lead);
+    if (won == true && mounted) {
+      context.read<LeadsProvider>().fetchLeads(refresh: true);
+      context.read<LeadsProvider>().fetchLeadStats();
+      _fetchLatestLead();
+    }
+  }
+
+  Future<void> _scheduleFollowup() async {
+    final created = await FollowupCreateEditDialog.show(
+      context,
+      preselectedLeadId: _lead.id,
+      preselectedLeadName: _lead.company ?? _lead.name,
+    );
+    if (created == true && mounted) {
+      context.read<LeadsProvider>().fetchLeads(refresh: true);
+      _fetchLatestLead();
+    }
+  }
+
+  Future<void> _fetchLatestLead() async {
+    try {
+      final updated = await context.read<LeadsProvider>().repository.getLeadById(_lead.id);
+      if (mounted) {
+        setState(() {
+          _lead = updated;
+        });
+      }
+    } catch (_) {}
+  }
+
   void _showMoreActionsSheet() {
     showModalBottomSheet(
       context: context,
@@ -166,6 +212,23 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
               ),
               const SizedBox(height: 16),
               ListTile(
+                leading: const Icon(Icons.emoji_events_rounded, color: Color(0xFF10B981)),
+                title: const Text('Close Deal as WON', style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF10B981))),
+                subtitle: const Text('Complete support handoff and proforma invoice'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _markDealWon();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.calendar_month_rounded, color: Color(0xFFF59E0B)),
+                title: const Text('Schedule Follow-up', style: TextStyle(fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _scheduleFollowup();
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.add_location_alt_rounded, color: Color(0xFF0284C7)),
                 title: const Text('Record Field Visit', style: TextStyle(fontWeight: FontWeight.w600)),
                 onTap: () async {
@@ -182,7 +245,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.person_add_alt_rounded, color: Color(0xFFF59E0B)),
+                leading: const Icon(Icons.person_add_alt_rounded, color: Color(0xFF6366F1)),
                 title: const Text('Assign Executive', style: TextStyle(fontWeight: FontWeight.w600)),
                 onTap: () {
                   Navigator.pop(ctx);
@@ -208,7 +271,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                       builder: (_) => LeadCreateEditScreen(leadToEdit: _lead),
                     ),
                   );
-                  if (updated == true && mounted) setState(() {});
+                  if (updated == true && mounted) {
+                    _fetchLatestLead();
+                  }
                 },
               ),
             ],
@@ -802,7 +867,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
 
         // Dropdown Container
         GestureDetector(
-          onTap: () => LeadStatusDialog.show(context, _lead),
+          onTap: _updateLeadStatus,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
@@ -837,39 +902,78 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
           ),
         ),
 
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
 
-        // Full-width Crimson Red 'Update Status' Pill Button
-        SizedBox(
-          width: double.infinity,
-          height: 48,
-          child: ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE5252A),
-              foregroundColor: Colors.white,
-              elevation: 3,
-              shadowColor: const Color(0xFFE5252A).withValues(alpha: 0.35),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-            ),
-            onPressed: () => LeadStatusDialog.show(context, _lead),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.sync_rounded, size: 18),
-                SizedBox(width: 8),
-                Text(
-                  'Update Status',
-                  style: TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
+        // Action Buttons Row: 'Update Status' & 'Close Deal WON'
+        Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: 48,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFE5252A),
+                    foregroundColor: Colors.white,
+                    elevation: 3,
+                    shadowColor: const Color(0xFFE5252A).withValues(alpha: 0.35),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                  ),
+                  onPressed: _updateLeadStatus,
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.sync_rounded, size: 18),
+                      SizedBox(width: 6),
+                      Text(
+                        'Update Status',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
+            if (_lead.status.toUpperCase() != 'WON' && _lead.status.toUpperCase() != 'CONVERTED') ...[
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 48,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    elevation: 3,
+                    shadowColor: const Color(0xFF10B981).withValues(alpha: 0.35),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                  ),
+                  onPressed: _markDealWon,
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.emoji_events_rounded, size: 18),
+                      SizedBox(width: 6),
+                      Text(
+                        'Mark WON',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ],
     );

@@ -188,8 +188,13 @@ def build_lead_out(lead: Lead) -> LeadOut:
 def list_leads(
     search: Optional[str] = None,
     status_filter: Optional[str] = None,
+    status: Optional[str] = None,
     source_filter: Optional[str] = None,
+    source: Optional[str] = None,
+    priority_filter: Optional[str] = None,
+    priority: Optional[str] = None,
     assigned_to_filter: Optional[int] = None,
+    assigned_to: Optional[int] = None,
     is_reinquiry_filter: Optional[bool] = None,
     sort_by: Optional[str] = "created_at",
     sort_order: Optional[str] = "desc",
@@ -218,6 +223,8 @@ def list_leads(
             detail="Access forbidden: You do not have permission to view leads."
         )
 
+    eff_assigned_to = assigned_to_filter if assigned_to_filter is not None else assigned_to
+
     scope = get_user_view_scope(current_user, "leads", db)
     if scope == "none":
         return {"total": 0, "items": []}
@@ -228,15 +235,15 @@ def list_leads(
             return {"total": 0, "items": []}
     elif scope == "team":
         team_ids = get_team_employee_ids_from_user(current_user, db)
-        if assigned_to_filter:
-            if assigned_to_filter not in team_ids and current_user.role != "ADMIN":
+        if eff_assigned_to:
+            if eff_assigned_to not in team_ids and current_user.role != "ADMIN":
                 return {"total": 0, "items": []}
-            query = query.filter(Lead.assigned_to == assigned_to_filter)
+            query = query.filter(Lead.assigned_to == eff_assigned_to)
         else:
             query = query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
     else:  # "department" or "company"
-        if assigned_to_filter:
-            query = query.filter(Lead.assigned_to == assigned_to_filter)
+        if eff_assigned_to:
+            query = query.filter(Lead.assigned_to == eff_assigned_to)
 
     if search:
         search_fmt = f"%{search}%"
@@ -251,18 +258,30 @@ def list_leads(
             )
         )
 
-    if status_filter:
-        st_clean = status_filter.strip().upper()
+    eff_status = status_filter or status
+    if eff_status and eff_status.upper() != "ALL":
+        st_clean = eff_status.strip().upper()
         if st_clean in ["RE-INQUIRY", "REINQUIRY"]:
             query = query.filter(or_(Lead.status == "RE-INQUIRY", Lead.is_reinquiry == True))
+        elif st_clean in ["NEW", "NEW LEAD", "NEW_LEAD"]:
+            query = query.filter(or_(Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "NEW_LEAD"))
+        elif st_clean in ["IN_PROGRESS", "IN PROGRESS"]:
+            query = query.filter(or_(Lead.status == "IN_PROGRESS", Lead.status == "IN PROGRESS", Lead.status == "CONTACTED", Lead.status == "INTERESTED"))
+        elif st_clean in ["WON", "CONVERTED"]:
+            query = query.filter(or_(Lead.status == "WON", Lead.status == "CONVERTED"))
+        elif st_clean in ["FOLLOW-UP", "FOLLOW_UP"]:
+            query = query.filter(or_(Lead.status == "FOLLOW-UP", Lead.status == "FOLLOW_UP"))
+        elif st_clean in ["DEMO", "MEETING", "DEMO / MEETING", "DEMO/MEETING"]:
+            query = query.filter(or_(Lead.status == "DEMO / MEETING", Lead.status == "DEMO", Lead.status == "MEETING"))
         else:
-            query = query.filter(Lead.status == status_filter)
+            query = query.filter(Lead.status.ilike(eff_status.strip()))
 
     if is_reinquiry_filter is not None:
         query = query.filter(Lead.is_reinquiry == is_reinquiry_filter)
 
-    if source_filter:
-        src_upper = source_filter.strip().upper()
+    eff_source = source_filter or source
+    if eff_source and eff_source.upper() != "ALL":
+        src_upper = eff_source.strip().upper()
         if src_upper in ["META", "META ADS", "META_ADS"]:
             query = query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta"))
         elif src_upper in ["WEBSITE", "WEB"]:
@@ -272,7 +291,19 @@ def list_leads(
         elif src_upper in ["EXCEL", "IMPORT"]:
             query = query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel"))
         else:
-            query = query.filter(Lead.source.ilike(source_filter))
+            query = query.filter(Lead.source.ilike(eff_source))
+
+    eff_priority = priority_filter or priority
+    if eff_priority and eff_priority.upper() != "ALL":
+        p_clean = eff_priority.strip().upper()
+        if p_clean in ["HOT", "HIGH"]:
+            query = query.filter(or_(Lead.priority.ilike("HOT"), Lead.priority.ilike("HIGH"), Lead.rating.ilike("HOT")))
+        elif p_clean in ["WARM", "MEDIUM"]:
+            query = query.filter(or_(Lead.priority.ilike("WARM"), Lead.priority.ilike("MEDIUM"), Lead.rating.ilike("WARM")))
+        elif p_clean in ["COLD", "LOW"]:
+            query = query.filter(or_(Lead.priority.ilike("COLD"), Lead.priority.ilike("LOW"), Lead.rating.ilike("COLD")))
+        else:
+            query = query.filter(or_(Lead.priority.ilike(eff_priority.strip()), Lead.rating.ilike(eff_priority.strip())))
 
     # Lead Received Date / Time Filtering (Exact IST Date or Date Range)
     if date_filter:
@@ -342,6 +373,10 @@ def get_leads_stats(
     manual_count = base_query.filter(or_(Lead.source == "MANUAL", Lead.source == "Manual")).count()
     excel_count = base_query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel")).count()
     reinquiry_count = base_query.filter(Lead.is_reinquiry == True).count()
+    new_count = base_query.filter(or_(Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "New")).count()
+    in_progress_count = base_query.filter(or_(Lead.status == "IN_PROGRESS", Lead.status == "IN PROGRESS", Lead.status == "CONTACTED", Lead.status == "INTERESTED")).count()
+    hot_count = base_query.filter(or_(Lead.rating.ilike("Hot"), Lead.priority.ilike("High"), Lead.priority.ilike("Hot"))).count()
+    won_count = base_query.filter(or_(Lead.status == "WON", Lead.status == "CONVERTED", Lead.status == "Won")).count()
 
     my_count = 0
     if current_emp:
@@ -368,6 +403,10 @@ def get_leads_stats(
         "manualLeads": manual_count,
         "excelLeads": excel_count,
         "reinquiryLeads": reinquiry_count,
+        "newLeads": new_count,
+        "inProgressLeads": in_progress_count,
+        "hotLeads": hot_count,
+        "wonLeads": won_count,
         "myLeads": my_count,
         "callLogs": call_logs_count,
         "followups": followups_count

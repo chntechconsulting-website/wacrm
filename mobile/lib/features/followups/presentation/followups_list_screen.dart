@@ -22,6 +22,8 @@ class FollowupsListScreen extends StatefulWidget {
 }
 
 class _FollowupsListScreenState extends State<FollowupsListScreen> {
+  final _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -30,6 +32,12 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
       p.fetchFollowups();
       p.fetchActiveReminders();
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _callNumber(String phone) async {
@@ -88,17 +96,74 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
       ),
       body: Column(
         children: [
-          // Filter Tabs
+          // Search & Filter Header
           Container(
             color: AppColors.card,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: Column(
               children: [
-                _buildFilterChip('Pending', provider.statusFilter == 'Pending', () => provider.setFilter('Pending')),
-                const SizedBox(width: 8),
-                _buildFilterChip('Completed', provider.statusFilter == 'Completed', () => provider.setFilter('Completed')),
-                const SizedBox(width: 8),
-                _buildFilterChip('All', provider.statusFilter == 'ALL', () => provider.setFilter('ALL')),
+                // Search Bar
+                Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search client, phone, notes...',
+                      hintStyle: const TextStyle(fontSize: 13, color: AppColors.textLight),
+                      prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppColors.textLight),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear_rounded, size: 18),
+                              onPressed: () {
+                                _searchController.clear();
+                                provider.search('');
+                              },
+                            )
+                          : null,
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    onChanged: (val) => provider.search(val),
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Status Chips
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _buildFilterChip('Pending', provider.statusFilter == 'Pending', () => provider.setFilter('Pending')),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('Completed', provider.statusFilter == 'Completed', () => provider.setFilter('Completed')),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('Cancelled', provider.statusFilter == 'Cancelled', () => provider.setFilter('Cancelled')),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('All Statuses', provider.statusFilter == 'ALL', () => provider.setFilter('ALL')),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+
+                // Due Date Chips
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _buildFilterChip('All Dates', provider.dateFilter == 'ALL', () => provider.setDateFilter('ALL')),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('Today', provider.dateFilter == 'today', () => provider.setDateFilter('today')),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('Upcoming', provider.dateFilter == 'upcoming', () => provider.setDateFilter('upcoming')),
+                      const SizedBox(width: 8),
+                      _buildFilterChip('Overdue', provider.dateFilter == 'overdue', () => provider.setDateFilter('overdue')),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -113,20 +178,48 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.notifications_active_rounded, color: Color(0xFFD97706), size: 22),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'You have ${reminders.length} due or upcoming follow-up reminder(s).',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF92400E),
+                  Row(
+                    children: [
+                      const Icon(Icons.notifications_active_rounded, color: Color(0xFFD97706), size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${reminders.length} Due / Upcoming Reminder(s)',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF92400E),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
+                  const SizedBox(height: 8),
+                  ...reminders.take(2).map((r) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 4.0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '• ${r.leadName} (${r.followupDate} ${r.followupTime})',
+                              style: const TextStyle(fontSize: 12, color: Color(0xFF78350F), fontWeight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          TextButton(
+                            style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(48, 24)),
+                            onPressed: () => provider.dismissReminder(r.id),
+                            child: const Text('Dismiss', style: TextStyle(fontSize: 11, color: Color(0xFFB45309))),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
                 ],
               ),
             ),
@@ -143,10 +236,8 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
                       )
                     : followups.isEmpty
                         ? EmptyState(
-                            title: 'No Follow-ups',
-                            subtitle: provider.statusFilter == 'Pending'
-                                ? 'No pending follow-ups scheduled.'
-                                : 'No follow-ups found in this filter.',
+                            title: 'No Follow-ups Found',
+                            subtitle: 'No follow-up tasks match your selected filter.',
                             pingoPose: PingoPoses.salute,
                             actionLabel: 'Schedule Now',
                             onAction: () => FollowupCreateEditDialog.show(context),
@@ -165,70 +256,97 @@ class _FollowupsListScreenState extends State<FollowupsListScreen> {
                                 final f = followups[index];
                                 final isDone = f.status == 'Completed';
 
-                                return WacrmCard(
-                                  padding: const EdgeInsets.all(14),
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      // Checkbox for completion
-                                      SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: Checkbox(
-                                          value: isDone,
-                                          activeColor: AppColors.success,
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                                          onChanged: (_) => _toggleCompleted(f),
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(16),
+                                  onTap: () {
+                                    FollowupCreateEditDialog.show(
+                                      context,
+                                      followupToEdit: f,
+                                    );
+                                  },
+                                  child: WacrmCard(
+                                    padding: const EdgeInsets.all(14),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        // Checkbox for completion
+                                        SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: Checkbox(
+                                            value: isDone,
+                                            activeColor: AppColors.success,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                            onChanged: (_) => _toggleCompleted(f),
+                                          ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    f.leadName,
-                                                    style: TextStyle(
-                                                      fontSize: 14,
-                                                      fontWeight: FontWeight.w700,
-                                                      color: isDone ? AppColors.textLight : AppColors.textMain,
-                                                      decoration: isDone ? TextDecoration.lineThrough : null,
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      f.leadName,
+                                                      style: TextStyle(
+                                                        fontSize: 14,
+                                                        fontWeight: FontWeight.w700,
+                                                        color: isDone ? AppColors.textLight : AppColors.textMain,
+                                                        decoration: isDone ? TextDecoration.lineThrough : null,
+                                                      ),
                                                     ),
                                                   ),
-                                                ),
-                                                WacrmBadge.priority(f.priority),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Row(
-                                              children: [
-                                                const Icon(Icons.calendar_today_outlined, size: 12, color: AppColors.textLight),
-                                                const SizedBox(width: 4),
-                                                Text(
-                                                  '${f.followupDate} at ${f.followupTime}',
-                                                  style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
-                                                ),
-                                              ],
-                                            ),
-                                            if (f.notes != null && f.notes!.isNotEmpty) ...[
-                                              const SizedBox(height: 6),
-                                              Text(
-                                                f.notes!,
-                                                style: const TextStyle(fontSize: 12, color: AppColors.textMain),
+                                                  WacrmBadge.status(f.status),
+                                                  const SizedBox(width: 6),
+                                                  WacrmBadge.priority(f.priority),
+                                                ],
                                               ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                children: [
+                                                  const Icon(Icons.calendar_today_outlined, size: 12, color: AppColors.textLight),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    '${f.followupDate} at ${f.followupTime}',
+                                                    style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                                                  ),
+                                                ],
+                                              ),
+                                              if (f.notes != null && f.notes!.isNotEmpty) ...[
+                                                const SizedBox(height: 6),
+                                                Text(
+                                                  f.notes!,
+                                                  style: const TextStyle(fontSize: 12, color: AppColors.textMain),
+                                                ),
+                                              ],
                                             ],
+                                          ),
+                                        ),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(Icons.edit_calendar_rounded, color: Color(0xFF2563EB), size: 20),
+                                              tooltip: 'Reschedule / Edit',
+                                              onPressed: () {
+                                                FollowupCreateEditDialog.show(
+                                                  context,
+                                                  followupToEdit: f,
+                                                );
+                                              },
+                                            ),
+                                            if (f.leadPhone.isNotEmpty)
+                                              IconButton(
+                                                icon: const Icon(Icons.phone_rounded, color: AppColors.primary, size: 20),
+                                                tooltip: 'Call Client',
+                                                onPressed: () => _callNumber(f.leadPhone),
+                                              ),
                                           ],
                                         ),
-                                      ),
-                                      if (f.leadPhone.isNotEmpty)
-                                        IconButton(
-                                          icon: const Icon(Icons.phone_rounded, color: AppColors.primary, size: 20),
-                                          onPressed: () => _callNumber(f.leadPhone),
-                                        ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 );
                               },

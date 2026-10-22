@@ -7,30 +7,35 @@ import '../../../core/widgets/pingo_popup_dialog.dart';
 import '../../../core/widgets/wacrm_button.dart';
 import '../../../core/widgets/wacrm_text_field.dart';
 import '../../leads/providers/leads_provider.dart';
+import '../models/followup_model.dart';
 import '../providers/followups_provider.dart';
 
 class FollowupCreateEditDialog extends StatefulWidget {
   final int? preselectedLeadId;
   final String? preselectedLeadName;
+  final FollowupModel? followupToEdit;
 
   const FollowupCreateEditDialog({
     super.key,
     this.preselectedLeadId,
     this.preselectedLeadName,
+    this.followupToEdit,
   });
 
-  static Future<void> show(
+  static Future<bool?> show(
     BuildContext context, {
     int? preselectedLeadId,
     String? preselectedLeadName,
+    FollowupModel? followupToEdit,
   }) {
-    return showModalBottomSheet(
+    return showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => FollowupCreateEditDialog(
         preselectedLeadId: preselectedLeadId,
         preselectedLeadName: preselectedLeadName,
+        followupToEdit: followupToEdit,
       ),
     );
   }
@@ -45,15 +50,29 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
   TimeOfDay _selectedTime = const TimeOfDay(hour: 10, minute: 0);
   String _priority = 'MEDIUM';
+  String _status = 'Pending';
   final _notesController = TextEditingController();
   bool _isSaving = false;
 
   final List<String> _priorities = ['LOW', 'MEDIUM', 'HIGH'];
+  final List<String> _statuses = ['Pending', 'Completed', 'Cancelled'];
 
   @override
   void initState() {
     super.initState();
-    _leadId = widget.preselectedLeadId;
+    if (widget.followupToEdit != null) {
+      final f = widget.followupToEdit!;
+      _leadId = f.leadId;
+      try {
+        _selectedDate = DateTime.parse(f.followupDate);
+      } catch (_) {}
+      _priority = f.priority;
+      _status = f.status;
+      _notesController.text = f.notes ?? '';
+    } else {
+      _leadId = widget.preselectedLeadId;
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<LeadsProvider>().fetchLeads();
     });
@@ -69,7 +88,7 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
     final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
-      firstDate: DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 30)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
     if (picked != null) {
@@ -88,6 +107,8 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
   }
 
   void _handleSave() async {
+    if (_isSaving) return;
+
     if (_leadId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a lead to schedule a follow-up for.')),
@@ -101,31 +122,46 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
     final dateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
     final timeStr = _selectedTime.format(context);
 
+    final isEdit = widget.followupToEdit != null;
+
     final payload = {
       'lead_id': _leadId,
       'followup_date': dateStr,
       'followup_time': timeStr,
       'priority': _priority,
-      'status': 'Pending',
-      if (_notesController.text.trim().isNotEmpty) 'notes': _notesController.text.trim(),
+      'status': _status,
+      'notes': _notesController.text.trim(),
     };
 
-    final success = await followupsProvider.createFollowup(payload);
+    final bool success;
+    if (isEdit) {
+      success = await followupsProvider.updateFollowup(widget.followupToEdit!.id, payload);
+    } else {
+      success = await followupsProvider.createFollowup(payload);
+    }
+
     setState(() => _isSaving = false);
 
     if (mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context, success);
       if (success) {
+        // Also refresh LeadsProvider so lead details reflect the updated schedule
+        try {
+          context.read<LeadsProvider>().fetchLeads(refresh: true);
+        } catch (_) {}
+
         PingoPopupDialog.show(
           context,
-          title: 'Follow-up Scheduled',
-          subtitle: 'Scheduled for $dateStr at $timeStr.',
-          badge: 'SCHEDULED',
+          title: isEdit ? 'Follow-up Updated' : 'Follow-up Scheduled',
+          subtitle: '$statusText for $dateStr at $timeStr.',
+          badge: isEdit ? 'UPDATED' : 'SCHEDULED',
           pose: PingoPoses.pointRight,
         );
       }
     }
   }
+
+  String get statusText => _status == 'Completed' ? 'Completed interaction' : 'Scheduled';
 
   @override
   Widget build(BuildContext context) {
@@ -157,13 +193,13 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Row(
+                Row(
                   children: [
-                    Icon(Icons.calendar_month_rounded, color: AppColors.primary, size: 22),
-                    SizedBox(width: 8),
+                    const Icon(Icons.calendar_month_rounded, color: AppColors.primary, size: 22),
+                    const SizedBox(width: 8),
                     Text(
-                      'Schedule Follow-up',
-                      style: TextStyle(
+                      widget.followupToEdit != null ? 'Edit / Reschedule Follow-up' : 'Schedule Follow-up',
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
                         color: AppColors.textMain,
@@ -174,7 +210,14 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
                 const SizedBox(height: 16),
 
                 // Lead Selection
-                if (widget.preselectedLeadName != null)
+                if (widget.followupToEdit != null)
+                  WacrmTextField(
+                    label: 'Target Lead',
+                    hintText: widget.followupToEdit!.leadName,
+                    readOnly: true,
+                    prefixIcon: Icons.person_outline_rounded,
+                  )
+                else if (widget.preselectedLeadName != null)
                   WacrmTextField(
                     label: 'Target Lead',
                     hintText: widget.preselectedLeadName,
@@ -279,24 +322,54 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
                 ),
                 const SizedBox(height: 14),
 
-                // Priority Selection
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                // Priority & Status (if edit)
+                Row(
                   children: [
-                    const Text(
-                      'Priority',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textMain),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Priority',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textMain),
+                          ),
+                          const SizedBox(height: 6),
+                          DropdownButtonFormField<String>(
+                            value: _priority,
+                            items: _priorities.map((p) {
+                              return DropdownMenuItem(value: p, child: Text(p));
+                            }).toList(),
+                            onChanged: (val) {
+                              if (val != null) setState(() => _priority = val);
+                            },
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 6),
-                    DropdownButtonFormField<String>(
-                      value: _priority,
-                      items: _priorities.map((p) {
-                        return DropdownMenuItem(value: p, child: Text(p));
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) setState(() => _priority = val);
-                      },
-                    ),
+                    if (widget.followupToEdit != null) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Status',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textMain),
+                            ),
+                            const SizedBox(height: 6),
+                            DropdownButtonFormField<String>(
+                              value: _status,
+                              items: _statuses.map((s) {
+                                return DropdownMenuItem(value: s, child: Text(s));
+                              }).toList(),
+                              onChanged: (val) {
+                                if (val != null) setState(() => _status = val);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -310,7 +383,7 @@ class _FollowupCreateEditDialogState extends State<FollowupCreateEditDialog> {
                 const SizedBox(height: 22),
 
                 WacrmButton(
-                  text: 'Confirm Schedule',
+                  text: widget.followupToEdit != null ? 'Save Changes' : 'Confirm Schedule',
                   isLoading: _isSaving,
                   icon: Icons.check_rounded,
                   onPressed: _handleSave,

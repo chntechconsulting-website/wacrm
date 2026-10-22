@@ -8,9 +8,11 @@ import '../../../core/widgets/pingo_mascot_widget.dart';
 import '../../../core/widgets/wacrm_drawer.dart';
 import '../../auth/presentation/profile_screen.dart';
 import '../../auth/providers/auth_provider.dart';
+import '../../followups/presentation/followup_create_edit_dialog.dart';
 import '../../notifications/presentation/notifications_screen.dart';
 import '../models/lead_model.dart';
 import '../providers/leads_provider.dart';
+import 'deal_won_dialog.dart';
 import 'lead_create_edit_screen.dart';
 import 'lead_detail_screen.dart';
 import 'lead_status_dialog.dart';
@@ -28,11 +30,11 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
   final _scrollController = ScrollController();
 
   final List<Map<String, dynamic>> _filterTabs = [
-    {'key': 'ALL', 'label': 'All Leads', 'defaultCount': 128},
-    {'key': 'NEW', 'label': 'New', 'defaultCount': 24},
-    {'key': 'IN_PROGRESS', 'label': 'In Progress', 'defaultCount': 56},
-    {'key': 'HOT', 'label': 'Hot', 'defaultCount': 28},
-    {'key': 'CONVERTED', 'label': 'Converted', 'defaultCount': 20},
+    {'key': 'ALL', 'label': 'All Leads', 'statKey': 'allLeads'},
+    {'key': 'NEW', 'label': 'New', 'statKey': 'newLeads'},
+    {'key': 'IN_PROGRESS', 'label': 'In Progress', 'statKey': 'inProgressLeads'},
+    {'key': 'HOT', 'label': 'Hot', 'statKey': 'hotLeads'},
+    {'key': 'WON', 'label': 'Won', 'statKey': 'wonLeads'},
   ];
 
   @override
@@ -40,7 +42,10 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
     super.initState();
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<LeadsProvider>().fetchLeads(refresh: true);
+      final p = context.read<LeadsProvider>();
+      p.fetchLeads(refresh: true);
+      p.fetchLeadStats();
+      p.fetchEmployees();
     });
   }
 
@@ -488,7 +493,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
             child: IconButton(
               icon: const Icon(Icons.tune_rounded, color: Colors.white, size: 20),
               onPressed: () {
-                _showPriorityFilterSheet(context, provider);
+                _showFilterSheet(context, provider);
               },
             ),
           ),
@@ -497,46 +502,350 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
     );
   }
 
-  void _showPriorityFilterSheet(BuildContext context, LeadsProvider provider) {
+  void _showFilterSheet(BuildContext context, LeadsProvider provider) {
+    String selectedStatus = provider.selectedStatus;
+    String selectedSource = provider.selectedSource;
+    String selectedPriority = provider.selectedPriority;
+    int? assignedTo = provider.assignedToFilter;
+    String? dateFilter = provider.dateFilter;
+
     showModalBottomSheet(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Filter by Priority',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                children: ['ALL', 'HOT', 'WARM', 'COLD'].map((p) {
-                  final isSel = provider.selectedPriority == p;
-                  return ChoiceChip(
-                    label: Text(p),
-                    selected: isSel,
-                    selectedColor: const Color(0xFF2563EB),
-                    labelStyle: TextStyle(
-                      color: isSel ? Colors.white : const Color(0xFF0F172A),
-                      fontWeight: FontWeight.w600,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Handle bar
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(top: 12, bottom: 8),
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                    onSelected: (_) {
-                      Navigator.pop(ctx);
-                      provider.setPriorityFilter(p);
-                    },
-                  );
-                }).toList(),
+                  ),
+
+                  // Header with Reset button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.tune_rounded, color: Color(0xFF2563EB), size: 22),
+                            SizedBox(width: 8),
+                            Text(
+                              'Filter Leads',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0F172A),
+                              ),
+                            ),
+                          ],
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            setSheetState(() {
+                              selectedStatus = 'ALL';
+                              selectedSource = 'ALL';
+                              selectedPriority = 'ALL';
+                              assignedTo = null;
+                              dateFilter = null;
+                            });
+                          },
+                          child: const Text(
+                            'Reset All',
+                            style: TextStyle(
+                              color: Color(0xFFE5252A),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const Divider(height: 1),
+
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      children: [
+                        // 1. Status Filter
+                        const Text(
+                          'Lead Status',
+                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF334155)),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            'ALL',
+                            'NEW LEAD',
+                            'RE-INQUIRY',
+                            'CONTACTED',
+                            'INTERESTED',
+                            'QUALIFIED',
+                            'DEMO / MEETING',
+                            'PROPOSAL SENT',
+                            'NEGOTIATION',
+                            'FOLLOW-UP',
+                            'WON',
+                            'LOST',
+                          ].map((st) {
+                            final isSel = selectedStatus.toUpperCase() == st.toUpperCase() ||
+                                (st == 'ALL' && selectedStatus == 'ALL') ||
+                                (st == 'NEW LEAD' && selectedStatus == 'NEW') ||
+                                (st == 'WON' && selectedStatus == 'CONVERTED');
+                            return ChoiceChip(
+                              label: Text(st),
+                              selected: isSel,
+                              selectedColor: const Color(0xFFE5252A),
+                              backgroundColor: const Color(0xFFF1F5F9),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : const Color(0xFF334155),
+                                fontSize: 11.5,
+                                fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(
+                                  color: isSel ? const Color(0xFFE5252A) : const Color(0xFFE2E8F0),
+                                ),
+                              ),
+                              onSelected: (_) {
+                                setSheetState(() => selectedStatus = st);
+                              },
+                            );
+                          }).toList(),
+                        ),
+
+                        const SizedBox(height: 18),
+
+                        // 2. Lead Source Filter
+                        const Text(
+                          'Lead Source',
+                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF334155)),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: ['ALL', 'META', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'].map((src) {
+                            final isSel = selectedSource.toUpperCase() == src.toUpperCase();
+                            return ChoiceChip(
+                              label: Text(src),
+                              selected: isSel,
+                              selectedColor: const Color(0xFF2563EB),
+                              backgroundColor: const Color(0xFFF1F5F9),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : const Color(0xFF334155),
+                                fontSize: 11.5,
+                                fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(
+                                  color: isSel ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0),
+                                ),
+                              ),
+                              onSelected: (_) {
+                                setSheetState(() => selectedSource = src);
+                              },
+                            );
+                          }).toList(),
+                        ),
+
+                        const SizedBox(height: 18),
+
+                        // 3. Priority / Rating Filter
+                        const Text(
+                          'Priority / Rating',
+                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF334155)),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: ['ALL', 'Hot', 'Warm', 'Cold'].map((pri) {
+                            final isSel = selectedPriority.toUpperCase() == pri.toUpperCase();
+                            return ChoiceChip(
+                              label: Text(pri),
+                              selected: isSel,
+                              selectedColor: const Color(0xFFF59E0B),
+                              backgroundColor: const Color(0xFFF1F5F9),
+                              labelStyle: TextStyle(
+                                color: isSel ? Colors.white : const Color(0xFF334155),
+                                fontSize: 11.5,
+                                fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(
+                                  color: isSel ? const Color(0xFFF59E0B) : const Color(0xFFE2E8F0),
+                                ),
+                              ),
+                              onSelected: (_) {
+                                setSheetState(() => selectedPriority = pri);
+                              },
+                            );
+                          }).toList(),
+                        ),
+
+                        const SizedBox(height: 18),
+
+                        // 4. Assigned Team Member Filter
+                        if (provider.employees.isNotEmpty) ...[
+                          const Text(
+                            'Assigned Team Member',
+                            style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF334155)),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFCBD5E1)),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<int?>(
+                                value: assignedTo,
+                                isExpanded: true,
+                                hint: const Text('All Team Members', style: TextStyle(fontSize: 13)),
+                                items: [
+                                  const DropdownMenuItem<int?>(
+                                    value: null,
+                                    child: Text('All Team Members', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                  ),
+                                  ...provider.employees.map((emp) => DropdownMenuItem<int?>(
+                                        value: emp.id,
+                                        child: Text(
+                                          '${emp.name} (${emp.role})',
+                                          style: const TextStyle(fontSize: 13),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      )),
+                                ],
+                                onChanged: (val) {
+                                  setSheetState(() => assignedTo = val);
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                        ],
+
+                        // 5. Date Received Filter
+                        const Text(
+                          'Lead Received Date',
+                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF334155)),
+                        ),
+                        const SizedBox(height: 8),
+                        InkWell(
+                          onTap: () async {
+                            final now = DateTime.now();
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: now,
+                              firstDate: DateTime(2020),
+                              lastDate: now.add(const Duration(days: 365)),
+                            );
+                            if (picked != null) {
+                              final formatted = "${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+                              setSheetState(() => dateFilter = formatted);
+                            }
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFCBD5E1)),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.calendar_today_rounded, size: 18, color: Color(0xFF64748B)),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    dateFilter ?? 'Any Date',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: dateFilter != null ? const Color(0xFF0F172A) : const Color(0xFF94A3B8),
+                                    ),
+                                  ),
+                                ),
+                                if (dateFilter != null)
+                                  GestureDetector(
+                                    onTap: () {
+                                      setSheetState(() => dateFilter = null);
+                                    },
+                                    child: const Icon(Icons.close_rounded, size: 18, color: Color(0xFF94A3B8)),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                    ),
+                  ),
+
+                  // Bottom Action Buttons
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          elevation: 2,
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          provider.setStatusFilter(selectedStatus);
+                          provider.setSourceFilter(selectedSource);
+                          provider.setPriorityFilter(selectedPriority);
+                          provider.setAssignedToFilter(assignedTo);
+                          provider.setDateFilter(dateFilter);
+                        },
+                        child: const Text(
+                          'Apply Filters',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -557,15 +866,21 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
           final tab = _filterTabs[index];
           final key = tab['key'] as String;
           final label = tab['label'] as String;
-          final defaultCount = tab['defaultCount'] as int;
+          final statKey = tab['statKey'] as String;
 
-          // Compute realistic counts from provider if leads loaded, otherwise default
-          final count = key == 'ALL'
-              ? (provider.leads.isNotEmpty ? provider.leads.length : defaultCount)
-              : provider.leads.where((l) => l.status.toUpperCase() == key).length;
-          final displayCount = count > 0 ? count : defaultCount;
+          final count = provider.leadStats[statKey] ??
+              (key == 'ALL'
+                  ? provider.leads.length
+                  : provider.leads.where((l) {
+                      final s = l.status.toUpperCase();
+                      if (key == 'NEW') return s.contains('NEW');
+                      if (key == 'IN_PROGRESS') return s.contains('PROGRESS') || s == 'CONTACTED' || s == 'INTERESTED';
+                      if (key == 'HOT') return (l.priority?.toUpperCase() == 'HOT' || l.priority?.toUpperCase() == 'HIGH' || l.rating?.toUpperCase() == 'HOT');
+                      if (key == 'WON') return s == 'WON' || s == 'CONVERTED';
+                      return s == key;
+                    }).length);
 
-          final isSelected = provider.selectedStatus == key;
+          final isSelected = provider.selectedStatus == key || (key == 'WON' && provider.selectedStatus == 'CONVERTED');
 
           return GestureDetector(
             onTap: () => provider.setStatusFilter(key),
@@ -614,7 +929,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Text(
-                            '$displayCount',
+                            '$count',
                             style: const TextStyle(
                               fontSize: 10.5,
                               fontWeight: FontWeight.w800,
@@ -636,7 +951,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
                           ),
                         ),
                         Text(
-                          '$displayCount',
+                          '$count',
                           style: const TextStyle(
                             fontSize: 10.5,
                             fontWeight: FontWeight.w700,
@@ -793,22 +1108,82 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
                       icon: const Icon(Icons.more_vert_rounded, size: 18, color: Color(0xFF94A3B8)),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
-                      onSelected: (val) {
+                      onSelected: (val) async {
                         if (val == 'status') {
-                          showDialog(
+                          final changed = await showDialog<bool>(
                             context: context,
                             builder: (_) => LeadStatusDialog(lead: lead),
                           );
+                          if (changed == true && mounted) {
+                            context.read<LeadsProvider>().fetchLeads(refresh: true);
+                            context.read<LeadsProvider>().fetchLeadStats();
+                          }
+                        } else if (val == 'won') {
+                          final won = await DealWonDialog.show(context, lead);
+                          if (won == true && mounted) {
+                            context.read<LeadsProvider>().fetchLeads(refresh: true);
+                            context.read<LeadsProvider>().fetchLeadStats();
+                          }
+                        } else if (val == 'followup') {
+                          final created = await FollowupCreateEditDialog.show(
+                            context,
+                            preselectedLeadId: lead.id,
+                            preselectedLeadName: lead.company ?? lead.name,
+                          );
+                          if (created == true && mounted) {
+                            context.read<LeadsProvider>().fetchLeads(refresh: true);
+                          }
                         } else if (val == 'edit') {
-                          Navigator.push(
+                          final edited = await Navigator.push<bool>(
                             context,
                             MaterialPageRoute(builder: (_) => LeadCreateEditScreen(leadToEdit: lead)),
                           );
+                          if (edited == true && mounted) {
+                            context.read<LeadsProvider>().fetchLeads(refresh: true);
+                          }
                         }
                       },
                       itemBuilder: (ctx) => [
-                        const PopupMenuItem(value: 'status', child: Text('Update Status')),
-                        const PopupMenuItem(value: 'edit', child: Text('Edit Lead')),
+                        const PopupMenuItem(
+                          value: 'status',
+                          child: Row(
+                            children: [
+                              Icon(Icons.flag_outlined, size: 16, color: Color(0xFF2563EB)),
+                              SizedBox(width: 8),
+                              Text('Update Status'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'won',
+                          child: Row(
+                            children: [
+                              Icon(Icons.emoji_events_outlined, size: 16, color: Color(0xFF10B981)),
+                              SizedBox(width: 8),
+                              Text('Close Deal as WON', style: TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.w600)),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'followup',
+                          child: Row(
+                            children: [
+                              Icon(Icons.calendar_month_outlined, size: 16, color: Color(0xFFF59E0B)),
+                              SizedBox(width: 8),
+                              Text('Schedule Follow-up'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'edit',
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit_outlined, size: 16, color: Color(0xFF64748B)),
+                              SizedBox(width: 8),
+                              Text('Edit Lead'),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ],

@@ -197,28 +197,34 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                RichText(
-                                  text: const TextSpan(
-                                    children: [
-                                      TextSpan(
-                                        text: 'WA!',
-                                        style: TextStyle(
-                                          fontSize: 32,
-                                          fontWeight: FontWeight.w900,
-                                          color: Color(0xFFE5252A),
-                                          letterSpacing: -0.5,
+                                Image.asset(
+                                  'assets/images/logo.png',
+                                  height: 38,
+                                  fit: BoxFit.contain,
+                                  alignment: Alignment.centerLeft,
+                                  errorBuilder: (ctx, err, stack) => RichText(
+                                    text: const TextSpan(
+                                      children: [
+                                        TextSpan(
+                                          text: 'WA!',
+                                          style: TextStyle(
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.w900,
+                                            color: Color(0xFFE5252A),
+                                            letterSpacing: -0.5,
+                                          ),
                                         ),
-                                      ),
-                                      TextSpan(
-                                        text: 'CRM',
-                                        style: TextStyle(
-                                          fontSize: 32,
-                                          fontWeight: FontWeight.w900,
-                                          color: Color(0xFF162A45),
-                                          letterSpacing: -0.5,
+                                        TextSpan(
+                                          text: 'CRM',
+                                          style: TextStyle(
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.w900,
+                                            color: Color(0xFF162A45),
+                                            letterSpacing: -0.5,
+                                          ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(height: 4),
@@ -613,10 +619,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
                       const SizedBox(height: 24),
 
-                      // Powered by CHN Branding
+                      // Powered by CHN Branding Badge
                       _buildPoweredByChn(),
 
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 36),
                     ],
                   ),
                 ),
@@ -684,24 +690,51 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildPoweredByChn() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text(
-          'Powered by',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF64748B),
-            letterSpacing: 0.2,
-          ),
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
-        CustomPaint(
-          size: const Size(70, 28),
-          painter: _ChnLogoPainter(),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Text(
+              'Powered by',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF64748B),
+                letterSpacing: 0.2,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Image.asset(
+              'assets/images/chn_logo.png',
+              height: 20,
+              fit: BoxFit.contain,
+              errorBuilder: (ctx, err, stack) => const Text(
+                'CHN',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF0065B3),
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -865,47 +898,6 @@ class _GoogleLogoPainter extends CustomPainter {
       center.dy + strokeWidth / 2,
     );
     canvas.drawRect(barRect, barPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// ==========================================
-// CHN STRIPED LOGO PAINTER
-// ==========================================
-
-class _ChnLogoPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final textPainter = TextPainter(
-      text: const TextSpan(
-        text: 'CHN',
-        style: TextStyle(
-          fontSize: 25,
-          fontWeight: FontWeight.w900,
-          color: Color(0xFF16427D),
-          letterSpacing: 2.2,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
-    final textOffset = Offset((size.width - textPainter.width) / 2, 0);
-    textPainter.paint(canvas, textOffset);
-
-    // Signature horizontal white cut stripes across bottom half of letters
-    final linePaint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 1.25;
-
-    final startY = size.height * 0.54;
-    final startX = textOffset.dx;
-    final endX = startX + textPainter.width;
-    for (int i = 0; i < 4; i++) {
-      final y = startY + i * 2.8;
-      canvas.drawLine(Offset(startX, y), Offset(endX, y), linePaint);
-    }
   }
 
   @override

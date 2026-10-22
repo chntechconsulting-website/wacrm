@@ -399,69 +399,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       }).toList(),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 16),
                 ],
-              ],
-
-              // Today's Activity Feed
-              if (stats != null && stats.todayActivities.isNotEmpty) ...[
-                const Text(
-                  'Recent Team Activity',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textMain,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                WacrmCard(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: stats.todayActivities.take(5).map((act) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6.0),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: AppColors.cardHover,
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Icon(
-                                act.icon == 'call' ? Icons.phone_in_talk_rounded : Icons.history_rounded,
-                                size: 16,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    act.title,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.textMain,
-                                    ),
-                                  ),
-                                  Text(
-                                    act.createdAt,
-                                    style: const TextStyle(fontSize: 10, color: AppColors.textLight),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            WacrmBadge.status(act.status),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
               ],
             ],
           ),

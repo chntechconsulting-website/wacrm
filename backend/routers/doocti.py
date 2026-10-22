@@ -353,6 +353,10 @@ def get_call_statuses():
 @router.api_route("/push-call-log/", methods=["GET", "POST"])
 @router.api_route("/push_call_log", methods=["GET", "POST"])
 @router.api_route("/push_call_log/", methods=["GET", "POST"])
+@router.api_route("/recording", methods=["GET", "POST"])
+@router.api_route("/recording/", methods=["GET", "POST"])
+@router.api_route("/recording-ready", methods=["GET", "POST"])
+@router.api_route("/recording-ready/", methods=["GET", "POST"])
 @router.api_route("/call-logs", methods=["GET", "POST"])
 @router.api_route("/call-logs/", methods=["GET", "POST"])
 @router.api_route("/cdr", methods=["GET", "POST"])
@@ -417,7 +421,10 @@ async def push_doocti_call_log(
     if call_id:
         call_id = str(call_id).strip()
 
-    call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or "OUTBOUND").upper()
+    # Pre-lookup existing log by provider_call_id for idempotent updates / delayed recording delivery
+    existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first() if call_id else None
+
+    call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or (existing_log.call_direction if existing_log else "OUTBOUND")).upper()
 
     # 2. Agent & Station extraction
     agent_name = str(
@@ -449,6 +456,7 @@ async def push_doocti_call_log(
             raw_data.get("phone_number") or 
             raw_data.get("from_number") or 
             raw_data.get("caller") or 
+            (existing_log.from_number if existing_log else "") or
             ""
         ).strip()
     else:
@@ -458,18 +466,21 @@ async def push_doocti_call_log(
             raw_data.get("to_number") or 
             raw_data.get("phone") or 
             raw_data.get("number") or 
+            (existing_log.to_number if existing_log else "") or
             ""
         ).strip()
     clean_target = clean_phone(customer_phone)
 
     # 3b. REJECT GHOST CALLS: Prevent self-extension loop, empty phone numbers, or invalid calls
-    if not clean_target or len(clean_target) < 6 or (clean_station and clean_target == clean_station) or clean_target in ["1282", "1283"]:
-        logger.warning(f"⚠️ [DOOCTI CDR] Ignored ghost/invalid call log payload: clean_target='{clean_target}', station='{station_str}', dir={call_dir}")
-        return {
-            "status": "ignored",
-            "message": "Ghost call rejected: Customer number is missing or equals agent extension",
-            "clean_target": clean_target
-        }
+    # ONLY reject if it is a NEW call (no existing CallLog matches this uniqueid/call_id)
+    if not existing_log:
+        if not clean_target or len(clean_target) < 6 or (clean_station and clean_target == clean_station) or clean_target in ["1282", "1283"]:
+            logger.warning(f"⚠️ [DOOCTI CDR] Ignored ghost/invalid call log payload: clean_target='{clean_target}', station='{station_str}', dir={call_dir}")
+            return {
+                "status": "ignored",
+                "message": "Ghost call rejected: Customer number is missing or equals agent extension",
+                "clean_target": clean_target
+            }
 
     # 4. Fallback call_id generation if none provided
     if not call_id:
@@ -478,6 +489,7 @@ async def push_doocti_call_log(
         call_id = f"doocti_{st_tag}_{ph_tag}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
 
     # 5. Duration parsing (seconds)
+    has_explicit_duration = any(raw_data.get(k) is not None for k in ["duration", "duration_seconds", "billsec"])
     dur_raw = (
         raw_data.get("duration") 
         if raw_data.get("duration") is not None 
@@ -490,11 +502,13 @@ async def push_doocti_call_log(
             dur_sec = int(float(str(dur_raw).strip()))
         except (ValueError, TypeError):
             dur_sec = 0
+    elif existing_log and existing_log.duration_seconds:
+        dur_sec = existing_log.duration_seconds
 
     # 6. Timestamp parsing (Indian Standard Time Asia/Kolkata)
-    started_at = parse_doocti_time(raw_data.get("start_time") or raw_data.get("started_at"))
-    answered_at = parse_doocti_time(raw_data.get("answer_time") or raw_data.get("answered_at"))
-    ended_at = parse_doocti_time(raw_data.get("end_time") or raw_data.get("ended_at"))
+    started_at = parse_doocti_time(raw_data.get("start_time") or raw_data.get("started_at")) or (existing_log.started_at if existing_log else None)
+    answered_at = parse_doocti_time(raw_data.get("answer_time") or raw_data.get("answered_at")) or (existing_log.answered_at if existing_log else None)
+    ended_at = parse_doocti_time(raw_data.get("end_time") or raw_data.get("ended_at")) or (existing_log.ended_at if existing_log else None)
     now_ist = get_ist_now()
     if not ended_at:
         ended_at = now_ist
@@ -510,13 +524,18 @@ async def push_doocti_call_log(
     ).strip() or None
 
     # 8. Call Status normalization
-    raw_status = str(
-        raw_data.get("status") or 
-        raw_data.get("call_status") or 
-        raw_data.get("disposition") or 
-        raw_data.get("call_state") or 
-        "COMPLETED"
-    ).strip()
+    has_explicit_status = any(raw_data.get(k) for k in ["status", "call_status", "disposition", "call_state"])
+    if not has_explicit_status and existing_log:
+        status_str = existing_log.call_status or "COMPLETED"
+        raw_status = status_str
+    else:
+        raw_status = str(
+            raw_data.get("status") or 
+            raw_data.get("call_status") or 
+            raw_data.get("disposition") or 
+            raw_data.get("call_state") or 
+            "COMPLETED"
+        ).strip()
     raw_upper = raw_status.upper()
 
     if any(k in raw_upper for k in ["RINGING", "RING", "INCOMING"]):
@@ -677,7 +696,8 @@ async def push_doocti_call_log(
     call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or "OUTBOUND").upper()
 
     # 12. Check if CallLog already exists for this call_id (handling idempotency / updates)
-    existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+    if not existing_log and call_id:
+        existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
 
     # Cross-provider duplicate detection: same phone + same time window (3 min) from any provider
     # Prevents double entries when Doocti AND Smartflo both fire webhooks for the same physical call
@@ -709,9 +729,12 @@ async def push_doocti_call_log(
     if existing_log:
         curr_status = (existing_log.call_status or "").upper()
         # State machine protection:
-        # 1. Do not revert an ANSWERED/CONNECTED call to RINGING/CONNECTING
-        # 2. Do not revert a COMPLETED call to prior/transient states
-        if curr_status in ["ANSWERED", "CONNECTED"] and status_str in ["RINGING", "CONNECTING"]:
+        # 1. If payload didn't explicitly specify status, preserve existing status
+        # 2. Do not revert an ANSWERED/CONNECTED call to RINGING/CONNECTING
+        # 3. Do not revert a COMPLETED call to prior/transient states
+        if not has_explicit_status:
+            logger.info(f"Preserving existing status '{curr_status}' (no explicit status in payload) for CallLog ID={existing_log.id}")
+        elif curr_status in ["ANSWERED", "CONNECTED"] and status_str in ["RINGING", "CONNECTING"]:
             logger.info(f"Preserving active status '{curr_status}', ignoring stale '{status_str}' for CallLog ID={existing_log.id}")
         elif curr_status == "COMPLETED" and status_str in ["RINGING", "CONNECTING", "ANSWERED", "MISSED", "FAILED"]:
             logger.info(f"Preserving COMPLETED status, ignoring subsequent '{status_str}' for CallLog ID={existing_log.id}")
@@ -737,13 +760,13 @@ async def push_doocti_call_log(
             existing_log.started_at = started_at
         if answered_at and not existing_log.answered_at:
             existing_log.answered_at = answered_at
-        elif status_str in ["ANSWERED", "CONNECTED"] and not existing_log.answered_at:
+        elif has_explicit_status and status_str in ["ANSWERED", "CONNECTED"] and not existing_log.answered_at:
             existing_log.answered_at = now_ist
-        elif status_str in ["NO_ANSWER", "MISSED", "BUSY", "FAILED"] and not existing_log.answered_at:
+        elif has_explicit_status and status_str in ["NO_ANSWER", "MISSED", "BUSY", "FAILED"] and not existing_log.answered_at:
             existing_log.answered_at = None
             existing_log.duration_seconds = 0
 
-        if status_str in ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"]:
+        if has_explicit_status and status_str in ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"]:
             existing_log.ended_at = ended_at or now_ist
 
         if combined_notes and combined_notes not in (existing_log.notes or ""):

@@ -5,13 +5,26 @@ import '../models/followup_model.dart';
 class FollowupsRepository {
   final ApiClient _client = ApiClient();
 
-  Future<List<FollowupModel>> getFollowups({String? status, String? dateFilter}) async {
+  Future<List<FollowupModel>> getFollowups({
+    String? status,
+    String? priority,
+    String? dateFilter,
+    String? search,
+  }) async {
     final params = <String, dynamic>{};
     if (status != null && status.isNotEmpty && status != 'ALL') {
+      params['status_filter'] = status;
       params['status'] = status;
+    }
+    if (priority != null && priority.isNotEmpty && priority != 'ALL') {
+      params['priority_filter'] = priority;
+      params['priority'] = priority;
     }
     if (dateFilter != null && dateFilter.isNotEmpty && dateFilter != 'ALL') {
       params['date_filter'] = dateFilter;
+    }
+    if (search != null && search.isNotEmpty) {
+      params['search'] = search;
     }
 
     final response = await _client.get(ApiEndpoints.followups, queryParameters: params);
