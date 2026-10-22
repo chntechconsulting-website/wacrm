@@ -65,11 +65,11 @@ class WacrmWaveNavBar extends StatelessWidget {
                   label: 'Calls',
                 ),
 
-                // 4. More
+                // 4. Settings
                 _buildNavItem(
                   index: 3,
-                  icon: Icons.grid_view_rounded,
-                  label: 'More',
+                  icon: currentIndex == 3 ? Icons.settings_rounded : Icons.settings_outlined,
+                  label: 'Settings',
                 ),
               ],
             ),

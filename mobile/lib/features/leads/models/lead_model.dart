@@ -1,14 +1,27 @@
 class LeadModel {
   final int id;
   final String name;
+  final String? firstName;
+  final String? lastName;
   final String phone;
+  final String? whatsappNumber;
   final String? email;
+  final String? designation;
   final String? company;
+  final String? industry;
+  final String? website;
+  final String? companySize;
+  final String? city;
+  final String? state;
   final String? source;
   final String status;
   final String? priority;
   final String? rating;
+  final String? campaignName;
   final String? requirement;
+  final String? requirementNotes;
+  final String? followupDate;
+  final String? followupTime;
   final int? assignedTo;
   final String? assignedToName;
   final int? quotationId;
@@ -21,14 +34,27 @@ class LeadModel {
   LeadModel({
     required this.id,
     required this.name,
+    this.firstName,
+    this.lastName,
     required this.phone,
+    this.whatsappNumber,
     this.email,
+    this.designation,
     this.company,
+    this.industry,
+    this.website,
+    this.companySize,
+    this.city,
+    this.state,
     this.source,
     required this.status,
     this.priority,
     this.rating,
+    this.campaignName,
     this.requirement,
+    this.requirementNotes,
+    this.followupDate,
+    this.followupTime,
     this.assignedTo,
     this.assignedToName,
     this.quotationId,
@@ -43,16 +69,29 @@ class LeadModel {
     return LeadModel(
       id: json['id'] ?? 0,
       name: json['name'] ?? '',
+      firstName: json['first_name'],
+      lastName: json['last_name'],
       phone: json['phone'] ?? '',
+      whatsappNumber: json['whatsapp_number'],
       email: json['email'],
+      designation: json['designation'],
       company: json['company'],
+      industry: json['industry'],
+      website: json['website'],
+      companySize: json['company_size'],
+      city: json['city'],
+      state: json['state'],
       source: json['source'] ?? 'Manual',
       status: json['status'] ?? 'NEW',
       priority: json['priority'] ?? 'MEDIUM',
       rating: json['rating'],
-      requirement: json['requirement'] ?? json['notes'],
+      campaignName: json['campaign_name'],
+      requirement: json['requirement'] ?? json['notes'] ?? json['requirement_notes'],
+      requirementNotes: json['requirement_notes'] ?? json['requirement'] ?? json['notes'],
+      followupDate: json['followup_date']?.toString(),
+      followupTime: json['followup_time']?.toString(),
       assignedTo: json['assigned_to'],
-      assignedToName: json['assigned_to_name'] ?? json['employee_name'],
+      assignedToName: json['assigned_to_name'] ?? json['employee_name'] ?? json['assigned_employee_name'],
       quotationId: json['quotetask_quotation_id'] != null
           ? int.tryParse(json['quotetask_quotation_id'].toString())
           : null,
@@ -67,39 +106,81 @@ class LeadModel {
   Map<String, dynamic> toJson() {
     return {
       'name': name,
+      if (firstName != null) 'first_name': firstName,
+      if (lastName != null) 'last_name': lastName,
       'phone': phone,
-      'email': email,
-      'company': company,
+      if (whatsappNumber != null) 'whatsapp_number': whatsappNumber,
+      if (email != null) 'email': email,
+      if (designation != null) 'designation': designation,
+      if (company != null) 'company': company,
+      if (industry != null) 'industry': industry,
+      if (website != null) 'website': website,
+      if (companySize != null) 'company_size': companySize,
+      if (city != null) 'city': city,
+      if (state != null) 'state': state,
       'source': source,
       'status': status,
       'priority': priority,
+      if (rating != null) 'rating': rating,
+      if (campaignName != null) 'campaign_name': campaignName,
       'requirement': requirement,
+      if (requirementNotes != null) 'requirement_notes': requirementNotes,
+      if (followupDate != null) 'followup_date': followupDate,
+      if (followupTime != null) 'followup_time': followupTime,
       if (assignedTo != null) 'assigned_to': assignedTo,
     };
   }
 
   LeadModel copyWith({
     String? name,
+    String? firstName,
+    String? lastName,
     String? phone,
+    String? whatsappNumber,
     String? email,
+    String? designation,
     String? company,
+    String? industry,
+    String? website,
+    String? companySize,
+    String? city,
+    String? state,
     String? source,
     String? status,
     String? priority,
+    String? rating,
+    String? campaignName,
     String? requirement,
+    String? requirementNotes,
+    String? followupDate,
+    String? followupTime,
     int? assignedTo,
     String? assignedToName,
   }) {
     return LeadModel(
       id: id,
       name: name ?? this.name,
+      firstName: firstName ?? this.firstName,
+      lastName: lastName ?? this.lastName,
       phone: phone ?? this.phone,
+      whatsappNumber: whatsappNumber ?? this.whatsappNumber,
       email: email ?? this.email,
+      designation: designation ?? this.designation,
       company: company ?? this.company,
+      industry: industry ?? this.industry,
+      website: website ?? this.website,
+      companySize: companySize ?? this.companySize,
+      city: city ?? this.city,
+      state: state ?? this.state,
       source: source ?? this.source,
       status: status ?? this.status,
       priority: priority ?? this.priority,
+      rating: rating ?? this.rating,
+      campaignName: campaignName ?? this.campaignName,
       requirement: requirement ?? this.requirement,
+      requirementNotes: requirementNotes ?? this.requirementNotes,
+      followupDate: followupDate ?? this.followupDate,
+      followupTime: followupTime ?? this.followupTime,
       assignedTo: assignedTo ?? this.assignedTo,
       assignedToName: assignedToName ?? this.assignedToName,
       quotationId: quotationId,
@@ -117,12 +198,14 @@ class EmployeeOption {
   final String name;
   final String? email;
   final String? role;
+  final String? designation;
 
   EmployeeOption({
     required this.id,
     required this.name,
     this.email,
     this.role,
+    this.designation,
   });
 
   factory EmployeeOption.fromJson(Map<String, dynamic> json) {
@@ -131,6 +214,7 @@ class EmployeeOption {
       name: json['name'] ?? '',
       email: json['email'],
       role: json['role'],
+      designation: json['designation'] ?? json['role'],
     );
   }
 }

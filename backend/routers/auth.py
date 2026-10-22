@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
 from models.employee import Employee
+from pydantic import BaseModel
 from schemas.auth import LoginRequest, TokenResponse, UserOut
-from services.auth import verify_password, create_access_token, get_current_user, build_user_out
+from services.auth import verify_password, hash_password, create_access_token, get_current_user, build_user_out
 from services.audit import log_audit
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -162,3 +163,36 @@ def logout(current_user: User = Depends(get_current_user), db: Session = Depends
         details=f"User {current_user.username} logged out."
     )
     return {"message": "Logged out successfully"}
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect."
+        )
+    if len(body.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 6 characters long."
+        )
+    current_user.hashed_password = hash_password(body.new_password)
+    db.commit()
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="PASSWORD_CHANGE",
+        entity_type="USER",
+        entity_id=current_user.id,
+        details=f"User {current_user.username} changed their password."
+    )
+    return {"message": "Password changed successfully."}

@@ -5,15 +5,17 @@ from models.user import User
 from models.employee import Employee
 from services.permission_catalog import SYSTEM_MODULES, MODULE_KEYS
 
-def get_role_permissions_map(role_name: str, db: Session) -> Dict[str, Dict[str, Any]]:
+def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     """
-    Returns a dictionary of module -> permissions dict for a given role.
-    If role is ADMIN, all permissions are true and view_scope is 'company'.
+    Returns canonical default system permissions for standard roles.
+    Guarantees that Sales Managers, Sales Executives, Support, Finance, and Admins
+    always have access to their required business modules, even if DB role records
+    or migrations have not yet been applied to the live database.
     """
-    norm_role = (role_name or "").strip().upper()
+    norm = (role_name or "").strip().upper()
     
-    # 1. ADMIN has super-access across every module
-    if norm_role == "ADMIN":
+    # 1. ADMIN - Superuser
+    if norm == "ADMIN":
         return {
             mod["key"]: {
                 "has_access": True,
@@ -31,65 +33,194 @@ def get_role_permissions_map(role_name: str, db: Session) -> Dict[str, Dict[str,
             for mod in SYSTEM_MODULES
         }
 
-    # 2. Lookup role in database
+    # 2. SALES_MANAGER / MANAGER
+    if norm in ["SALES_MANAGER", "MANAGER"]:
+        sales_mgr_mods = {
+            "dashboard", "leads", "customers", "contacts", "quotations",
+            "invoices", "calls", "whatsapp", "followups", "activities",
+            "reports", "analytics", "employees"
+        }
+        res = {}
+        for mod in SYSTEM_MODULES:
+            k = mod["key"]
+            has_acc = k in sales_mgr_mods
+            res[k] = {
+                "has_access": has_acc,
+                "can_view": has_acc,
+                "can_create": k in ["leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"],
+                "can_edit": k in ["leads", "customers", "contacts", "quotations", "followups", "activities"],
+                "can_delete": k in ["leads", "quotations"],
+                "can_export": k in ["leads", "quotations", "invoices", "reports"],
+                "can_approve": k in ["quotations"],
+                "can_assign": k in ["leads"],
+                "can_call": k in ["calls", "leads", "customers"],
+                "can_whatsapp": k in ["whatsapp", "leads", "customers"],
+                "view_scope": "team" if has_acc else "none"
+            }
+        return res
+
+    # 3. SALES_EXECUTIVE / SALES / EMPLOYEE
+    if norm in ["SALES_EXECUTIVE", "SALES", "EMPLOYEE"]:
+        sales_exec_mods = {
+            "dashboard", "leads", "customers", "contacts", "quotations",
+            "calls", "whatsapp", "followups", "activities"
+        }
+        res = {}
+        for mod in SYSTEM_MODULES:
+            k = mod["key"]
+            has_acc = k in sales_exec_mods
+            res[k] = {
+                "has_access": has_acc,
+                "can_view": has_acc,
+                "can_create": k in ["leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"],
+                "can_edit": k in ["leads", "customers", "contacts", "quotations", "followups", "activities"],
+                "can_delete": False,
+                "can_export": k in ["leads", "quotations"],
+                "can_approve": False,
+                "can_assign": False,
+                "can_call": k in ["calls", "leads", "customers"],
+                "can_whatsapp": k in ["whatsapp", "leads", "customers"],
+                "view_scope": "own" if has_acc else "none"
+            }
+        return res
+
+    # 4. SUPPORT_MANAGER
+    if norm == "SUPPORT_MANAGER":
+        sup_mgr_mods = {
+            "dashboard", "customers", "contacts", "support_tickets",
+            "calls", "whatsapp", "activities", "reports", "leads"
+        }
+        res = {}
+        for mod in SYSTEM_MODULES:
+            k = mod["key"]
+            has_acc = k in sup_mgr_mods
+            res[k] = {
+                "has_access": has_acc,
+                "can_view": has_acc,
+                "can_create": k in ["support_tickets", "calls", "whatsapp", "activities"],
+                "can_edit": k in ["support_tickets", "activities", "customers"],
+                "can_delete": False,
+                "can_export": k in ["support_tickets", "reports"],
+                "can_approve": False,
+                "can_assign": k in ["support_tickets"],
+                "can_call": k in ["calls", "customers"],
+                "can_whatsapp": k in ["whatsapp", "customers"],
+                "view_scope": "team" if has_acc else "none"
+            }
+        return res
+
+    # 5. SUPPORT_EXECUTIVE / SUPPORT
+    if norm in ["SUPPORT_EXECUTIVE", "SUPPORT"]:
+        sup_exec_mods = {
+            "dashboard", "customers", "contacts", "support_tickets",
+            "calls", "whatsapp", "activities"
+        }
+        res = {}
+        for mod in SYSTEM_MODULES:
+            k = mod["key"]
+            has_acc = k in sup_exec_mods
+            res[k] = {
+                "has_access": has_acc,
+                "can_view": has_acc,
+                "can_create": k in ["support_tickets", "calls", "whatsapp", "activities"],
+                "can_edit": k in ["support_tickets", "activities"],
+                "can_delete": False,
+                "can_export": False,
+                "can_approve": False,
+                "can_assign": False,
+                "can_call": k in ["calls", "customers"],
+                "can_whatsapp": k in ["whatsapp", "customers"],
+                "view_scope": "own" if has_acc else "none"
+            }
+        return res
+
+    # 6. FINANCE
+    if norm == "FINANCE":
+        fin_mods = {"dashboard", "payments", "invoices", "customers", "reports"}
+        res = {}
+        for mod in SYSTEM_MODULES:
+            k = mod["key"]
+            has_acc = k in fin_mods
+            res[k] = {
+                "has_access": has_acc,
+                "can_view": has_acc,
+                "can_create": k in ["payments"],
+                "can_edit": k in ["payments"],
+                "can_delete": False,
+                "can_export": has_acc,
+                "can_approve": k in ["payments"],
+                "can_assign": False,
+                "can_call": False,
+                "can_whatsapp": False,
+                "view_scope": "company" if has_acc else "none"
+            }
+        return res
+
+    # Fallback for unrecognized role
+    return {
+        mod["key"]: {
+            "has_access": mod["key"] == "dashboard",
+            "can_view": mod["key"] == "dashboard",
+            "can_create": False,
+            "can_edit": False,
+            "can_delete": False,
+            "can_export": False,
+            "can_approve": False,
+            "can_assign": False,
+            "can_call": False,
+            "can_whatsapp": False,
+            "view_scope": "own" if mod["key"] == "dashboard" else "none"
+        }
+        for mod in SYSTEM_MODULES
+    }
+
+
+def get_role_permissions_map(role_name: str, db: Session) -> Dict[str, Dict[str, Any]]:
+    """
+    Returns a dictionary of module -> permissions dict for a given role.
+    If role is ADMIN, all permissions are true and view_scope is 'company'.
+    Falls back to canonical defaults if database records are missing or incomplete.
+    """
+    norm_role = (role_name or "").strip().upper()
+    
+    # 1. ADMIN has super-access across every module
+    if norm_role == "ADMIN":
+        return get_default_role_permissions("ADMIN")
+
+    # 2. Get baseline defaults for this role
+    defaults = get_default_role_permissions(norm_role)
+
+    # 3. Lookup role in database
     from services.hierarchy_service import normalize_role
     role_record = db.query(Role).filter(Role.name == norm_role).first()
     if not role_record:
         canonical = normalize_role(norm_role)
         role_record = db.query(Role).filter(Role.name == canonical).first()
-    if not role_record or not role_record.is_active:
-        # Fallback empty permission set
-        return {
-            mod["key"]: {
-                "has_access": False,
-                "can_view": False,
-                "can_create": False,
-                "can_edit": False,
-                "can_delete": False,
-                "can_export": False,
-                "can_approve": False,
-                "can_assign": False,
-                "can_call": False,
-                "can_whatsapp": False,
-                "view_scope": "none"
-            }
-            for mod in SYSTEM_MODULES
-        }
+        
+    # If role not found in DB or inactive or has no permissions seeded, return canonical defaults
+    if not role_record or not role_record.is_active or not role_record.permissions:
+        return defaults
 
-    # 3. Populate from DB permissions
-    perm_dict = {}
+    # 4. Populate from DB permissions, overlaying onto defaults
+    perm_dict = dict(defaults)
     db_perms = {p.module.lower(): p for p in role_record.permissions}
 
     for mod in SYSTEM_MODULES:
         k = mod["key"]
         p = db_perms.get(k)
-        if p and p.has_access:
+        if p is not None:
             perm_dict[k] = {
-                "has_access": True,
-                "can_view": p.can_view,
-                "can_create": p.can_create,
-                "can_edit": p.can_edit,
-                "can_delete": p.can_delete,
-                "can_export": p.can_export,
-                "can_approve": p.can_approve,
-                "can_assign": p.can_assign,
-                "can_call": p.can_call,
-                "can_whatsapp": p.can_whatsapp,
-                "view_scope": p.view_scope or "own"
-            }
-        else:
-            perm_dict[k] = {
-                "has_access": False,
-                "can_view": False,
-                "can_create": False,
-                "can_edit": False,
-                "can_delete": False,
-                "can_export": False,
-                "can_approve": False,
-                "can_assign": False,
-                "can_call": False,
-                "can_whatsapp": False,
-                "view_scope": "none"
+                "has_access": bool(p.has_access),
+                "can_view": bool(p.can_view),
+                "can_create": bool(p.can_create),
+                "can_edit": bool(p.can_edit),
+                "can_delete": bool(p.can_delete),
+                "can_export": bool(p.can_export),
+                "can_approve": bool(p.can_approve),
+                "can_assign": bool(p.can_assign),
+                "can_call": bool(p.can_call),
+                "can_whatsapp": bool(p.can_whatsapp),
+                "view_scope": p.view_scope or ("team" if norm_role in ["SALES_MANAGER", "MANAGER", "SUPPORT_MANAGER"] else "own")
             }
 
     return perm_dict
@@ -160,256 +291,132 @@ def get_user_view_scope(user: User, module: str, db: Session) -> str:
 
 def seed_default_roles_if_needed(db: Session):
     """
-    Initializes default roles (ADMIN, MANAGER, EMPLOYEE, SALES, FINANCE, SUPPORT)
-    in the database if they do not exist.
-    Admin can edit any of these permissions or create new custom roles.
+    Initializes and synchronizes default system roles and permission sets in the database:
+    ADMIN, SALES_MANAGER, SALES_EXECUTIVE, MANAGER, SALES, EMPLOYEE, FINANCE, SUPPORT, SUPPORT_MANAGER, SUPPORT_EXECUTIVE.
+    Also repairs/seeds any missing module permissions for existing roles so that every role
+    has all 19 module rows populated with valid permission flags.
     """
-    existing_roles = {r.name.upper(): r for r in db.query(Role).all()}
+    standard_roles_specs = [
+        {
+            "name": "ADMIN",
+            "display_name": "System Administrator",
+            "description": "Full access to all modules, records, and security controls.",
+            "is_system": True
+        },
+        {
+            "name": "SALES_MANAGER",
+            "display_name": "Sales Manager",
+            "description": "Manages sales executives, assigned leads, quotations, and team sales performance.",
+            "is_system": False
+        },
+        {
+            "name": "SALES_EXECUTIVE",
+            "display_name": "Sales Executive",
+            "description": "Handles assigned sales leads, follow-ups, calls, WhatsApp, and quotations.",
+            "is_system": False
+        },
+        {
+            "name": "MANAGER",
+            "display_name": "Operations / Sales Manager",
+            "description": "Manages teams, leads, approvals, and team records.",
+            "is_system": False
+        },
+        {
+            "name": "SALES",
+            "display_name": "Sales Representative",
+            "description": "Handles assigned leads, follow-ups, calls, WhatsApp, and quotations.",
+            "is_system": False
+        },
+        {
+            "name": "EMPLOYEE",
+            "display_name": "Standard Employee",
+            "description": "Default employee role for sales agents and executives.",
+            "is_system": False
+        },
+        {
+            "name": "FINANCE",
+            "display_name": "Finance & Accounts",
+            "description": "Manages finance queue, payments, and payment approvals.",
+            "is_system": False
+        },
+        {
+            "name": "SUPPORT",
+            "display_name": "Customer Support & Onboarding",
+            "description": "Handles customer tickets, onboarding fulfillment, and technical support.",
+            "is_system": False
+        },
+        {
+            "name": "SUPPORT_MANAGER",
+            "display_name": "Support Manager",
+            "description": "Manages customer onboarding, support tickets, agent assignments, and client fulfillment.",
+            "is_system": False
+        },
+        {
+            "name": "SUPPORT_EXECUTIVE",
+            "display_name": "Support Executive",
+            "description": "Handles assigned customer support tickets and onboarding tasks.",
+            "is_system": False
+        }
+    ]
 
-    # 1. ADMIN Role
-    if "ADMIN" not in existing_roles:
-        admin_role = Role(
-            name="ADMIN",
-            display_name="System Administrator",
-            description="Full access to all modules, records, and security controls.",
-            is_system=True,
-            is_active=True
-        )
-        db.add(admin_role)
-        db.commit()
-        db.refresh(admin_role)
+    all_roles = db.query(Role).all()
+    existing_roles_map = {r.name.upper(): r for r in all_roles}
+
+    # 1. Create any missing roles
+    for r_spec in standard_roles_specs:
+        r_name = r_spec["name"].upper()
+        if r_name not in existing_roles_map:
+            new_role = Role(
+                name=r_spec["name"],
+                display_name=r_spec["display_name"],
+                description=r_spec["description"],
+                is_system=r_spec.get("is_system", False),
+                is_active=True
+            )
+            db.add(new_role)
+            db.commit()
+            db.refresh(new_role)
+            existing_roles_map[r_name] = new_role
+
+    # 2. Synchronize / repair permissions for all roles
+    for role_name_key, role_obj in existing_roles_map.items():
+        existing_perms = {p.module.lower(): p for p in role_obj.permissions}
+        role_defaults = get_default_role_permissions(role_obj.name)
 
         for mod in SYSTEM_MODULES:
-            rp = RolePermission(
-                role_id=admin_role.id,
-                module=mod["key"],
-                has_access=True,
-                can_view=True,
-                can_create=True,
-                can_edit=True,
-                can_delete=True,
-                can_export=True,
-                can_approve=True,
-                can_assign=True,
-                can_call=True,
-                can_whatsapp=True,
-                view_scope="company"
-            )
-            db.add(rp)
-        db.commit()
+            mod_key = mod["key"].lower()
+            p = existing_perms.get(mod_key)
+            d = role_defaults.get(mod_key, {})
 
-    # 2. MANAGER Role
-    if "MANAGER" not in existing_roles:
-        mgr_role = Role(
-            name="MANAGER",
-            display_name="Operations / Sales Manager",
-            description="Manages teams, leads, approvals, and team records.",
-            is_system=False,
-            is_active=True
-        )
-        db.add(mgr_role)
-        db.commit()
-        db.refresh(mgr_role)
+            if not p:
+                new_rp = RolePermission(
+                    role_id=role_obj.id,
+                    module=mod_key,
+                    has_access=d.get("has_access", False),
+                    can_view=d.get("can_view", False),
+                    can_create=d.get("can_create", False),
+                    can_edit=d.get("can_edit", False),
+                    can_delete=d.get("can_delete", False),
+                    can_export=d.get("can_export", False),
+                    can_approve=d.get("can_approve", False),
+                    can_assign=d.get("can_assign", False),
+                    can_call=d.get("can_call", False),
+                    can_whatsapp=d.get("can_whatsapp", False),
+                    view_scope=d.get("view_scope", "none")
+                )
+                db.add(new_rp)
+    db.commit()
 
-        for mod in SYSTEM_MODULES:
-            k = mod["key"]
-            is_admin_only = k in ["settings", "roles", "integrations"]
-            rp = RolePermission(
-                role_id=mgr_role.id,
-                module=k,
-                has_access=not is_admin_only,
-                can_view=not is_admin_only,
-                can_create=not is_admin_only,
-                can_edit=not is_admin_only,
-                can_delete=k in ["leads", "quotations"],
-                can_export=not is_admin_only,
-                can_approve=True,
-                can_assign=True,
-                can_call=True,
-                can_whatsapp=True,
-                view_scope="team" if not is_admin_only else "none"
-            )
-            db.add(rp)
-        db.commit()
-
-    # 3. SALES Role
-    if "SALES" not in existing_roles:
-        sales_role = Role(
-            name="SALES",
-            display_name="Sales Executive",
-            description="Handles assigned leads, follow-ups, calls, WhatsApp, and quotations.",
-            is_system=False,
-            is_active=True
-        )
-        db.add(sales_role)
-        db.commit()
-        db.refresh(sales_role)
-
-        for mod in SYSTEM_MODULES:
-            k = mod["key"]
-            can_access = k in ["dashboard", "leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"]
-            rp = RolePermission(
-                role_id=sales_role.id,
-                module=k,
-                has_access=can_access,
-                can_view=can_access,
-                can_create=k in ["leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"],
-                can_edit=k in ["leads", "customers", "contacts", "quotations", "followups"],
-                can_delete=False,
-                can_export=k in ["leads", "quotations"],
-                can_approve=False,
-                can_assign=False,
-                can_call=can_access,
-                can_whatsapp=can_access,
-                view_scope="own" if can_access else "none"
-            )
-            db.add(rp)
-        db.commit()
-
-    # 4. EMPLOYEE Role (Default sales employee fallback)
-    if "EMPLOYEE" not in existing_roles:
-        emp_role = Role(
-            name="EMPLOYEE",
-            display_name="Standard Employee",
-            description="Default employee role for sales agents and executives.",
-            is_system=False,
-            is_active=True
-        )
-        db.add(emp_role)
-        db.commit()
-        db.refresh(emp_role)
-
-        for mod in SYSTEM_MODULES:
-            k = mod["key"]
-            can_access = k in ["dashboard", "leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"]
-            rp = RolePermission(
-                role_id=emp_role.id,
-                module=k,
-                has_access=can_access,
-                can_view=can_access,
-                can_create=k in ["leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"],
-                can_edit=k in ["leads", "customers", "contacts", "quotations", "followups"],
-                can_delete=False,
-                can_export=False,
-                can_approve=False,
-                can_assign=False,
-                can_call=can_access,
-                can_whatsapp=can_access,
-                view_scope="own" if can_access else "none"
-            )
-            db.add(rp)
-        db.commit()
-
-    # 5. FINANCE Role
-    if "FINANCE" not in existing_roles:
-        fin_role = Role(
-            name="FINANCE",
-            display_name="Finance & Accounts",
-            description="Manages finance queue, payments, and payment approvals.",
-            is_system=False,
-            is_active=True
-        )
-        db.add(fin_role)
-        db.commit()
-        db.refresh(fin_role)
-
-        for mod in SYSTEM_MODULES:
-            k = mod["key"]
-            can_access = k in ["dashboard", "payments", "customers", "reports"]
-            rp = RolePermission(
-                role_id=fin_role.id,
-                module=k,
-                has_access=can_access,
-                can_view=can_access,
-                can_create=k in ["payments"],
-                can_edit=k in ["payments"],
-                can_delete=False,
-                can_export=can_access,
-                can_approve=k in ["payments"],
-                can_assign=False,
-                can_call=False,
-                can_whatsapp=False,
-                view_scope="company" if can_access else "none"
-            )
-            db.add(rp)
-        db.commit()
-
-    # 6. SUPPORT Role
-    if "SUPPORT" not in existing_roles:
-        sup_role = Role(
-            name="SUPPORT",
-            display_name="Customer Support & Onboarding",
-            description="Handles customer tickets, onboarding fulfillment, and technical support.",
-            is_system=False,
-            is_active=True
-        )
-        db.add(sup_role)
-        db.commit()
-        db.refresh(sup_role)
-
-        for mod in SYSTEM_MODULES:
-            k = mod["key"]
-            can_access = k in ["dashboard", "customers", "contacts", "support_tickets", "calls", "whatsapp", "activities"]
-            rp = RolePermission(
-                role_id=sup_role.id,
-                module=k,
-                has_access=can_access,
-                can_view=can_access,
-                can_create=k in ["support_tickets", "calls", "whatsapp", "activities"],
-                can_edit=k in ["support_tickets", "activities"],
-                can_delete=False,
-                can_export=k in ["support_tickets"],
-                can_approve=False,
-                can_assign=k in ["support_tickets"],
-                can_call=can_access,
-                can_whatsapp=can_access,
-                view_scope="team" if can_access else "none"
-            )
-            db.add(rp)
-        db.commit()
-
-    # 7. SUPPORT_MANAGER Role
-    if "SUPPORT_MANAGER" not in existing_roles:
-        sm_role = Role(
-            name="SUPPORT_MANAGER",
-            display_name="Support Manager",
-            description="Manages customer onboarding, support tickets, agent assignments, and client fulfillment.",
-            is_system=False,
-            is_active=True
-        )
-        db.add(sm_role)
-        db.commit()
-        db.refresh(sm_role)
-
-        for mod in SYSTEM_MODULES:
-            k = mod["key"]
-            can_access = k in ["dashboard", "customers", "contacts", "support_tickets", "calls", "whatsapp", "activities", "reports", "leads"]
-            rp = RolePermission(
-                role_id=sm_role.id,
-                module=k,
-                has_access=can_access,
-                can_view=can_access,
-                can_create=k in ["support_tickets", "calls", "whatsapp", "activities"],
-                can_edit=k in ["support_tickets", "activities", "customers"],
-                can_delete=False,
-                can_export=k in ["support_tickets", "reports"],
-                can_approve=False,
-                can_assign=k in ["support_tickets"],
-                can_call=can_access,
-                can_whatsapp=can_access,
-                view_scope="team" if can_access else "none"
-            )
-            db.add(rp)
-        db.commit()
-
-    # 8. Seed Support Manager user 'Kumar' if not existing
+    # 3. Seed Support Manager user 'Kumar' if not existing
     try:
-        from services.auth import hash_password
+        import bcrypt
+        def _quick_hash(pwd: str) -> str:
+            return bcrypt.hashpw(pwd.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         kumar_user = db.query(User).filter(User.username == "kumar").first()
         if not kumar_user:
             kumar_user = User(
                 username="kumar",
-                hashed_password=hash_password("kumar123"),
+                hashed_password=_quick_hash("kumar123"),
                 role="SUPPORT_MANAGER",
                 is_active=True
             )

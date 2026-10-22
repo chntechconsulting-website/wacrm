@@ -6,9 +6,15 @@ import 'package:mobile/features/auth/presentation/landing_welcome_screen.dart';
 import 'package:mobile/features/auth/presentation/login_screen.dart';
 import 'package:mobile/features/auth/providers/auth_provider.dart';
 import 'package:mobile/features/leads/models/lead_model.dart';
+import 'package:mobile/features/leads/presentation/lead_create_edit_screen.dart';
 import 'package:mobile/features/leads/presentation/lead_detail_screen.dart';
 import 'package:mobile/features/leads/presentation/leads_list_screen.dart';
 import 'package:mobile/features/leads/providers/leads_provider.dart';
+import 'package:mobile/core/widgets/wacrm_wave_nav_bar.dart';
+import 'package:mobile/features/notifications/providers/notifications_provider.dart';
+import 'package:mobile/features/settings/presentation/privacy_policy_screen.dart';
+import 'package:mobile/features/settings/presentation/settings_screen.dart';
+import 'package:mobile/features/settings/presentation/terms_and_conditions_screen.dart';
 
 void main() {
   testWidgets('App smoke test builds without error', (WidgetTester tester) async {
@@ -296,5 +302,155 @@ void main() {
 
     // Dialog dismissed
     expect(find.text('Confirm Sign Out'), findsNothing);
+  });
+
+  testWidgets('LeadCreateEditScreen renders all 5 web-synchronized detail sections', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => LeadsProvider()),
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ],
+        child: const MaterialApp(
+          home: LeadCreateEditScreen(),
+        ),
+      ),
+    );
+
+    // Title & Header
+    expect(find.text('Create New Lead'), findsOneWidget);
+    expect(find.text('Manual Lead Registration'), findsOneWidget);
+
+    // Section 1: Contact Information
+    expect(find.text('Contact Information'), findsOneWidget);
+    expect(find.text('First Name *'), findsOneWidget);
+    expect(find.text('Last Name *'), findsOneWidget);
+    expect(find.text('Mobile Number *'), findsOneWidget);
+    expect(find.text('WhatsApp Number'), findsOneWidget);
+    expect(find.text('Email Address'), findsOneWidget);
+    expect(find.text('Designation'), findsOneWidget);
+
+    // Section 2: Company Information
+    expect(find.text('Company Information'), findsOneWidget);
+    expect(find.text('Company Name'), findsOneWidget);
+    expect(find.text('Industry'), findsOneWidget);
+    expect(find.text('Website'), findsOneWidget);
+    expect(find.text('Company Size'), findsOneWidget);
+    expect(find.text('City'), findsOneWidget);
+    expect(find.text('State'), findsOneWidget);
+
+    // Section 3: Lead Details & Assignment
+    expect(find.text('Lead Details & Assignment'), findsOneWidget);
+    expect(find.text('Lead Source'), findsOneWidget);
+    expect(find.text('Initial Status'), findsOneWidget);
+    expect(find.text('Campaign Name'), findsOneWidget);
+    expect(find.text('Rating'), findsOneWidget);
+    expect(find.text('Priority'), findsOneWidget);
+
+    // Section 4: Requirement Notes
+    expect(find.text('Requirement & Discovery Notes'), findsOneWidget);
+
+    // Section 5: Follow-up Schedule
+    expect(find.text('Follow-up Schedule'), findsOneWidget);
+    expect(find.text('Follow-up Date'), findsOneWidget);
+    expect(find.text('Follow-up Time'), findsOneWidget);
+
+    // Action buttons
+    expect(find.text('Cancel'), findsOneWidget);
+    expect(find.text('Create Lead'), findsOneWidget);
+  });
+
+  testWidgets('WacrmWaveNavBar displays Settings and has NO More item', (WidgetTester tester) async {
+    int selectedIndex = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          bottomNavigationBar: WacrmWaveNavBar(
+            currentIndex: selectedIndex,
+            onTap: (idx) => selectedIndex = idx,
+            onAdd: () {},
+          ),
+        ),
+      ),
+    );
+
+    // Verify 4 main items
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Leads'), findsOneWidget);
+    expect(find.text('Calls'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+
+    // Strict requirement: NO "More" text or icon anywhere in navbar
+    expect(find.text('More'), findsNothing);
+    expect(find.byIcon(Icons.grid_view_rounded), findsNothing);
+    expect(find.byIcon(Icons.more_horiz_rounded), findsNothing);
+
+    // Verify Settings icon
+    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+  });
+
+  testWidgets('SettingsScreen renders all required items', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => NotificationsProvider()),
+        ],
+        child: const MaterialApp(
+          home: SettingsScreen(),
+        ),
+      ),
+    );
+
+    // 1. My Profile
+    expect(find.text('My Profile'), findsOneWidget);
+
+    // 2. App Settings
+    expect(find.text('App Settings'), findsOneWidget);
+
+    // 3. Notifications
+    expect(find.text('Notifications'), findsOneWidget);
+
+    // 4. Change Password
+    expect(find.text('Change Password'), findsOneWidget);
+
+    // 5. Terms & Conditions
+    expect(find.text('Terms & Conditions'), findsOneWidget);
+
+    // 6. Privacy Policy
+    expect(find.text('Privacy Policy'), findsOneWidget);
+
+    // 7. App Version
+    expect(find.text('App Version'), findsOneWidget);
+    expect(find.text('v1.0.0 (Build 100)'), findsOneWidget);
+
+    // 8. Logout
+    expect(find.text('Logout'), findsOneWidget);
+  });
+
+  testWidgets('TermsAndConditionsScreen renders scrollable content and sections', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: TermsAndConditionsScreen(),
+      ),
+    );
+
+    expect(find.text('Terms & Conditions'), findsWidgets);
+    expect(find.text('Acceptance of Terms'), findsOneWidget);
+    expect(find.text('Authorized Enterprise Use & User Accounts'), findsOneWidget);
+    expect(find.text('WhatsApp Cloud API & Communication Policy'), findsOneWidget);
+  });
+
+  testWidgets('PrivacyPolicyScreen renders scrollable content and sections', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: PrivacyPolicyScreen(),
+      ),
+    );
+
+    expect(find.text('Privacy Policy'), findsWidgets);
+    expect(find.text('Information We Collect'), findsOneWidget);
+    expect(find.text('How Information is Utilized'), findsOneWidget);
+    expect(find.text('Role-Based Data Scoping'), findsOneWidget);
   });
 }

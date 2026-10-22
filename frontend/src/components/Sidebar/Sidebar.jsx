@@ -400,27 +400,64 @@ const Sidebar = ({
   };
 
   const { user: currentUser } = useAuth();
-  const userRole = currentUser?.role || 'EMPLOYEE';
+  const userRole = (currentUser?.role || 'EMPLOYEE').toUpperCase();
   const isAdmin = userRole === 'ADMIN';
-  const isManager = userRole === 'MANAGER' || userRole === 'SALES_MANAGER' || userRole === 'SUPPORT_MANAGER';
+  const isSalesManager = userRole === 'SALES_MANAGER' || userRole === 'MANAGER';
+  const isSalesExec = userRole === 'SALES_EXECUTIVE' || userRole === 'SALES' || userRole === 'EMPLOYEE';
+  const isSupportManager = userRole === 'SUPPORT_MANAGER';
+  const isSupportExec = userRole === 'SUPPORT_EXECUTIVE' || userRole === 'SUPPORT';
+  const isManager = isSalesManager || isSupportManager;
+  const isSalesRole = isSalesManager || isSalesExec;
+  const isSupportRole = isSupportManager || isSupportExec;
   const isFinance = userRole === 'FINANCE';
 
-  // Dynamic DB Permission Helpers
+  // Dynamic DB Permission Helpers with resilient role fallbacks
   const hasModule = (moduleKey) => {
     if (isAdmin) return true;
-    if (!currentUser?.permissions) return false;
-    return Boolean(currentUser.permissions[moduleKey]?.has_access);
+    if (currentUser?.permissions && currentUser.permissions[moduleKey]?.has_access === true) {
+      return true;
+    }
+    // Resilient fallback for core CRM operational roles
+    if (isSalesRole && ['dashboard', 'leads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(moduleKey)) {
+      return true;
+    }
+    if (isSalesManager && ['invoices', 'reports', 'analytics', 'employees'].includes(moduleKey)) {
+      return true;
+    }
+    if (isSupportRole && ['dashboard', 'customers', 'contacts', 'support_tickets', 'calls', 'whatsapp', 'activities'].includes(moduleKey)) {
+      return true;
+    }
+    if (isSupportManager && ['reports', 'leads'].includes(moduleKey)) {
+      return true;
+    }
+    if (isFinance && ['dashboard', 'payments', 'invoices', 'customers', 'reports'].includes(moduleKey)) {
+      return true;
+    }
+    return Boolean(currentUser?.permissions?.[moduleKey]?.has_access);
   };
 
   const canAction = (moduleKey, action) => {
     if (isAdmin) return true;
-    if (!currentUser?.permissions) return false;
-    return Boolean(currentUser.permissions[moduleKey]?.[`can_${action}`]);
+    if (currentUser?.permissions && currentUser.permissions[moduleKey]?.[`can_${action}`] !== undefined) {
+      return Boolean(currentUser.permissions[moduleKey][`can_${action}`]);
+    }
+    // Standard role defaults for sales
+    if (isSalesRole && ['leads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(moduleKey)) {
+      if (action === 'delete') return isSalesManager;
+      if (action === 'assign') return isSalesManager;
+      if (action === 'approve') return isSalesManager;
+      return true; // view, create, edit, export, call, whatsapp
+    }
+    return false;
   };
 
   const getScope = (moduleKey) => {
     if (isAdmin) return 'company';
-    return currentUser?.permissions?.[moduleKey]?.view_scope || 'none';
+    if (currentUser?.permissions?.[moduleKey]?.view_scope) {
+      return currentUser.permissions[moduleKey].view_scope;
+    }
+    if (isManager) return 'team';
+    return 'own';
   };
 
   return (
@@ -501,7 +538,7 @@ const Sidebar = ({
           </NavLink>
 
           {/* Section: LEADS */}
-          {hasModule('leads') && (
+          {(hasModule('leads') || isSalesRole) && (
             <SidebarSection
               title="LEADS"
               isOpen={openSections.leads}
@@ -544,7 +581,7 @@ const Sidebar = ({
           )}
 
           {/* Section: COMMUNICATION */}
-          {(hasModule('calls') || hasModule('followups') || hasModule('activities') || hasModule('whatsapp')) && (
+          {(hasModule('calls') || hasModule('followups') || hasModule('activities') || hasModule('whatsapp') || isSalesRole || isSupportRole) && (
             <SidebarSection
               title="COMMUNICATION"
               isOpen={openSections.communication}
@@ -600,7 +637,7 @@ const Sidebar = ({
           )}
 
           {/* Section: BILLING & OPERATIONS WORKFLOW */}
-          {(hasModule('quotations') || hasModule('invoices') || hasModule('payments') || hasModule('support_tickets')) && (
+          {(hasModule('quotations') || hasModule('invoices') || hasModule('payments') || hasModule('support_tickets') || isSalesRole || isFinance || isSupportRole) && (
             <SidebarSection
               title="BILLING & WORKFLOW"
               isOpen={openSections.sales}

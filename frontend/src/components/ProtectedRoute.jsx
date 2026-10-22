@@ -23,10 +23,24 @@ const ProtectedRoute = ({ allowedRoles = [], requiredModule = null, requiredActi
     return <Outlet />;
   }
 
-  // Dynamic Module Permission Check
+  // Dynamic Module Permission Check with resilient role fallback
   if (requiredModule) {
+    const normRole = (user.role || '').toUpperCase();
+    const isSalesManager = normRole === 'SALES_MANAGER' || normRole === 'MANAGER';
+    const isSalesExec = normRole === 'SALES_EXECUTIVE' || normRole === 'SALES' || normRole === 'EMPLOYEE';
+    const isSalesRole = isSalesManager || isSalesExec;
+    const isSupportRole = ['SUPPORT_MANAGER', 'SUPPORT_EXECUTIVE', 'SUPPORT'].includes(normRole);
+    const isFinance = normRole === 'FINANCE';
+
+    const isCoreSalesModule = isSalesRole && ['dashboard', 'leads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(requiredModule);
+    const isSalesManagerModule = isSalesManager && ['invoices', 'reports', 'analytics', 'employees'].includes(requiredModule);
+    const isCoreSupportModule = isSupportRole && ['dashboard', 'customers', 'contacts', 'support_tickets', 'calls', 'whatsapp', 'activities'].includes(requiredModule);
+    const isFinanceModule = isFinance && ['dashboard', 'payments', 'invoices', 'customers', 'reports'].includes(requiredModule);
+
     const modPerm = user.permissions?.[requiredModule];
-    if (!modPerm || !modPerm.has_access) {
+    const hasAccess = modPerm?.has_access === true || isCoreSalesModule || isSalesManagerModule || isCoreSupportModule || isFinanceModule;
+
+    if (!hasAccess) {
       return (
         <div className="unauthorized-container" style={{ padding: '60px 20px', textAlign: 'center' }}>
           <h2 style={{ color: 'var(--danger)', marginBottom: '12px' }}>Access Denied (403 Forbidden)</h2>
@@ -37,7 +51,7 @@ const ProtectedRoute = ({ allowedRoles = [], requiredModule = null, requiredActi
       );
     }
 
-    if (requiredAction && !modPerm[`can_${requiredAction}`]) {
+    if (modPerm && requiredAction && modPerm[`can_${requiredAction}`] === false) {
       return (
         <div className="unauthorized-container" style={{ padding: '60px 20px', textAlign: 'center' }}>
           <h2 style={{ color: 'var(--danger)', marginBottom: '12px' }}>Access Denied (403 Forbidden)</h2>
