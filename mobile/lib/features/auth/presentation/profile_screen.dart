@@ -80,6 +80,8 @@ class ProfileScreen extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
+                      WacrmBadge.department(user.departmentDisplay),
+                      const SizedBox(width: 8),
                       WacrmBadge.status(user.role),
                       const SizedBox(width: 8),
                       WacrmBadge.status(user.status),
@@ -113,7 +115,7 @@ class ProfileScreen extends StatelessWidget {
                   const Divider(height: 24),
                   _buildProfileRow(
                     'Department',
-                    user.department ?? 'N/A',
+                    user.departmentDisplay,
                     Icons.apartment_rounded,
                   ),
                   const SizedBox(height: 12),

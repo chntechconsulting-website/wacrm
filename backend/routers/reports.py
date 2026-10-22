@@ -146,15 +146,15 @@ def dashboard_stats(
 
     # Employee-wise counts (restricted to self for EMPLOYEE role)
     if current_user.role == "EMPLOYEE" and current_emp:
-        emp_counts = [(current_emp.name, total_leads)]
+        emp_counts = [(current_emp.name, current_emp.department or "SALES", total_leads)]
     else:
         emp_counts = (
-            db.query(Employee.name, func.count(Lead.id))
+            db.query(Employee.name, Employee.department, func.count(Lead.id))
             .join(Lead, Lead.assigned_to == Employee.id, isouter=True)
-            .group_by(Employee.id, Employee.name)
+            .group_by(Employee.id, Employee.name, Employee.department)
             .all()
         )
-    employee_lead_counts = [{"employee_name": name, "count": count} for name, count in emp_counts]
+    employee_lead_counts = [{"employee_name": name, "department": dept or "SALES", "count": count} for name, dept, count in emp_counts]
 
     # Source-wise counts
     source_counts = (

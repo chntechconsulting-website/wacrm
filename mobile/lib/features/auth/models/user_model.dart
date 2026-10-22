@@ -83,4 +83,18 @@ class UserModel {
   bool get canViewFinance => isAdmin || isFinance;
   bool get canManageUsers => isAdmin;
   bool get canDeleteLeads => isAdmin || isSalesManager;
+
+  // Clean, consistent Department display label
+  String get departmentDisplay {
+    final d = (department ?? '').toUpperCase().trim();
+    if (d == 'ADMIN' || d == 'ADMINISTRATION') return 'Administration';
+    if (d == 'SALES') return 'Sales';
+    if (d == 'SUPPORT') return 'Support';
+    if (d == 'FINANCE') return 'Finance';
+    if (d.isNotEmpty) return d[0].toUpperCase() + d.substring(1).toLowerCase();
+    if (isAdmin) return 'Administration';
+    if (isSupportManager || isSupportExecutive) return 'Support';
+    if (isFinance) return 'Finance';
+    return 'Sales';
+  }
 }

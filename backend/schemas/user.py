@@ -4,14 +4,14 @@ from datetime import datetime
 
 class UserCreateRequest(BaseModel):
     name: str
-    email: str
+    phone: Optional[str] = None
     username: str
+    email: str
     password: str
+    department: str  # NEW REQUIRED FIELD: Department before Role
     role: str = "SALES_EXECUTIVE"
-    department: Optional[str] = None
     reporting_manager_id: Optional[int] = None
     manager_id: Optional[int] = None  # Backward-compatibility alias
-    phone: Optional[str] = None
     status: str = "ACTIVE"
 
 class UserUpdateRequest(BaseModel):

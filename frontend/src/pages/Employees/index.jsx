@@ -22,16 +22,25 @@ import {
   Briefcase,
   Building2,
   ChevronDown,
-  Info
+  Info,
+  Download
 } from 'lucide-react';
 import RoleManagementMatrix from './RoleManagementMatrix';
 
+const DEPARTMENTS = [
+  { value: 'SALES', label: 'Sales' },
+  { value: 'SUPPORT', label: 'Support' },
+  { value: 'FINANCE', label: 'Finance' },
+  { value: 'ADMINISTRATION', label: 'Administration' }
+];
+
 const STANDARD_ROLES = [
-  { value: 'ADMIN', label: 'Admin', department: 'ADMIN', managerReq: 'None (Top of hierarchy)' },
-  { value: 'SALES_MANAGER', label: 'Sales Manager', department: 'SALES', managerReq: 'Required: Active Administrator' },
   { value: 'SALES_EXECUTIVE', label: 'Sales Executive', department: 'SALES', managerReq: 'Required: Active Sales Manager' },
+  { value: 'SALES_MANAGER', label: 'Sales Manager', department: 'SALES', managerReq: 'Required: Active Administrator' },
+  { value: 'SUPPORT_EXECUTIVE', label: 'Support Executive', department: 'SUPPORT', managerReq: 'Required: Active Support Manager' },
   { value: 'SUPPORT_MANAGER', label: 'Support Manager', department: 'SUPPORT', managerReq: 'Required: Active Administrator' },
-  { value: 'SUPPORT_EXECUTIVE', label: 'Support Executive', department: 'SUPPORT', managerReq: 'Required: Active Support Manager' }
+  { value: 'FINANCE', label: 'Finance', department: 'FINANCE', managerReq: 'Required: Active Administrator' },
+  { value: 'ADMIN', label: 'Admin', department: 'ADMINISTRATION', managerReq: 'None (Top of hierarchy)' }
 ];
 
 const Employees = () => {
@@ -44,6 +53,7 @@ const Employees = () => {
   const [loadingEligibleManagers, setLoadingEligibleManagers] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [deptFilter, setDeptFilter] = useState('ALL');
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -156,9 +166,30 @@ const Employees = () => {
     }
   }, [activeTab]);
 
+  const handleDepartmentChangeInForm = (newDept, currentUserId = null) => {
+    let defaultRole = 'SALES_EXECUTIVE';
+    if (newDept === 'SALES') defaultRole = 'SALES_EXECUTIVE';
+    else if (newDept === 'SUPPORT') defaultRole = 'SUPPORT_EXECUTIVE';
+    else if (newDept === 'FINANCE') defaultRole = 'FINANCE';
+    else if (newDept === 'ADMINISTRATION') defaultRole = 'ADMIN';
+
+    // Check if current role is already valid for new department
+    const rolesInDept = STANDARD_ROLES.filter(r => r.department === newDept).map(r => r.value);
+    const targetRole = rolesInDept.includes(formData.role) ? formData.role : defaultRole;
+
+    setFormData(prev => ({
+      ...prev,
+      department: newDept,
+      role: targetRole,
+      reporting_manager_id: targetRole === 'ADMIN' ? '' : prev.reporting_manager_id
+    }));
+
+    fetchEligibleManagers(targetRole, currentUserId);
+  };
+
   const handleRoleChangeInForm = (newRole, currentUserId = null) => {
-    let dept = 'GENERAL';
-    if (newRole === 'ADMIN') dept = 'ADMIN';
+    let dept = 'SALES';
+    if (newRole === 'ADMIN') dept = 'ADMINISTRATION';
     else if (newRole === 'SALES_MANAGER' || newRole === 'SALES_EXECUTIVE' || newRole === 'SALES' || newRole === 'MANAGER') dept = 'SALES';
     else if (newRole === 'SUPPORT_MANAGER' || newRole === 'SUPPORT_EXECUTIVE' || newRole === 'SUPPORT') dept = 'SUPPORT';
     else if (newRole === 'FINANCE') dept = 'FINANCE';
@@ -176,12 +207,12 @@ const Employees = () => {
   const handleOpenAddModal = () => {
     setFormData({
       name: '',
-      email: '',
       phone: '',
       username: '',
+      email: '',
       password: '',
-      role: 'SALES_EXECUTIVE',
       department: 'SALES',
+      role: 'SALES_EXECUTIVE',
       reporting_manager_id: '',
       status: 'ACTIVE'
     });
@@ -193,14 +224,17 @@ const Employees = () => {
   const handleOpenEditModal = (usr) => {
     setSelectedUser(usr);
     const userRole = usr.role || 'SALES_EXECUTIVE';
+    let userDept = usr.department || 'SALES';
+    if (userDept === 'ADMIN') userDept = 'ADMINISTRATION';
+
     setFormData({
       name: usr.name,
-      email: usr.email,
       phone: usr.phone || '',
       username: usr.username,
+      email: usr.email,
       password: '',
+      department: userDept,
       role: userRole,
-      department: usr.department || 'SALES',
       reporting_manager_id: usr.reporting_manager_id ? String(usr.reporting_manager_id) : '',
       status: usr.status
     });
@@ -396,6 +430,23 @@ const Employees = () => {
     }
   };
 
+  const getDepartmentBadgeStyle = (deptStr) => {
+    const d = (deptStr || '').toUpperCase();
+    if (d === 'SALES') {
+      return { bg: 'rgba(37, 99, 235, 0.1)', color: '#2563eb', border: '1px solid rgba(37, 99, 235, 0.25)', label: 'Sales' };
+    }
+    if (d === 'SUPPORT') {
+      return { bg: 'rgba(13, 148, 136, 0.1)', color: '#0d9488', border: '1px solid rgba(13, 148, 136, 0.25)', label: 'Support' };
+    }
+    if (d === 'FINANCE') {
+      return { bg: 'rgba(217, 119, 6, 0.1)', color: '#d97706', border: '1px solid rgba(217, 119, 6, 0.25)', label: 'Finance' };
+    }
+    if (d === 'ADMINISTRATION' || d === 'ADMIN') {
+      return { bg: 'rgba(124, 58, 237, 0.1)', color: '#7c3aed', border: '1px solid rgba(124, 58, 237, 0.25)', label: 'Administration' };
+    }
+    return { bg: 'rgba(100, 116, 139, 0.1)', color: '#64748b', border: '1px solid rgba(100, 116, 139, 0.25)', label: deptStr || 'Unassigned' };
+  };
+
   const getRoleBadgeStyle = (roleStr) => {
     const r = (roleStr || '').toUpperCase();
     if (r === 'ADMIN') {
@@ -425,6 +476,7 @@ const Employees = () => {
     if (role === 'SALES_EXECUTIVE') return 'Required: Active Sales Manager';
     if (role === 'SUPPORT_MANAGER') return 'Required: Active Administrator';
     if (role === 'SUPPORT_EXECUTIVE') return 'Required: Active Support Manager';
+    if (role === 'FINANCE') return 'Required: Active Administrator';
     return 'Required: Active Manager';
   };
 
@@ -434,12 +486,40 @@ const Employees = () => {
       usr.email?.toLowerCase().includes(search.toLowerCase()) ||
       usr.username?.toLowerCase().includes(search.toLowerCase()) ||
       usr.role?.toLowerCase().includes(search.toLowerCase()) ||
+      usr.department?.toLowerCase().includes(search.toLowerCase()) ||
       usr.reporting_manager_name?.toLowerCase().includes(search.toLowerCase());
+
+    const matchesDept = deptFilter === 'ALL' || 
+      (usr.department || '').toUpperCase() === deptFilter.toUpperCase() ||
+      (deptFilter === 'ADMINISTRATION' && (usr.department === 'ADMIN' || usr.department === 'ADMINISTRATION'));
 
     const matchesRole = roleFilter === 'ALL' || usr.role === roleFilter;
 
-    return matchesSearch && matchesRole;
+    return matchesSearch && matchesDept && matchesRole;
   });
+
+  const handleExportUsersCSV = () => {
+    const headers = ['ID', 'Full Name', 'Username', 'Email', 'Phone', 'Department', 'Role', 'Reporting Manager', 'Status'];
+    const rows = filteredUsers.map(u => [
+      u.id,
+      `"${(u.name || '').replace(/"/g, '""')}"`,
+      `"${(u.username || '').replace(/"/g, '""')}"`,
+      `"${(u.email || '').replace(/"/g, '""')}"`,
+      `"${(u.phone || '').replace(/"/g, '""')}"`,
+      `"${(u.department || '').replace(/"/g, '""')}"`,
+      `"${(u.role || '').replace(/"/g, '""')}"`,
+      `"${(u.reporting_manager_name || '').replace(/"/g, '""')}"`,
+      `"${(u.status || '').replace(/"/g, '""')}"`
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `wacrm_users_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const formatDate = (dtStr) => {
     if (!dtStr) return 'Never';
@@ -579,30 +659,59 @@ const Employees = () => {
       {activeTab === 'users' && (
         <div className="content-card">
           <div className="table-toolbar" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div className="search-box" style={{ position: 'relative', width: '100%', maxWidth: '380px' }}>
+            <div className="search-box" style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
               <Search size={18} className="search-icon" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
               <input 
                 type="text" 
-                placeholder="Search by name, email, username, manager..." 
+                placeholder="Search by name, email, department, manager..." 
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 style={{ width: '100%', padding: '9px 12px 9px 38px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
               />
             </div>
 
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                value={deptFilter}
+                onChange={(e) => setDeptFilter(e.target.value)}
+                style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.85rem', fontWeight: '500' }}
+              >
+                <option value="ALL">All Departments</option>
+                {DEPARTMENTS.map(d => (
+                  <option key={d.value} value={d.value}>{d.label}</option>
+                ))}
+              </select>
+
               <select
                 value={roleFilter}
                 onChange={(e) => setRoleFilter(e.target.value)}
-                style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.85rem', fontWeight: '500' }}
               >
                 <option value="ALL">All Roles</option>
-                <option value="ADMIN">Admin</option>
-                <option value="SALES_MANAGER">Sales Manager</option>
-                <option value="SALES_EXECUTIVE">Sales Executive</option>
-                <option value="SUPPORT_MANAGER">Support Manager</option>
-                <option value="SUPPORT_EXECUTIVE">Support Executive</option>
+                {STANDARD_ROLES.map(r => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
               </select>
+
+              <button
+                type="button"
+                onClick={handleExportUsersCSV}
+                className="btn btn-outline"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 14px',
+                  borderRadius: '8px',
+                  fontSize: '0.85rem',
+                  fontWeight: '600',
+                  color: '#334155',
+                  borderColor: '#cbd5e1'
+                }}
+                title="Export filtered users to CSV"
+              >
+                <Download size={15} /> Export CSV
+              </button>
             </div>
           </div>
 
@@ -612,6 +721,7 @@ const Employees = () => {
                 <tr style={{ borderBottom: '2px solid #e2e8f0', textAlign: 'left', backgroundColor: '#f8fafc' }}>
                   <th style={{ padding: '12px 14px', fontSize: '0.8rem', color: '#64748b', fontWeight: '700' }}>ID</th>
                   <th style={{ padding: '12px 14px', fontSize: '0.8rem', color: '#64748b', fontWeight: '700' }}>EMPLOYEE</th>
+                  <th style={{ padding: '12px 14px', fontSize: '0.8rem', color: '#64748b', fontWeight: '700' }}>DEPARTMENT</th>
                   <th style={{ padding: '12px 14px', fontSize: '0.8rem', color: '#64748b', fontWeight: '700' }}>ROLE</th>
                   <th style={{ padding: '12px 14px', fontSize: '0.8rem', color: '#64748b', fontWeight: '700' }}>REPORTING MANAGER</th>
                   <th style={{ padding: '12px 14px', fontSize: '0.8rem', color: '#64748b', fontWeight: '700' }}>DIRECT REPORTS</th>
@@ -622,18 +732,19 @@ const Employees = () => {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="7" style={{ padding: '32px', textAlign: 'center', color: '#94a3b8' }}>
+                    <td colSpan="8" style={{ padding: '32px', textAlign: 'center', color: '#94a3b8' }}>
                       Loading users & reporting hierarchy...
                     </td>
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan="7" style={{ padding: '32px', textAlign: 'center', color: '#94a3b8' }}>
+                    <td colSpan="8" style={{ padding: '32px', textAlign: 'center', color: '#94a3b8' }}>
                       No user accounts found matching criteria.
                     </td>
                   </tr>
                 ) : (
                   filteredUsers.map((usr) => {
+                    const deptBadge = getDepartmentBadgeStyle(usr.department);
                     const roleBadge = getRoleBadgeStyle(usr.role);
                     return (
                       <tr key={usr.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -652,9 +763,24 @@ const Employees = () => {
                             borderRadius: '12px',
                             fontSize: '0.75rem',
                             fontWeight: '700',
+                            backgroundColor: deptBadge.bg,
+                            color: deptBadge.color,
+                            border: deptBadge.border,
+                            display: 'inline-block'
+                          }}>
+                            {deptBadge.label}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <span style={{
+                            padding: '4px 10px',
+                            borderRadius: '12px',
+                            fontSize: '0.75rem',
+                            fontWeight: '700',
                             backgroundColor: roleBadge.bg,
                             color: roleBadge.color,
-                            border: roleBadge.border
+                            border: roleBadge.border,
+                            display: 'inline-block'
                           }}>
                             {roleBadge.label}
                           </span>
@@ -921,16 +1047,49 @@ const Employees = () => {
                 />
               </div>
 
+              {/* 6. Department — NEW REQUIRED FIELD (Immediately before Role) */}
               <div className="form-group" style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.85rem' }}>Role *</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontWeight: '700', fontSize: '0.85rem', color: '#0f766e' }}>
+                  <Building2 size={15} /> Department *
+                </label>
+                <select 
+                  required
+                  value={formData.department} 
+                  onChange={(e) => handleDepartmentChangeInForm(e.target.value, null)}
+                  style={{ 
+                    width: '100%', 
+                    padding: '9px 12px', 
+                    borderRadius: '6px', 
+                    border: '2px solid #0d9488', 
+                    backgroundColor: '#f0fdfa',
+                    fontWeight: '600',
+                    color: '#0f766e'
+                  }}
+                >
+                  {DEPARTMENTS.map(d => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                  Select the business department. Compatible roles and managers will adjust automatically.
+                </span>
+              </div>
+
+              {/* 7. Role */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontWeight: '600', fontSize: '0.85rem' }}>
+                  <Shield size={15} /> Role *
+                </label>
                 <select 
                   value={formData.role} 
                   onChange={(e) => handleRoleChangeInForm(e.target.value, null)}
                   style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                 >
-                  {STANDARD_ROLES.map(r => (
-                    <option key={r.value} value={r.value}>{r.label}</option>
-                  ))}
+                  {STANDARD_ROLES
+                    .filter(r => !formData.department || r.department === formData.department)
+                    .map(r => (
+                      <option key={r.value} value={r.value}>{r.label}</option>
+                    ))}
                 </select>
               </div>
 
@@ -1061,16 +1220,49 @@ const Employees = () => {
                 />
               </div>
 
+              {/* Department — Immediately before Role */}
               <div className="form-group" style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.85rem' }}>Role</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontWeight: '700', fontSize: '0.85rem', color: '#0f766e' }}>
+                  <Building2 size={15} /> Department *
+                </label>
+                <select 
+                  required
+                  value={formData.department} 
+                  onChange={(e) => handleDepartmentChangeInForm(e.target.value, selectedUser?.id)}
+                  style={{ 
+                    width: '100%', 
+                    padding: '9px 12px', 
+                    borderRadius: '6px', 
+                    border: '2px solid #0d9488', 
+                    backgroundColor: '#f0fdfa',
+                    fontWeight: '600',
+                    color: '#0f766e'
+                  }}
+                >
+                  {DEPARTMENTS.map(d => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                  Changing department updates role selection and manager assignment eligibility.
+                </span>
+              </div>
+
+              {/* Role */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontWeight: '600', fontSize: '0.85rem' }}>
+                  <Shield size={15} /> Role *
+                </label>
                 <select 
                   value={formData.role} 
                   onChange={(e) => handleRoleChangeInForm(e.target.value, selectedUser?.id)}
                   style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                 >
-                  {STANDARD_ROLES.map(r => (
-                    <option key={r.value} value={r.value}>{r.label}</option>
-                  ))}
+                  {STANDARD_ROLES
+                    .filter(r => !formData.department || r.department === formData.department)
+                    .map(r => (
+                      <option key={r.value} value={r.value}>{r.label}</option>
+                    ))}
                 </select>
               </div>
 

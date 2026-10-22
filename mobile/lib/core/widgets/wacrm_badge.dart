@@ -58,6 +58,41 @@ class WacrmBadge extends StatelessWidget {
     );
   }
 
+  factory WacrmBadge.department(String department) {
+    final d = department.toUpperCase().trim();
+    Color bg;
+    Color fg;
+    String label = department;
+
+    if (d == 'ADMIN' || d == 'ADMINISTRATION') {
+      bg = const Color(0xFFF1F5F9);
+      fg = const Color(0xFF0F172A);
+      label = 'Administration';
+    } else if (d == 'SALES') {
+      bg = const Color(0xFFEFF6FF);
+      fg = const Color(0xFF2563EB);
+      label = 'Sales';
+    } else if (d == 'SUPPORT') {
+      bg = const Color(0xFFF0FDFA);
+      fg = const Color(0xFF0D9488);
+      label = 'Support';
+    } else if (d == 'FINANCE') {
+      bg = const Color(0xFFFFFBEB);
+      fg = const Color(0xFFD97706);
+      label = 'Finance';
+    } else {
+      bg = const Color(0xFFF1F5F9);
+      fg = const Color(0xFF475569);
+    }
+
+    return WacrmBadge(
+      label: label,
+      backgroundColor: bg,
+      textColor: fg,
+      icon: Icons.apartment_rounded,
+    );
+  }
+
   factory WacrmBadge.priority(String priority) {
     Color bg = AppColors.border;
     Color fg = AppColors.textMuted;

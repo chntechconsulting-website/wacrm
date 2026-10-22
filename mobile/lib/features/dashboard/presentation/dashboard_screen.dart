@@ -152,7 +152,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           const SizedBox(height: 4),
                           Text(
                             user != null
-                                ? 'Role: ${user.role} • ${user.department ?? 'CRM'}'
+                                ? 'Department: ${user.departmentDisplay} • Role: ${user.role}'
                                 : 'Welcome to Mobile CRM',
                             style: TextStyle(
                               color: AppColors.white.withValues(alpha: 0.85),

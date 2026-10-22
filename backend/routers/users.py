@@ -24,7 +24,10 @@ from services.hierarchy_service import (
     reassign_manager_reports,
     get_department_for_role,
     normalize_role,
-    ROLE_ADMIN
+    normalize_department,
+    validate_department_and_role,
+    ROLE_ADMIN,
+    DEPT_ADMINISTRATION
 )
 
 router = APIRouter(prefix="/users", tags=["User Management"])
@@ -97,13 +100,38 @@ def list_eligible_managers(
 @router.get("", response_model=List[UserDetailOut])
 @router.get("/", response_model=List[UserDetailOut])
 def list_users(
+    department: Optional[str] = Query(None, description="Filter users by department"),
+    role: Optional[str] = Query(None, description="Filter users by role"),
+    status: Optional[str] = Query(None, description="Filter users by status"),
+    search: Optional[str] = Query(None, description="Search by name, email, or username"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(["ADMIN", "SALES_MANAGER", "SUPPORT_MANAGER", "MANAGER"]))
 ):
     """
-    Lists all CRM users with linked Employee profile, role, status, and last login.
+    Lists all CRM users with linked Employee profile, role, department, status, and last login.
     """
-    users = db.query(User).order_by(desc(User.created_at)).all()
+    query = db.query(User)
+    if department and department.upper() != "ALL":
+        norm_dept = normalize_department(department)
+        if norm_dept == DEPT_ADMINISTRATION:
+            query = query.filter(User.department.in_([DEPT_ADMINISTRATION, "ADMIN"]))
+        else:
+            query = query.filter(User.department == norm_dept)
+    if role and role.upper() != "ALL":
+        query = query.filter(User.role == normalize_role(role))
+    if status and status.upper() != "ALL":
+        is_active = (status.upper() == "ACTIVE")
+        query = query.filter(User.is_active == is_active)
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.outerjoin(Employee, Employee.user_id == User.id).filter(
+            or_(
+                User.username.ilike(s),
+                Employee.name.ilike(s),
+                Employee.email.ilike(s)
+            )
+        )
+    users = query.order_by(desc(User.created_at)).all()
     return [build_user_detail(u, db) for u in users]
 
 @router.post("", response_model=UserDetailOut, status_code=status.HTTP_201_CREATED)
@@ -116,7 +144,7 @@ def create_user(
 ):
     """
     Admin Endpoint: Creates a new Employee login credential.
-    Performs secure password hashing, strict manager validation, and links User to Employee record.
+    Performs secure password hashing, strict department/role & manager validation, and links User to Employee record.
     """
     username = req_data.username.strip().lower()
     email = req_data.email.strip().lower()
@@ -128,12 +156,18 @@ def create_user(
         raise HTTPException(status_code=400, detail=f"Email '{email}' is already registered to another employee.")
 
     role = normalize_role(req_data.role)
-    department = req_data.department or get_department_for_role(role)
+    department = normalize_department(req_data.department) or get_department_for_role(role)
+
+    # 1. Validate department and role combination
+    dept_ok, dept_err = validate_department_and_role(department, role, current_user)
+    if not dept_ok:
+        raise HTTPException(status_code=400, detail=dept_err)
+
     reporting_mgr_id = req_data.reporting_manager_id or req_data.manager_id
     if role == ROLE_ADMIN:
         reporting_mgr_id = None
 
-    # Strict reporting manager validation
+    # 2. Strict reporting manager validation
     valid, err_msg = validate_reporting_manager(
         user_id=None,
         role=role,
@@ -215,7 +249,12 @@ def update_user(
     emp = db.query(Employee).filter(Employee.user_id == user.id).first()
 
     target_role = normalize_role(req_data.role) if req_data.role else user.role
-    target_dept = req_data.department if req_data.department is not None else (user.department or get_department_for_role(target_role))
+    target_dept = normalize_department(req_data.department) if req_data.department is not None else (normalize_department(user.department) or get_department_for_role(target_role))
+
+    # Validate department and role combination
+    dept_ok, dept_err = validate_department_and_role(target_dept, target_role, current_user)
+    if not dept_ok:
+        raise HTTPException(status_code=400, detail=dept_err)
 
     # Manager id resolution
     target_manager_id = user.reporting_manager_id

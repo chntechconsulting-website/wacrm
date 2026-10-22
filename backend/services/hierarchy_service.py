@@ -15,11 +15,27 @@ ROLE_SALES_EXECUTIVE = "SALES_EXECUTIVE"
 ROLE_SUPPORT_MANAGER = "SUPPORT_MANAGER"
 ROLE_SUPPORT_EXECUTIVE = "SUPPORT_EXECUTIVE"
 
+DEPT_ADMINISTRATION = "ADMINISTRATION"
+DEPT_ADMIN = "ADMIN"
+DEPT_SALES = "SALES"
+DEPT_SUPPORT = "SUPPORT"
+DEPT_FINANCE = "FINANCE"
+
+VALID_DEPARTMENTS = [DEPT_ADMINISTRATION, DEPT_SALES, DEPT_SUPPORT, DEPT_FINANCE]
+
 ADMIN_ROLES = {"ADMIN"}
 SALES_MANAGER_ROLES = {"SALES_MANAGER", "MANAGER"}
 SALES_EXECUTIVE_ROLES = {"SALES_EXECUTIVE", "SALES", "EMPLOYEE"}
 SUPPORT_MANAGER_ROLES = {"SUPPORT_MANAGER"}
 SUPPORT_EXECUTIVE_ROLES = {"SUPPORT_EXECUTIVE", "SUPPORT"}
+
+DEPARTMENT_ROLES_MAP = {
+    DEPT_ADMINISTRATION: [ROLE_ADMIN],
+    "ADMIN": [ROLE_ADMIN],
+    DEPT_SALES: [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE, "MANAGER", "SALES", "EMPLOYEE"],
+    DEPT_SUPPORT: [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE, "SUPPORT"],
+    DEPT_FINANCE: ["FINANCE"],
+}
 
 def normalize_role(role_name: Optional[str]) -> str:
     r = (role_name or "").strip().upper()
@@ -35,17 +51,62 @@ def normalize_role(role_name: Optional[str]) -> str:
         return ROLE_SUPPORT_EXECUTIVE
     return r
 
+def normalize_department(dept: Optional[str]) -> Optional[str]:
+    if not dept:
+        return None
+    d = dept.strip().upper()
+    if d in ["ADMIN", "ADMINISTRATION"]:
+        return DEPT_ADMINISTRATION
+    if d in ["SALES", "SALE"]:
+        return DEPT_SALES
+    if d in ["SUPPORT"]:
+        return DEPT_SUPPORT
+    if d in ["FINANCE", "ACCOUNTS"]:
+        return DEPT_FINANCE
+    return d
+
 def get_department_for_role(role_name: Optional[str]) -> str:
     norm = normalize_role(role_name)
     if norm == ROLE_ADMIN:
-        return "ADMIN"
+        return DEPT_ADMINISTRATION
     if norm in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
-        return "SALES"
+        return DEPT_SALES
     if norm in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
-        return "SUPPORT"
+        return DEPT_SUPPORT
     if norm == "FINANCE":
-        return "FINANCE"
-    return "GENERAL"
+        return DEPT_FINANCE
+    return DEPT_SALES
+
+def validate_department_and_role(
+    department: Optional[str],
+    role: Optional[str],
+    current_user: Optional[User] = None
+) -> Tuple[bool, Optional[str]]:
+    """
+    Validates department and role consistency:
+    - Department is a required field.
+    - Department must be valid (Administration, Sales, Support, Finance).
+    - Role must belong to the selected department.
+    - Non-admin users cannot assign Administration department or Admin role.
+    """
+    if not department or not department.strip():
+        return False, "Department is a required field."
+
+    norm_dept = normalize_department(department)
+    if norm_dept not in VALID_DEPARTMENTS:
+        return False, f"Invalid department '{department}'. Must be one of: Administration, Sales, Support, Finance."
+
+    norm_role = normalize_role(role)
+    allowed_roles = DEPARTMENT_ROLES_MAP.get(norm_dept, [])
+    if norm_role not in allowed_roles:
+        return False, f"Role '{role}' is not valid for department '{department}'. Compatible roles: {', '.join(allowed_roles)}."
+
+    # Authorization enforcement: only Admin can assign Administration or Admin role
+    if norm_dept == DEPT_ADMINISTRATION or norm_role == ROLE_ADMIN:
+        if current_user and current_user.role != ROLE_ADMIN:
+            return False, "Forbidden: Only Administrators can assign the Administration department or Admin role."
+
+    return True, None
 
 def detect_circular_hierarchy(user_id: int, proposed_manager_id: int, db: Session) -> Tuple[bool, List[str]]:
     """
@@ -137,17 +198,26 @@ def validate_reporting_manager(
     if norm_role == ROLE_SALES_EXECUTIVE:
         if mgr_norm_role != ROLE_SALES_MANAGER:
             return False, f"Sales Executive must report to an active Sales Manager. User '{manager.username}' has role '{manager.role}'."
+        if manager.department and normalize_department(manager.department) not in [DEPT_SALES, DEPT_ADMINISTRATION]:
+            return False, f"Sales Executive reporting manager must be in Sales department. User '{manager.username}' is in '{manager.department}'."
 
     # Rule 2: Support Executive requires selecting an active Support Manager
     elif norm_role == ROLE_SUPPORT_EXECUTIVE:
         if mgr_norm_role != ROLE_SUPPORT_MANAGER:
             return False, f"Support Executive must report to an active Support Manager. User '{manager.username}' has role '{manager.role}'."
+        if manager.department and normalize_department(manager.department) not in [DEPT_SUPPORT, DEPT_ADMINISTRATION]:
+            return False, f"Support Executive reporting manager must be in Support department. User '{manager.username}' is in '{manager.department}'."
 
     # Rule 3: Sales Manager or Support Manager requires selecting an Admin
     elif norm_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER]:
         if mgr_norm_role != ROLE_ADMIN:
             display_title = "Sales Manager" if norm_role == ROLE_SALES_MANAGER else "Support Manager"
             return False, f"{display_title} must report to an active Admin. User '{manager.username}' has role '{manager.role}'."
+
+    # Rule 4: Finance users report to an active Admin
+    elif norm_role == "FINANCE":
+        if mgr_norm_role != ROLE_ADMIN:
+            return False, f"Finance employees must report to an active Admin. User '{manager.username}' has role '{manager.role}'."
 
     # Rule 7: Prevent circular reporting hierarchy
     if user_id:
@@ -230,12 +300,17 @@ def get_eligible_managers(
         return []
 
     target_roles = []
+    target_depts = []
+
     if norm_role == ROLE_SALES_EXECUTIVE:
         target_roles = list(SALES_MANAGER_ROLES)
+        target_depts = [DEPT_SALES, "SALES"]
     elif norm_role == ROLE_SUPPORT_EXECUTIVE:
         target_roles = list(SUPPORT_MANAGER_ROLES)
-    elif norm_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER]:
+        target_depts = [DEPT_SUPPORT, "SUPPORT"]
+    elif norm_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER, "FINANCE"]:
         target_roles = list(ADMIN_ROLES)
+        target_depts = [DEPT_ADMINISTRATION, "ADMIN"]
     else:
         target_roles = list(ADMIN_ROLES | SALES_MANAGER_ROLES | SUPPORT_MANAGER_ROLES)
 
@@ -250,6 +325,8 @@ def get_eligible_managers(
         User.role.in_(target_roles),
         User.is_active == True
     )
+    if target_depts:
+        q = q.filter(or_(User.department.in_(target_depts), User.department.is_(None)))
     if excluded_ids:
         q = q.filter(~User.id.in_(list(excluded_ids)))
 

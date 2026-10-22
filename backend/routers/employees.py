@@ -6,6 +6,7 @@ from models.user import User
 from models.employee import Employee
 from schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeOut
 from services.auth import get_current_user, require_roles, hash_password
+from services.hierarchy_service import normalize_department, get_department_for_role
 
 router = APIRouter(prefix="/employees", tags=["Employees"])
 
@@ -37,11 +38,14 @@ def create_employee(
     if existing_email:
         raise HTTPException(status_code=400, detail="Email is already registered.")
 
+    dept = normalize_department(emp_in.department) or get_department_for_role(emp_in.role)
+
     # Create User
     new_user = User(
         username=emp_in.username,
         hashed_password=hash_password(emp_in.password),
         role=emp_in.role,
+        department=dept,
         is_active=(emp_in.status == "ACTIVE")
     )
     db.add(new_user)
@@ -55,6 +59,7 @@ def create_employee(
         email=emp_in.email,
         phone=emp_in.phone,
         username=emp_in.username,
+        department=dept,
         role=emp_in.role,
         status=emp_in.status
     )
@@ -92,6 +97,12 @@ def update_employee(
         emp.role = emp_in.role
         if user:
             user.role = emp_in.role
+
+    if emp_in.department is not None:
+        norm_dept = normalize_department(emp_in.department)
+        emp.department = norm_dept
+        if user:
+            user.department = norm_dept
 
     if emp_in.status is not None:
         emp.status = emp_in.status

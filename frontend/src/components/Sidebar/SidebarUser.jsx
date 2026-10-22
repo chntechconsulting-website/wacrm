@@ -10,6 +10,7 @@ const SidebarUser = ({ isCollapsed }) => {
   const containerRef = useRef(null);
 
   const userName = user?.employee_name || user?.username || 'Chandra Mohan';
+  const userDept = user?.department || '';
   const userRole = user?.role || 'Administrator';
   const userEmail = user?.email || `${(user?.username || 'user').toLowerCase()}@chncrm.com`;
   
@@ -45,7 +46,10 @@ const SidebarUser = ({ isCollapsed }) => {
         <div className="user-dropdown-popover" role="menu">
           <div className="popover-header">
             <p className="popover-user-name" title={userName}>{userName}</p>
-            <p className="popover-user-email" title={userEmail}>{userEmail}</p>
+            <p className="popover-user-email" title={userEmail}>
+              {userDept ? `${userDept} • ` : ''}{userRole}
+            </p>
+            <p style={{ margin: '2px 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>{userEmail}</p>
           </div>
           <div className="popover-divider" />
           
@@ -104,7 +108,9 @@ const SidebarUser = ({ isCollapsed }) => {
                 <span className="user-name" title={userName}>{userName}</span>
                 <span className="online-dot" title="Online" aria-label="Online status"></span>
               </div>
-              <span className="user-role-title">{userRole}</span>
+              <span className="user-role-title">
+                {userDept ? `${userDept} • ` : ''}{userRole}
+              </span>
             </div>
             <ChevronDown 
               size={16} 

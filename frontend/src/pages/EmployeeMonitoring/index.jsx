@@ -170,6 +170,7 @@ const EmployeeMonitoring = () => {
   const filteredEmployees = displayEmployees.filter(e => 
     e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     e.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (e.department && e.department.toLowerCase().includes(searchQuery.toLowerCase())) ||
     e.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -380,6 +381,7 @@ const EmployeeMonitoring = () => {
                 <thead>
                   <tr style={{ borderBottom: '1px solid #e2e8f0', textAlign: 'left' }}>
                     <th style={{ padding: '10px 12px' }}>Employee</th>
+                    <th style={{ padding: '10px 12px' }}>Department</th>
                     <th style={{ padding: '10px 12px' }}>Role</th>
                     <th style={{ padding: '10px 12px' }}>Presence</th>
                     <th style={{ padding: '10px 12px' }}>Assigned</th>
@@ -393,7 +395,7 @@ const EmployeeMonitoring = () => {
                 <tbody>
                   {filteredEmployees.length === 0 ? (
                     <tr>
-                      <td colSpan={9} style={{ textAlign: 'center', padding: '48px 16px', color: '#64748b' }}>
+                      <td colSpan={10} style={{ textAlign: 'center', padding: '48px 16px', color: '#64748b' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                           <Users size={32} style={{ color: '#94a3b8' }} />
                           <div style={{ fontWeight: 600, fontSize: '0.92rem', color: '#334155' }}>
@@ -418,6 +420,18 @@ const EmployeeMonitoring = () => {
                               <div style={{ fontSize: '0.72rem', color: '#64748b' }}>EMP{e.employee_id}</div>
                             </div>
                           </div>
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <span style={{ 
+                            padding: '3px 8px', 
+                            borderRadius: '10px', 
+                            fontSize: '0.72rem', 
+                            fontWeight: '700', 
+                            backgroundColor: (e.department === 'SUPPORT') ? '#ccfbf1' : (e.department === 'FINANCE') ? '#fef3c7' : (e.department === 'ADMIN' || e.department === 'ADMINISTRATION') ? '#f3e8ff' : '#dbeafe', 
+                            color: (e.department === 'SUPPORT') ? '#0f766e' : (e.department === 'FINANCE') ? '#b45309' : (e.department === 'ADMIN' || e.department === 'ADMINISTRATION') ? '#6b21a8' : '#1d4ed8' 
+                          }}>
+                            {e.department || 'Sales'}
+                          </span>
                         </td>
                         <td style={{ padding: '12px' }}>
                           <span style={{ padding: '3px 8px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: '700', backgroundColor: '#f1f5f9', color: '#475569' }}>

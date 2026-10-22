@@ -7,6 +7,7 @@ class EmployeeBase(BaseModel):
     email: EmailStr
     phone: Optional[str] = None
     username: str
+    department: Optional[str] = None
     role: str = "EMPLOYEE"  # ADMIN, MANAGER, EMPLOYEE
     status: str = "ACTIVE"  # ACTIVE, INACTIVE
 
@@ -17,6 +18,7 @@ class EmployeeUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    department: Optional[str] = None
     role: Optional[str] = None
     status: Optional[str] = None
     password: Optional[str] = None

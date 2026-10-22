@@ -97,6 +97,7 @@ def build_user_out(user: User, db: Session) -> UserOut:
     email = employee.email if employee else None
     user_status = "ACTIVE" if user.is_active else "INACTIVE"
     user_perms = get_user_permissions(user, db)
+    dept = user.department or (employee.department if employee else None) or "ADMINISTRATION" if user.role == "ADMIN" else "SALES"
 
     return UserOut(
         id=user.id,
@@ -104,6 +105,7 @@ def build_user_out(user: User, db: Session) -> UserOut:
         name=name,
         email=email,
         username=user.username,
+        department=dept,
         role=user.role,
         status=user_status,
         is_active=user.is_active,

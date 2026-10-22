@@ -12,6 +12,7 @@ class UserOut(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     username: str
+    department: Optional[str] = None
     role: str
     status: str = "ACTIVE"
     is_active: bool = True

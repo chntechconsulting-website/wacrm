@@ -189,7 +189,7 @@ class WacrmDrawer extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '@${user?.username ?? 'user'} • ${user?.role ?? 'Executive'}',
+                                '@${user?.username ?? 'user'} • ${user?.departmentDisplay ?? 'Sales'} • ${user?.role ?? 'Executive'}',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: Colors.white.withValues(alpha: 0.7),

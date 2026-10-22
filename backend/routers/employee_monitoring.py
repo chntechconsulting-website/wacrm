@@ -13,7 +13,7 @@ from models.followup import Followup
 from models.monitoring import EmployeeActivityLog, EmployeePresence, FieldVisit, MonitoringSetting
 from services.auth import get_current_user
 from services.permission_service import get_authorized_call_employee_ids
-from services.hierarchy_service import get_authorized_performance_employee_ids
+from services.hierarchy_service import get_authorized_performance_employee_ids, get_department_for_role
 from routers.ivr import resolve_recording_url
 
 router = APIRouter(prefix="/employee-monitoring", tags=["Employee Monitoring"])
@@ -216,6 +216,7 @@ def get_monitoring_employees_list(
             "name": e.name,
             "email": e.email,
             "role": e.role,
+            "department": e.department or (e.user.department if e.user else None) or get_department_for_role(e.role),
             "status": e.status,
             "assigned_leads": assigned,
             "contacted_leads": contacted,
@@ -672,6 +673,7 @@ def get_employee_detail(
         "name": target_emp.name,
         "email": target_emp.email,
         "role": target_emp.role,
+        "department": target_emp.department or (target_emp.user.department if target_emp.user else None) or get_department_for_role(target_emp.role),
         "status": target_emp.status,
         "online_status": "ONLINE" if is_online else "OFFLINE",
         "last_seen": presence.last_seen if presence else target_emp.created_at,

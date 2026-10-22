@@ -226,7 +226,7 @@ const EmployeeDetailPage = () => {
             </span>
           </div>
           <p className="page-subtitle" style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
-            Employee ID: <strong>EMP{detail?.employee_id}</strong> &bull; Role: <strong>{detail?.role}</strong> &bull; Email: <strong>{detail?.email}</strong>
+            Employee ID: <strong>EMP{detail?.employee_id}</strong> &bull; Department: <strong style={{ color: '#0f766e' }}>{detail?.department || 'Sales'}</strong> &bull; Role: <strong>{detail?.role}</strong> &bull; Email: <strong>{detail?.email}</strong>
           </p>
         </div>
 
