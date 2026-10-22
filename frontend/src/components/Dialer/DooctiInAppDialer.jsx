@@ -29,7 +29,8 @@ import {
   Radio,
   Building,
   ArrowUpRight,
-  ArrowDownLeft
+  ArrowDownLeft,
+  AlertCircle
 } from 'lucide-react';
 import './DooctiInAppDialer.css';
 import { formatLeadReceived } from '../../utils/dateUtils';
@@ -42,6 +43,8 @@ const DEFAULT_DOOCTI_CONFIG = {
   userEmail: 'chntechnolog_agent01@doocti.com',
   userId: '1282',
   userNumber: '1282', // Agent extension
+  cliNumber: '07969671855',
+  didNumbers: ['07969671855', '07969671856', '07969671857']
 };
 
 // Standard ITU-T Dual-Tone Multi-Frequency (DTMF) mapping
@@ -235,6 +238,9 @@ const DooctiInAppDialer = () => {
       .then(res => {
         if (res.data?.status === 'success') {
           const mapping = res.data.extension_mapping || {};
+          const dids = res.data.did_numbers || ['07969671855', '07969671856', '07969671857'];
+          const defaultCli = Array.isArray(dids) && dids.length > 0 ? dids[0] : '07969671855';
+
           let matchedExt = null;
           for (const [ext, info] of Object.entries(mapping)) {
             if (
@@ -249,21 +255,19 @@ const DooctiInAppDialer = () => {
           if (!matchedExt && (user.role === 'ADMIN' || user.username === 'admin')) {
             matchedExt = res.data.admin_extension || Object.keys(mapping).find(k => (mapping[k].type || '').toUpperCase() === 'ADMIN');
           }
-          if (matchedExt) {
-            setConfig(prev => {
-              if (prev.userNumber !== matchedExt) {
-                const updated = {
-                  ...prev,
-                  userId: matchedExt,
-                  userNumber: matchedExt,
-                  userEmail: mapping[matchedExt]?.email || prev.userEmail || 'chntechnolog_agent01@doocti.com'
-                };
-                localStorage.setItem('doocti_config', JSON.stringify(updated));
-                return updated;
-              }
-              return prev;
-            });
-          }
+          setConfig(prev => {
+            const nextExt = matchedExt || prev.userNumber || '1282';
+            const updated = {
+              ...prev,
+              userId: nextExt,
+              userNumber: nextExt,
+              userEmail: (matchedExt && mapping[matchedExt]?.email) || prev.userEmail || 'chntechnolog_agent01@doocti.com',
+              cliNumber: prev.cliNumber || defaultCli,
+              didNumbers: Array.isArray(dids) ? dids : [defaultCli]
+            };
+            localStorage.setItem('doocti_config', JSON.stringify(updated));
+            return updated;
+          });
         }
       })
       .catch(() => {});
@@ -272,6 +276,7 @@ const DooctiInAppDialer = () => {
   // Keypad & Number State
   const [dialNumber, setDialNumber] = useState('');
   const [matchedLead, setMatchedLead] = useState(null);
+  const [dialerNotice, setDialerNotice] = useState(null);
 
   // In-Call State
   const [activeCall, setActiveCall] = useState(null); // { number, name, startTime, isMuted, isHeld }
@@ -292,6 +297,7 @@ const DooctiInAppDialer = () => {
   const iframeRef = useRef(null);
   const activeSessionRef = useRef(null);
   const timerIntervalRef = useRef(null);
+  const connectingTimeoutRef = useRef(null);
   const isEndingCallRef = useRef(false);
   const dialpadInputRef = useRef(null);
 
@@ -466,26 +472,44 @@ const DooctiInAppDialer = () => {
   }, [activeCall?.callStatus, activeCall?.number]);
 
   // -------------------------------------------------------------
+  // -------------------------------------------------------------
   // Click-To-Call: Dispatches postMessage into Doocti Iframe
   // -------------------------------------------------------------
   const dialLead = (phoneNumber, contactData = {}) => {
     if (!phoneNumber) return;
-    const cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
+    setDialerNotice(null);
+
+    // Normalize phone number to 10-digit format (strip 91 country code or leading 0)
+    let cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
+    if (cleanNumber.length === 12 && cleanNumber.startsWith('91')) {
+      cleanNumber = cleanNumber.slice(2);
+    } else if (cleanNumber.length === 11 && cleanNumber.startsWith('0')) {
+      cleanNumber = cleanNumber.slice(1);
+    } else if (cleanNumber.length > 10) {
+      cleanNumber = cleanNumber.slice(-10);
+    }
 
     const leadName = contactData.name || contactData.contact_name || contactData.lead_name || matchedLead?.name || 'Customer';
+    const outboundCli = config.cliNumber || (config.didNumbers && config.didNumbers[0]) || '07969671855';
+    const uniqueSessionId = `doocti_${config.userNumber || '1282'}_${cleanNumber}_${Date.now()}`;
 
+    // Payload formatted specifically for Doocti C2C handler:
+    // IMPORTANT: Do NOT include customer_number to ensure Doocti's listener executes branch C,
+    // which extracts cli_number and passes it into An(phone, station, id, name, cli_number, unique_id)
     const payload = {
-      entity_id: String(contactData.id || contactData.lead_id || matchedLead?.id || ''),
+      entity_id: String(contactData.id || contactData.lead_id || matchedLead?.id || '0'),
       entity_name: leadName,
       entity_number: cleanNumber,
       entity_type: contactData.entity_type || (contactData.company ? 'Contact' : 'Leads'),
+      cli_number: outboundCli,
+      crm_unique_id: uniqueSessionId,
+      station: String(config.userNumber || '1282'),
       tenant_id: config.tenantId || 'chntechnolog',
       user_email: config.userEmail || 'chntechnolog_agent01@doocti.com',
       user_id: String(config.userId || '1282'),
       user_number: String(config.userNumber || '1282')
     };
 
-    const uniqueSessionId = `doocti_${config.userNumber || '1282'}_${cleanNumber}_${Date.now()}`;
     activeSessionRef.current = {
       callId: uniqueSessionId,
       customerPhone: cleanNumber,
@@ -513,10 +537,29 @@ const DooctiInAppDialer = () => {
     setCallDuration(0);
     toggleMinimize(false);
 
-    const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
+    // Timeout safety: if Doocti does not initiate ringing or connection within 15 seconds,
+    // clear the stuck CONNECTING state and notify the agent with clear instructions
+    if (connectingTimeoutRef.current) {
+      clearTimeout(connectingTimeoutRef.current);
+    }
+    connectingTimeoutRef.current = setTimeout(() => {
+      setActiveCall(prev => {
+        if (prev && prev.callStatus === 'CONNECTING') {
+          setDialerNotice({
+            type: 'warning',
+            title: 'Call Not Placed',
+            message: 'Doocti WebPhone did not place the call. Please verify: 1) Agent status in Doocti WebPhone is set to "Online" (Green) and not Paused, 2) Microphone access is allowed.'
+          });
+          return null;
+        }
+        return prev;
+      });
+    }, 15000);
+
+    // Dispatch postMessage using wildcard target origin to ensure iframe receipt
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
-        iframeRef.current.contentWindow.postMessage({ data: payload }, targetOrigin);
+        iframeRef.current.contentWindow.postMessage({ data: payload }, '*');
       } catch (err) {
         console.error('Failed to dispatch postMessage to Doocti iframe:', err);
       }
@@ -525,6 +568,10 @@ const DooctiInAppDialer = () => {
 
   // Answer Call Handler for Incoming Ringing Call
   const handleAnswerCall = () => {
+    if (connectingTimeoutRef.current) {
+      clearTimeout(connectingTimeoutRef.current);
+      connectingTimeoutRef.current = null;
+    }
     setIsRinging(false);
     toggleMinimize(false);
     const ansTime = Date.now();
@@ -580,6 +627,10 @@ const DooctiInAppDialer = () => {
 
   // End / Decline Call Handler
   const handleEndCall = (outcomeOverride = null, isUserInitiated = false) => {
+    if (connectingTimeoutRef.current) {
+      clearTimeout(connectingTimeoutRef.current);
+      connectingTimeoutRef.current = null;
+    }
     if (isEndingCallRef.current) return;
     const session = activeSessionRef.current;
     const currentCall = activeCall;
@@ -773,6 +824,14 @@ const DooctiInAppDialer = () => {
 
       const eventType = String(msg.type || msg.action || msg.event || msg.status || msg.calltype || msg.event_type || '').toLowerCase();
       const callState = String(msg.state || msg.call_state || msg.disposition || '').toLowerCase();
+
+      // Clear connecting timeout on any received telephony progress event
+      if (['ringing', 'ring', 'inbound', 'incoming', 'answered', 'connected', 'in-progress', 'inprogress', 'busy', 'failed', 'hangup', 'disconnected', 'ended'].some(k => eventType.includes(k) || callState.includes(k))) {
+        if (connectingTimeoutRef.current) {
+          clearTimeout(connectingTimeoutRef.current);
+          connectingTimeoutRef.current = null;
+        }
+      }
 
       // Ringing Detection (handles Doocti's { type: "Ringing", phone_number: ... })
       const isRingingSignal = ['ringing', 'ring', 'inbound', 'incoming', 'call_incoming'].some(k => eventType.includes(k) || callState.includes(k));
@@ -1097,6 +1156,26 @@ const DooctiInAppDialer = () => {
                 placeholder="chntechnolog_agent01@doocti.com"
               />
             </div>
+            <div>
+              <label>Outbound Caller DID:</label>
+              <select
+                value={tempConfig.cliNumber || '07969671855'}
+                onChange={(e) => setTempConfig({ ...tempConfig, cliNumber: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  borderRadius: '6px',
+                  border: '1px solid #cbd5e1',
+                  fontSize: '12px',
+                  backgroundColor: '#fff',
+                  marginTop: '4px'
+                }}
+              >
+                {(tempConfig.didNumbers || ['07969671855', '07969671856', '07969671857']).map(did => (
+                  <option key={did} value={did}>{did}</option>
+                ))}
+              </select>
+            </div>
             <div className="doocti-settings-actions">
               <button 
                 type="button" 
@@ -1112,6 +1191,49 @@ const DooctiInAppDialer = () => {
           </form>
         )}
 
+        {/* Diagnostic Alert / Guidance Banner */}
+        {dialerNotice && (
+          <div
+            className="dialer-notice-banner"
+            style={{
+              margin: '10px 12px 4px 12px',
+              padding: '10px 12px',
+              backgroundColor: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              fontSize: '12px',
+              color: '#92400e',
+              lineHeight: '1.45',
+              boxShadow: '0 2px 5px rgba(0,0,0,0.05)'
+            }}
+          >
+            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px', color: '#d97706' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, color: '#b45309', marginBottom: '2px' }}>{dialerNotice.title}</div>
+              <div>{dialerNotice.message}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDialerNotice(null)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#b45309',
+                cursor: 'pointer',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {/* -----------------------------------------------------------
             Screen 1: Active In-Call / Ringing Status Bar
         ------------------------------------------------------------ */}
@@ -1125,6 +1247,11 @@ const DooctiInAppDialer = () => {
                 </span>
                 <span className="active-call-header-phone">
                   {activeCall?.number || 'Caller ID'}
+                  {activeCall?.callStatus === 'CONNECTING' && (
+                    <span style={{ fontSize: '10px', color: '#64748b', marginLeft: '6px' }}>
+                      (DID {config.cliNumber || '07969671855'})
+                    </span>
+                  )}
                 </span>
               </div>
             </div>
