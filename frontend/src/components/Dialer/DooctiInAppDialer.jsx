@@ -490,8 +490,9 @@ const DooctiInAppDialer = () => {
     }
 
     const leadName = contactData.name || contactData.contact_name || contactData.lead_name || matchedLead?.name || 'Customer';
-    const outboundCli = config.cliNumber || (config.didNumbers && config.didNumbers[0]) || '07969671855';
-    const uniqueSessionId = `doocti_${config.userNumber || '1282'}_${cleanNumber}_${Date.now()}`;
+    const outboundCli = String(config.cliNumber || (config.didNumbers && config.didNumbers[0]) || '07969671855').trim();
+    const userExt = String(config.userNumber || '1282').trim();
+    const uniqueSessionId = `doocti_${userExt}_${cleanNumber}_${Date.now()}`;
 
     // Payload formatted specifically for Doocti C2C handler:
     // IMPORTANT: Do NOT include customer_number to ensure Doocti's listener executes branch C,
@@ -503,11 +504,11 @@ const DooctiInAppDialer = () => {
       entity_type: contactData.entity_type || (contactData.company ? 'Contact' : 'Leads'),
       cli_number: outboundCli,
       crm_unique_id: uniqueSessionId,
-      station: String(config.userNumber || '1282'),
-      tenant_id: config.tenantId || 'chntechnolog',
-      user_email: config.userEmail || 'chntechnolog_agent01@doocti.com',
-      user_id: String(config.userId || '1282'),
-      user_number: String(config.userNumber || '1282')
+      station: userExt,
+      tenant_id: String(config.tenantId || 'chntechnolog').trim(),
+      user_email: String(config.userEmail || 'chntechnolog_agent01@doocti.com').trim(),
+      user_id: userExt,
+      user_number: userExt
     };
 
     activeSessionRef.current = {

@@ -1176,11 +1176,11 @@ def update_doocti_telephony_config(
             data = {}
 
     if payload.did_numbers is not None:
-        data["did_numbers"] = payload.did_numbers
+        data["did_numbers"] = [str(d).strip() for d in payload.did_numbers if str(d).strip()]
     if payload.admin_extension is not None:
-        data["admin_extension"] = payload.admin_extension
+        data["admin_extension"] = str(payload.admin_extension).strip()
     if payload.agent_extensions is not None:
-        data["agent_extensions"] = payload.agent_extensions
+        data["agent_extensions"] = [str(e).strip() for e in payload.agent_extensions if str(e).strip()]
     if payload.extension_mapping is not None:
         data["extension_mapping"] = payload.extension_mapping
     if payload.api_url is not None:
