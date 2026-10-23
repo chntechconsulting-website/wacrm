@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, field_validator
+from typing import Optional, List, Any
 from datetime import date, datetime
 
 class LeadBase(BaseModel):
@@ -32,8 +32,32 @@ class LeadBase(BaseModel):
     followup_date: Optional[date] = None
     followup_time: Optional[str] = None
 
+    @field_validator(
+        "email", "followup_date", "followup_time", "whatsapp_number",
+        "first_name", "last_name", "name", "designation", "company",
+        "industry", "website", "company_size", "city", "state", "location",
+        "campaign_name", "website_id", "website_name", "landing_page",
+        "rating", "priority", "requirement_notes",
+        mode="before", check_fields=False
+    )
+    @classmethod
+    def empty_str_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
 class LeadCreate(LeadBase):
     assigned_to: Optional[int] = None
+
+    @field_validator("assigned_to", mode="before")
+    @classmethod
+    def validate_assigned_to(cls, v: Any) -> Any:
+        if v is None or v == "" or v == "null" or v == 0:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
 
 class LeadUpdate(BaseModel):
     first_name: Optional[str] = None
@@ -62,6 +86,29 @@ class LeadUpdate(BaseModel):
     followup_date: Optional[date] = None
     followup_time: Optional[str] = None
     assigned_to: Optional[int] = None
+
+    @field_validator(
+        "email", "followup_date", "followup_time", "whatsapp_number",
+        "first_name", "last_name", "name", "phone", "designation", "company",
+        "industry", "website", "company_size", "city", "state", "location",
+        "source", "status", "campaign_name", "rating", "priority", "requirement_notes",
+        mode="before", check_fields=False
+    )
+    @classmethod
+    def empty_str_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("assigned_to", mode="before")
+    @classmethod
+    def validate_assigned_to(cls, v: Any) -> Any:
+        if v is None or v == "" or v == "null" or v == 0:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
 
 class LeadAssignRequest(BaseModel):
     assigned_to: int

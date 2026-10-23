@@ -551,9 +551,18 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setSubmitting(true);
       const payload = {
         ...formData,
-        name: `${formData.first_name} ${formData.last_name}`.trim(),
-        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to) : null,
-        followup_date: formData.followup_date || null
+        name: `${formData.first_name || ''} ${formData.last_name || ''}`.trim(),
+        email: formData.email && formData.email.trim() ? formData.email.trim() : null,
+        whatsapp_number: formData.whatsapp_number && formData.whatsapp_number.trim() ? formData.whatsapp_number.trim() : null,
+        company: formData.company && formData.company.trim() ? formData.company.trim() : null,
+        industry: formData.industry && formData.industry.trim() ? formData.industry.trim() : null,
+        website: formData.website && formData.website.trim() ? formData.website.trim() : null,
+        city: formData.city && formData.city.trim() ? formData.city.trim() : null,
+        state: formData.state && formData.state.trim() ? formData.state.trim() : null,
+        designation: formData.designation && formData.designation.trim() ? formData.designation.trim() : null,
+        requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
+        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null,
+        followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null
       };
 
       const res = await API.post('/leads/', payload);
@@ -567,7 +576,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       fetchSourceCounts();
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || 'Failed to create lead.');
+      const detail = err.response?.data?.detail;
+      let errMsg = 'Failed to create lead.';
+      if (typeof detail === 'string') errMsg = detail;
+      else if (Array.isArray(detail)) errMsg = detail.map(d => (d.loc?.[d.loc.length-1] ? `${d.loc[d.loc.length-1]}: ${d.msg || d.message}` : (d.msg || d.message || JSON.stringify(d)))).join('; ');
+      else if (detail && typeof detail === 'object') errMsg = detail.msg || detail.message || JSON.stringify(detail);
+      else if (err.message) errMsg = err.message;
+      setError(errMsg);
     } finally {
       setSubmitting(false);
     }
@@ -582,9 +597,18 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setSubmitting(true);
       const payload = {
         ...formData,
-        name: `${formData.first_name} ${formData.last_name}`.trim(),
-        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to) : null,
-        followup_date: formData.followup_date || null
+        name: `${formData.first_name || ''} ${formData.last_name || ''}`.trim(),
+        email: formData.email && formData.email.trim() ? formData.email.trim() : null,
+        whatsapp_number: formData.whatsapp_number && formData.whatsapp_number.trim() ? formData.whatsapp_number.trim() : null,
+        company: formData.company && formData.company.trim() ? formData.company.trim() : null,
+        industry: formData.industry && formData.industry.trim() ? formData.industry.trim() : null,
+        website: formData.website && formData.website.trim() ? formData.website.trim() : null,
+        city: formData.city && formData.city.trim() ? formData.city.trim() : null,
+        state: formData.state && formData.state.trim() ? formData.state.trim() : null,
+        designation: formData.designation && formData.designation.trim() ? formData.designation.trim() : null,
+        requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
+        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null,
+        followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null
       };
       await API.put(`/leads/${selectedLead.id}`, payload);
       setSuccess('Lead updated successfully!');
@@ -595,7 +619,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       }
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || 'Failed to update lead.');
+      const detail = err.response?.data?.detail;
+      let errMsg = 'Failed to update lead.';
+      if (typeof detail === 'string') errMsg = detail;
+      else if (Array.isArray(detail)) errMsg = detail.map(d => (d.loc?.[d.loc.length-1] ? `${d.loc[d.loc.length-1]}: ${d.msg || d.message}` : (d.msg || d.message || JSON.stringify(d)))).join('; ');
+      else if (detail && typeof detail === 'object') errMsg = detail.msg || detail.message || JSON.stringify(detail);
+      else if (err.message) errMsg = err.message;
+      setError(errMsg);
     } finally {
       setSubmitting(false);
     }
@@ -922,7 +952,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
       {error && (
         <div className="alert alert-error mb-4">
-          <AlertCircle size={18} /> <span>{error}</span>
+          <AlertCircle size={18} /> <span>{typeof error === 'object' ? JSON.stringify(error) : String(error)}</span>
         </div>
       )}
 

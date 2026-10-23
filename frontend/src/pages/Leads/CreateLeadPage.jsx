@@ -35,6 +35,24 @@ const SOURCE_OPTIONS = ['MANUAL', 'META', 'WEBSITE', 'EXCEL', 'REFERRAL'];
 const RATING_OPTIONS = ['Hot', 'Warm', 'Cold'];
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
 
+const formatApiError = (err, fallback = 'Failed to process request.') => {
+  const detail = err?.response?.data?.detail;
+  if (!detail) return err?.message || fallback;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(item => {
+      if (typeof item === 'string') return item;
+      const field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : '';
+      const msg = item.msg || item.message || JSON.stringify(item);
+      return field && field !== 'body' ? `${field}: ${msg}` : msg;
+    }).join('; ');
+  }
+  if (typeof detail === 'object') {
+    return detail.msg || detail.message || JSON.stringify(detail);
+  }
+  return fallback;
+};
+
 const CreateLeadPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -128,10 +146,23 @@ const CreateLeadPage = () => {
 
     try {
       setLoading(true);
-      const fullName = `${formData.first_name.trim()} ${formData.last_name.trim()}`;
+      const fullName = `${formData.first_name.trim()} ${formData.last_name.trim()}`.trim();
       const payload = {
         ...formData,
         name: fullName,
+        email: formData.email && formData.email.trim() ? formData.email.trim() : null,
+        whatsapp_number: formData.whatsapp_number && formData.whatsapp_number.trim() ? formData.whatsapp_number.trim() : null,
+        company: formData.company && formData.company.trim() ? formData.company.trim() : null,
+        industry: formData.industry && formData.industry.trim() ? formData.industry.trim() : null,
+        website: formData.website && formData.website.trim() ? formData.website.trim() : null,
+        company_size: formData.company_size && formData.company_size.trim() ? formData.company_size.trim() : null,
+        city: formData.city && formData.city.trim() ? formData.city.trim() : null,
+        state: formData.state && formData.state.trim() ? formData.state.trim() : null,
+        designation: formData.designation && formData.designation.trim() ? formData.designation.trim() : null,
+        campaign_name: formData.campaign_name && formData.campaign_name.trim() ? formData.campaign_name.trim() : null,
+        requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
+        followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null,
+        followup_time: formData.followup_time && formData.followup_time.trim() ? formData.followup_time.trim() : null,
         assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null
       };
 
@@ -154,7 +185,7 @@ const CreateLeadPage = () => {
 
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || 'Failed to create lead. Please verify all inputs.');
+      setError(formatApiError(err, 'Failed to create lead. Please verify all inputs.'));
     } finally {
       setLoading(false);
     }
@@ -250,7 +281,7 @@ const CreateLeadPage = () => {
         invalid_rows: res.data.invalid_rows || []
       });
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to import spreadsheet file.');
+      setError(formatApiError(err, 'Failed to import spreadsheet file.'));
     } finally {
       setLoading(false);
     }
@@ -377,7 +408,7 @@ const CreateLeadPage = () => {
       {error && (
         <div className="alert alert-error mb-4" style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', padding: '12px 16px', borderRadius: '8px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <AlertCircle size={18} />
-          <span>{error}</span>
+          <span>{typeof error === 'object' ? JSON.stringify(error) : String(error)}</span>
         </div>
       )}
 
