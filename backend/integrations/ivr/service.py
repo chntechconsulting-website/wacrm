@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from models import Lead, LeadActivity, Employee, CallLog
 from .base import BaseIVRProvider
-from .providers import MockIVRProvider, TwilioIVRProvider, ExotelIVRProvider, CloudShopeIVRProvider, SmartfloIVRProvider
+from .providers import MockIVRProvider, TwilioIVRProvider, ExotelIVRProvider, CloudShopeIVRProvider, SmartfloIVRProvider, DooctiIVRProvider
 from .schemas import (
     CALL_STATUS_INITIATED,
     CALL_STATUS_RINGING,
@@ -119,6 +119,25 @@ class IVRService:
                 api_url=sf_api_url
             )
 
+        elif provider_name in ["DOOCTI", "DOOCTI_IVR", "DOOCTI_TELEPHONY"]:
+            data_dict = data if "data" in locals() and isinstance(data, dict) else {}
+            doocti_account_id = data_dict.get("account_id") or "chntechnolog"
+            doocti_api_url = data_dict.get("api_url") or "https://beta3-app.doocti.com/"
+            dids = data_dict.get("did_numbers") or ["07969671855", "07969671856", "07969671857"]
+            if isinstance(dids, str):
+                dids = [d.strip() for d in dids.split(",") if d.strip()]
+            ext_map = data_dict.get("extension_mapping") or {}
+            admin_ext = data_dict.get("admin_extension") or "1281"
+            secret_token = data_dict.get("secret_token")
+            return DooctiIVRProvider(
+                account_id=doocti_account_id,
+                api_url=doocti_api_url,
+                did_numbers=dids,
+                extension_mapping=ext_map,
+                secret_token=secret_token,
+                admin_extension=admin_ext
+            )
+
         elif provider_name in ["MOCK", "CUSTOM", "MYOPERATOR"]:
             return MockIVRProvider(account_sid=account_sid or "mock_sid", auth_token=auth_token or "mock_token", from_number=from_number)
 
@@ -189,6 +208,7 @@ class IVRService:
 
         provider_call_id = call_res.get("provider_call_id")
         initial_status = call_res.get("status", CALL_STATUS_INITIATED)
+        active_from_number = call_res.get("station") or emp_phone
 
         # 5. Save CallLog Record in Database
         call_log = CallLog(
@@ -196,12 +216,12 @@ class IVRService:
             employee_id=current_employee_id,
             provider=provider_name,
             provider_call_id=provider_call_id,
-            from_number=emp_phone,
+            from_number=active_from_number,
             to_number=target_customer_phone,
             call_status=initial_status,
             call_direction="OUTBOUND",
             started_at=datetime.datetime.utcnow(),
-            notes=notes or f"Click-to-Call initiated. Employee: {emp_phone}, Customer: {target_customer_phone}"
+            notes=notes or f"Click-to-Call initiated via {provider_name}. Station: {active_from_number}, Customer: {target_customer_phone}"
         )
         db.add(call_log)
         db.commit()

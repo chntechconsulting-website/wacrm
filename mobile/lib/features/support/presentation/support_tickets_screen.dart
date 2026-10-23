@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/doocti_call_service.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/loading_indicator.dart';
@@ -29,12 +29,13 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
     });
   }
 
-  void _callNumber(String phone) async {
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$cleanPhone');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
+  void _callNumber(String phone, {int? leadId, String? contactName}) {
+    DooctiCallService.makeCall(
+      context,
+      phone: phone,
+      leadId: leadId,
+      contactName: contactName,
+    );
   }
 
   void _updateStatus(SupportTicketModel ticket) async {
@@ -226,7 +227,7 @@ class _SupportTicketsScreenState extends State<SupportTicketsScreen> {
                                         text: 'Call Client',
                                         icon: Icons.phone_rounded,
                                         height: 38,
-                                        onPressed: () => _callNumber(t.phone),
+                                        onPressed: () => _callNumber(t.phone, leadId: t.leadId, contactName: t.customerName),
                                       ),
                                     ),
                                   ],

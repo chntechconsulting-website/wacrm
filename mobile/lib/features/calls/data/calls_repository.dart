@@ -28,15 +28,46 @@ class CallsRepository {
     return [];
   }
 
-  Future<void> initiateIvrCall({required String phone, int? leadId}) async {
-    await _client.post(
-      ApiEndpoints.initiateCall,
-      body: {
-        'phone': phone,
-        'customer_phone': phone,
-        if (leadId != null) 'lead_id': leadId,
-      },
-    );
+  Future<Map<String, dynamic>> getAgentExtension() async {
+    try {
+      final response = await _client.get(ApiEndpoints.dooctiAgentExtension);
+      if (response is Map<String, dynamic>) {
+        return response;
+      }
+      return {'registered': false};
+    } catch (_) {
+      return {'registered': false};
+    }
+  }
+
+  Future<Map<String, dynamic>> initiateDooctiCall({
+    required String phone,
+    int? leadId,
+    String? notes,
+  }) async {
+    final body = {
+      'phone_number': phone,
+      'phone': phone,
+      'customer_phone': phone,
+      if (leadId != null) 'lead_id': leadId,
+      if (notes != null) 'notes': notes,
+    };
+    final response = await _client.post(ApiEndpoints.dooctiCall, body: body);
+    if (response is Map<String, dynamic>) {
+      return response;
+    }
+    return {'status': 'success', 'data': response};
+  }
+
+  Future<void> initiateIvrCall({required String phone, int? leadId, String? notes}) async {
+    final body = {
+      'phone': phone,
+      'customer_phone': phone,
+      'phone_number': phone,
+      if (leadId != null) 'lead_id': leadId,
+      if (notes != null) 'notes': notes,
+    };
+    await _client.post(ApiEndpoints.initiateCall, body: body);
   }
 
   Future<void> logManualCall({

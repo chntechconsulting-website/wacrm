@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../../core/services/doocti_call_service.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/loading_indicator.dart';
@@ -63,12 +63,13 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
     super.dispose();
   }
 
-  void _callNumber(String phone) async {
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$cleanPhone');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
+  void _callNumber(String phone, {int? leadId, String? contactName}) {
+    DooctiCallService.makeCall(
+      context,
+      phone: phone,
+      leadId: leadId,
+      contactName: contactName,
+    );
   }
 
   Color _getAvatarColor(String name) {
@@ -1085,7 +1086,7 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
                   children: [
                     // Circular Call Button
                     InkWell(
-                      onTap: () => _callNumber(lead.phone),
+                      onTap: () => _callNumber(lead.phone, leadId: lead.id, contactName: lead.name),
                       borderRadius: BorderRadius.circular(18),
                       child: Container(
                         width: 34,

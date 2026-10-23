@@ -31,9 +31,26 @@ class CallsProvider extends ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>> checkAgentExtension() async {
+    return await _repository.getAgentExtension();
+  }
+
+  Future<bool> initiateDooctiCall({required String phone, int? leadId, String? notes}) async {
+    try {
+      await _repository.initiateDooctiCall(phone: phone, leadId: leadId, notes: notes);
+      await fetchCalls(showLoading: false);
+      return true;
+    } catch (e) {
+      _errorMessage = e.toString().replaceAll('ApiException: ', '');
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<bool> initiateCall({required String phone, int? leadId}) async {
     try {
       await _repository.initiateIvrCall(phone: phone, leadId: leadId);
+      await fetchCalls(showLoading: false);
       return true;
     } catch (e) {
       _errorMessage = e.toString().replaceAll('ApiException: ', '');

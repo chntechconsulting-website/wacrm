@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/doocti_call_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
@@ -29,12 +29,13 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
     });
   }
 
-  void _callNumber(String phone) async {
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$cleanPhone');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
+  void _callNumber(String phone, {int? leadId, String? contactName}) {
+    DooctiCallService.makeCall(
+      context,
+      phone: phone,
+      leadId: leadId,
+      contactName: contactName,
+    );
   }
 
   void _showLogManualCallDialog() {
@@ -258,7 +259,7 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.phone_rounded, color: AppColors.primary, size: 20),
-                                  onPressed: () => _callNumber(call.customerNumber),
+                                  onPressed: () => _callNumber(call.customerNumber, leadId: call.leadId, contactName: call.leadName),
                                 ),
                               ],
                             ),

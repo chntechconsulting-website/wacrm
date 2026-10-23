@@ -11,7 +11,9 @@ from sqlalchemy import desc, asc, or_
 
 from database import get_db
 from models import Lead, LeadActivity, Customer, Employee, CallLog
+from models.user import User
 from models.integration import IntegrationConfig
+from services.auth import get_current_user
 from utils.timezone import get_ist_now, IST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -491,18 +493,18 @@ def get_doocti_contacts(
 @router.get("/crm/get/leadstatus")
 def get_lead_statuses(module: Optional[str] = None):
     statuses = [
-        {"label": "New Lead", "value": "NEW"},
-        {"label": "Assigned", "value": "ASSIGNED"},
-        {"label": "Contacted", "value": "CONTACTED"},
-        {"label": "Interested", "value": "INTERESTED"},
-        {"label": "Follow Up", "value": "FOLLOW_UP"},
-        {"label": "Qualified", "value": "QUALIFIED"},
-        {"label": "Converted", "value": "CONVERTED"},
-        {"label": "Not Interested", "value": "NOT_INTERESTED"},
-        {"label": "Lost", "value": "LOST"}
+        {"label": "New Lead", "value": "NEW", "code": "NEW", "name": "New Lead"},
+        {"label": "Assigned", "value": "ASSIGNED", "code": "ASSIGNED", "name": "Assigned"},
+        {"label": "Contacted", "value": "CONTACTED", "code": "CONTACTED", "name": "Contacted"},
+        {"label": "Interested", "value": "INTERESTED", "code": "INTERESTED", "name": "Interested"},
+        {"label": "Follow Up", "value": "FOLLOW_UP", "code": "FOLLOW_UP", "name": "Follow Up"},
+        {"label": "Qualified", "value": "QUALIFIED", "code": "QUALIFIED", "name": "Qualified"},
+        {"label": "Converted", "value": "CONVERTED", "code": "CONVERTED", "name": "Converted"},
+        {"label": "Not Interested", "value": "NOT_INTERESTED", "code": "NOT_INTERESTED", "name": "Not Interested"},
+        {"label": "Lost", "value": "LOST", "code": "LOST", "name": "Lost"}
     ]
     return {
-        "status": 200,
+        "status": "success",
         "statusCode": 200,
         "data": statuses,
         "statuses": statuses
@@ -515,17 +517,18 @@ def get_lead_statuses(module: Optional[str] = None):
 @router.get("/crm/disposition")
 def get_call_statuses(module: Optional[str] = None):
     dispos = [
-        {"label": "Answered", "value": "ANSWERED"},
-        {"label": "Interested", "value": "INTERESTED"},
-        {"label": "Follow Up", "value": "FOLLOW_UP"},
-        {"label": "Not Interested", "value": "NOT_INTERESTED"},
-        {"label": "Busy", "value": "BUSY"},
-        {"label": "No Answer", "value": "NO_ANSWER"},
-        {"label": "Wrong Number", "value": "WRONG_NUMBER"},
-        {"label": "Call Back Later", "value": "CALL_BACK"}
+        {"label": "Answered", "value": "ANSWERED", "code": "ANSWERED", "name": "Answered"},
+        {"label": "Missed", "value": "MISSED", "code": "MISSED", "name": "Missed"},
+        {"label": "Interested", "value": "INTERESTED", "code": "INTERESTED", "name": "Interested"},
+        {"label": "Follow Up", "value": "FOLLOW_UP", "code": "FOLLOW_UP", "name": "Follow Up"},
+        {"label": "Not Interested", "value": "NOT_INTERESTED", "code": "NOT_INTERESTED", "name": "Not Interested"},
+        {"label": "Busy", "value": "BUSY", "code": "BUSY", "name": "Busy"},
+        {"label": "No Answer", "value": "NO_ANSWER", "code": "NO_ANSWER", "name": "No Answer"},
+        {"label": "Wrong Number", "value": "WRONG_NUMBER", "code": "WRONG_NUMBER", "name": "Wrong Number"},
+        {"label": "Call Back Later", "value": "CALL_BACK", "code": "CALL_BACK", "name": "Call Back Later"}
     ]
     return {
-        "status": 200,
+        "status": "success",
         "statusCode": 200,
         "data": dispos,
         "statuses": dispos
@@ -1234,4 +1237,111 @@ def update_doocti_telephony_config(
         "message": "Doocti telephony configuration updated successfully",
         "config": get_doocti_config(db)
     }
+
+# -------------------------------------------------------------
+# 8. Agent Extension & Call Initiation for Mobile / Web Clients
+# -------------------------------------------------------------
+@router.get("/agent-extension")
+@router.get("/my-agent-extension")
+def get_my_doocti_agent_extension(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Validates and retrieves the current authenticated user's assigned DooCTI PBX extension,
+    outbound CLI (DID), and telephony session configuration for mobile and web dialers.
+    """
+    cfg = get_doocti_config(db)
+    ext_mapping = cfg.get("extension_mapping") or {}
+    dids = cfg.get("did_numbers") or DOOCTI_DIDS
+    primary_did = dids[0] if dids else "07969671855"
+
+    emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    emp_id = emp.id if emp else None
+    emp_name = emp.name if emp else (current_user.name or current_user.username)
+
+    # Find extension mapped to this employee
+    found_ext = None
+    if emp_id:
+        for ext, data in ext_mapping.items():
+            if isinstance(data, dict) and data.get("employee_id") == emp_id:
+                found_ext = str(ext).strip()
+                break
+
+    # Fallback mappings for known seeded employees
+    if not found_ext and emp_id:
+        fallback_map = {1: "1281", 8: "1283", 9: "1282", 10: "1286"}
+        if emp_id in fallback_map:
+            found_ext = fallback_map[emp_id]
+
+    # If admin and still no extension, assign admin extension
+    if not found_ext and (current_user.role == "ADMIN" or getattr(current_user, "is_admin", False)):
+        found_ext = cfg.get("admin_extension") or ADMIN_EXTENSION
+
+    if found_ext:
+        return {
+            "status": "success",
+            "has_extension": True,
+            "extension": found_ext,
+            "agent_name": emp_name,
+            "employee_id": emp_id,
+            "cli_number": primary_did,
+            "did_numbers": dids,
+            "tenant_id": cfg.get("account_id", "chntechnolog"),
+            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "provider": "DOOCTI"
+        }
+    else:
+        return {
+            "status": "warning",
+            "has_extension": False,
+            "extension": None,
+            "agent_name": emp_name,
+            "employee_id": emp_id,
+            "cli_number": primary_did,
+            "did_numbers": dids,
+            "tenant_id": cfg.get("account_id", "chntechnolog"),
+            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "provider": "DOOCTI",
+            "message": f"User '{emp_name}' does not have an assigned DooCTI PBX extension. Please configure in Settings → Integrations."
+        }
+
+@router.post("/call", status_code=status.HTTP_201_CREATED)
+def initiate_doocti_call(
+    body: Dict[str, Any],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Initiates an outbound phone call via DooCTI from mobile app or web CRM.
+    Routes through DooCTI telephony provider, creates call log, and synchronizes status.
+    """
+    from integrations.ivr.service import IVRService, IVRNotConfiguredException
+    from routers.ivr import build_call_log_response
+
+    emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    emp_id = emp.id if emp else None
+    emp_phone = emp.phone if (emp and emp.phone) else None
+
+    cust_phone = body.get("customer_phone") or body.get("phone") or body.get("phone_number")
+    lead_id = body.get("lead_id")
+    notes = body.get("notes")
+
+    try:
+        call_log = IVRService.initiate_call(
+            db=db,
+            lead_id=lead_id,
+            current_employee_id=emp_id,
+            customer_phone=cust_phone,
+            employee_phone=emp_phone,
+            notes=notes
+        )
+        return build_call_log_response(call_log, db)
+    except IVRNotConfiguredException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to initiate DooCTI call: {str(e)}")
+
 

@@ -121,6 +121,12 @@ class ApiEndpoints {
   static String ivrCallRecording(int id) => '$apiPrefix/ivr/calls/$id/recording';
   static String disconnectCall(int id) => '$apiPrefix/ivr/calls/$id/disconnect';
 
+  // DooCTI Telephony
+  static String get dooctiAgentExtension => '$apiPrefix/doocti/agent-extension';
+  static String get dooctiCall => '$apiPrefix/doocti/call';
+  static String get dooctiCallStatuses => '$apiPrefix/doocti/call-statuses';
+  static String get dooctiLeadStatuses => '$apiPrefix/doocti/lead-statuses';
+
   // WhatsApp
   static String get whatsappConversations => '$apiPrefix/whatsapp/conversations';
   static String whatsappLeadMessages(int leadId) => '$apiPrefix/whatsapp/conversations/by-lead/$leadId';

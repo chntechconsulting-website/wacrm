@@ -33,8 +33,19 @@ class ApiClient {
     return headers;
   }
 
-  dynamic _processResponse(http.Response response, {bool isLoginEndpoint = false}) {
+  dynamic _processResponse(
+    http.Response response, {
+    bool isLoginEndpoint = false,
+    String? url,
+  }) {
     final statusCode = response.statusCode;
+    final requestUrl = url ?? response.request?.url.toString() ?? '';
+    final isExcludedFromLogout = isLoginEndpoint ||
+        requestUrl.contains('/auth/login') ||
+        requestUrl.contains('/auth/token') ||
+        requestUrl.contains('/doocti/') ||
+        requestUrl.contains('/ivr/') ||
+        requestUrl.contains('/integrations/');
     dynamic body;
 
     try {
@@ -70,7 +81,7 @@ class ApiClient {
     }
 
     if (statusCode == 401) {
-      if (!isLoginEndpoint) {
+      if (!isExcludedFromLogout) {
         onUnauthorized?.call();
       }
       throw UnauthorizedException(errorMessage);
@@ -100,7 +111,7 @@ class ApiClient {
 
       final headers = await _getHeaders();
       final response = await _httpClient.get(uri, headers: headers).timeout(_timeout);
-      return _processResponse(response);
+      return _processResponse(response, url: url);
     } on SocketException {
       throw NetworkException();
     } on http.ClientException {
@@ -121,7 +132,7 @@ class ApiClient {
           .post(uri, headers: headers, body: encodedBody)
           .timeout(_timeout);
 
-      return _processResponse(response, isLoginEndpoint: isLogin);
+      return _processResponse(response, isLoginEndpoint: isLogin, url: url);
     } on SocketException {
       throw NetworkException();
     } on http.ClientException {
@@ -141,7 +152,7 @@ class ApiClient {
           .put(uri, headers: headers, body: encodedBody)
           .timeout(_timeout);
 
-      return _processResponse(response);
+      return _processResponse(response, url: url);
     } on SocketException {
       throw NetworkException();
     } on http.ClientException {
@@ -156,7 +167,7 @@ class ApiClient {
       final uri = Uri.parse(url);
       final headers = await _getHeaders();
       final response = await _httpClient.delete(uri, headers: headers).timeout(_timeout);
-      return _processResponse(response);
+      return _processResponse(response, url: url);
     } on SocketException {
       throw NetworkException();
     } on http.ClientException {
@@ -175,7 +186,7 @@ class ApiClient {
       if (response.statusCode == 200) {
         return response.bodyBytes;
       } else {
-        _processResponse(response);
+        _processResponse(response, url: url);
         throw ApiException('Failed to download document', statusCode: response.statusCode);
       }
     } on SocketException {

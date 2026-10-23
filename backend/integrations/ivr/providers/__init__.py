@@ -3,6 +3,8 @@ from .twilio_provider import TwilioIVRProvider
 from .exotel_provider import ExotelIVRProvider
 from .cloudshope_provider import CloudShopeIVRProvider
 from .smartflo_provider import SmartfloIVRProvider
+from .doocti_provider import DooctiIVRProvider
 
-__all__ = ["MockIVRProvider", "TwilioIVRProvider", "ExotelIVRProvider", "CloudShopeIVRProvider", "SmartfloIVRProvider"]
+__all__ = ["MockIVRProvider", "TwilioIVRProvider", "ExotelIVRProvider", "CloudShopeIVRProvider", "SmartfloIVRProvider", "DooctiIVRProvider"]
+
 

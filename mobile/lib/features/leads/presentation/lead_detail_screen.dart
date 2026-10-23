@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/services/doocti_call_service.dart';
 import '../../../core/widgets/wacrm_wave_nav_bar.dart';
 import '../../activities/presentation/activities_screen.dart';
 import '../../field_visits/presentation/field_visit_form_screen.dart';
@@ -43,12 +44,13 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
     return 'TS';
   }
 
-  void _callNumber(String phone) async {
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    final uri = Uri.parse('tel:$cleanPhone');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
+  void _callNumber(String phone) {
+    DooctiCallService.makeCall(
+      context,
+      phone: phone,
+      leadId: _lead.id,
+      contactName: _lead.name,
+    );
   }
 
   void _openWhatsApp(String phone) async {
