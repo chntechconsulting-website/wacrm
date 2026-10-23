@@ -75,6 +75,7 @@ const IntegrationsPage = () => {
 
   // WebRTC Extension to Employee Mapping State
   const [employeesList, setEmployeesList] = useState([]);
+  const [mappingSaving, setMappingSaving] = useState(false);
   const [newMapping, setNewMapping] = useState({
     extension: '',
     account_type: 'Agent',
@@ -303,38 +304,40 @@ const IntegrationsPage = () => {
     setShowSecrets({});
     const initialConfig = { ...item.masked_config };
     if (item.integration_type === 'IVR') {
-      const provider = initialConfig.provider || 'SMARTFLO';
-      if (provider === 'DOOCTI') {
-        if (initialConfig.api_url?.includes('smartflo') || initialConfig.api_url?.includes('tatateleservices')) {
-          initialConfig.api_url = 'https://beta3-app.doocti.com/';
-        }
-        if (initialConfig.account_id?.toLowerCase().includes('smartflo')) {
-          initialConfig.account_id = 'chntechnolog';
-        }
-        if (!initialConfig.phone_number || initialConfig.phone_number === '918069879797' || initialConfig.phone_number === '07969659985') {
-          initialConfig.phone_number = '07969671855, 07969671856, 07969671857';
-        }
-        if (!initialConfig.admin_extension) {
-          initialConfig.admin_extension = '1281';
-        }
-        if (!initialConfig.extensions || initialConfig.extensions === '1282, 1283') {
-          initialConfig.extensions = '1281, 1282, 1283, 1286';
-        }
-        // Fetch employees list
-        fetchEmployees();
-        // Fetch latest live extension mapping from backend if not yet in initialConfig
-        API.get('/doocti/config').then(res => {
-          if (res.data?.extension_mapping) {
-            setModalState(prev => ({
-              ...prev,
-              config: {
-                ...prev.config,
-                extension_mapping: res.data.extension_mapping || prev.config.extension_mapping || {}
-              }
-            }));
-          }
-        }).catch(() => {});
+      const provider = initialConfig.provider || 'DOOCTI';
+      if (initialConfig.api_url?.includes('smartflo') || initialConfig.api_url?.includes('tatateleservices')) {
+        initialConfig.api_url = 'https://beta3-app.doocti.com/';
       }
+      if (initialConfig.account_id?.toLowerCase().includes('smartflo')) {
+        initialConfig.account_id = 'chntechnolog';
+      }
+      if (!initialConfig.phone_number || initialConfig.phone_number === '918069879797' || initialConfig.phone_number === '07969659985') {
+        initialConfig.phone_number = '07969671855, 07969671856, 07969671857';
+      }
+      if (!initialConfig.admin_extension) {
+        initialConfig.admin_extension = '1281';
+      }
+      if (!initialConfig.extensions || initialConfig.extensions === '1282, 1283') {
+        initialConfig.extensions = '1281, 1282, 1283, 1286';
+      }
+      // Always fetch employee directory
+      fetchEmployees();
+      // Fetch latest live extension mapping from backend and sync into modal state
+      API.get('/doocti/config').then(res => {
+        if (res.data?.extension_mapping && Object.keys(res.data.extension_mapping).length > 0) {
+          setModalState(prev => ({
+            ...prev,
+            config: {
+              ...prev.config,
+              extension_mapping: res.data.extension_mapping,
+              admin_extension: res.data.admin_extension || prev.config.admin_extension,
+              agent_extensions: res.data.agent_extensions || prev.config.agent_extensions
+            }
+          }));
+        }
+      }).catch((err) => {
+        console.warn('Could not sync /doocti/config:', err);
+      });
     }
     setModalState({
       isOpen: true,
@@ -361,7 +364,7 @@ const IntegrationsPage = () => {
     }));
   };
 
-  const handleAddExtensionMapping = () => {
+  const handleAddExtensionMapping = async () => {
     const ext = String(newMapping.extension || '').trim();
     if (!ext) {
       showToast('error', 'Please enter a WebRTC Extension number (e.g. 1281, 1282).');
@@ -389,15 +392,17 @@ const IntegrationsPage = () => {
     const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
     const agentExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'AGENT');
 
+    const updatedConfig = {
+      ...modalState.config,
+      extension_mapping: currentMap,
+      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '1281',
+      extensions: agentExts.join(', ') || modalState.config?.extensions || '',
+      agent_extensions: agentExts
+    };
+
     setModalState(prev => ({
       ...prev,
-      config: {
-        ...prev.config,
-        extension_mapping: currentMap,
-        admin_extension: adminExts.join(', ') || prev.config.admin_extension || '1281',
-        extensions: agentExts.join(', ') || prev.config.extensions,
-        agent_extensions: agentExts
-      }
+      config: updatedConfig
     }));
 
     setNewMapping({
@@ -405,33 +410,103 @@ const IntegrationsPage = () => {
       account_type: 'Agent',
       employee_id: ''
     });
-    showToast('success', `Extension ${ext} assigned to ${emp.name} (${emp.role})`);
+
+    // Auto-save immediately to database so refresh won't lose changes
+    try {
+      setMappingSaving(true);
+      if (modalState.type) {
+        await API.post(`/integrations/hub/${modalState.type}/configure`, {
+          integration_type: modalState.type,
+          config_data: updatedConfig
+        });
+      }
+      if (modalState.type === 'IVR' && (modalState.config?.provider === 'DOOCTI' || updatedConfig.provider === 'DOOCTI')) {
+        await API.put('/doocti/config', {
+          extension_mapping: currentMap,
+          admin_extension: updatedConfig.admin_extension,
+          agent_extensions: agentExts,
+          did_numbers: typeof updatedConfig.phone_number === 'string' ? updatedConfig.phone_number.split(',').map(s => s.trim()) : updatedConfig.did_numbers,
+          api_url: updatedConfig.api_url,
+          account_id: updatedConfig.account_id
+        });
+      }
+      fetchStatus();
+      showToast('success', `Extension ${ext} assigned to ${emp.name} and saved!`);
+    } catch (saveErr) {
+      console.error('Failed to auto-save extension mapping:', saveErr);
+      showToast('warning', `Extension ${ext} assigned locally. Please click "Save Configuration" below.`);
+    } finally {
+      setMappingSaving(false);
+    }
   };
 
-  const handleRemoveExtensionMapping = (extToRemove) => {
+  const handleRemoveExtensionMapping = async (extToRemove) => {
     const currentMap = { ...(modalState.config?.extension_mapping || {}) };
     delete currentMap[extToRemove];
 
     const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
     const agentExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'AGENT');
 
+    const updatedConfig = {
+      ...modalState.config,
+      extension_mapping: currentMap,
+      admin_extension: adminExts.join(', ') || '',
+      extensions: agentExts.join(', ') || '',
+      agent_extensions: agentExts
+    };
+
     setModalState(prev => ({
       ...prev,
-      config: {
-        ...prev.config,
-        extension_mapping: currentMap,
-        admin_extension: adminExts.join(', ') || '',
-        extensions: agentExts.join(', ') || '',
-        agent_extensions: agentExts
-      }
+      config: updatedConfig
     }));
-    showToast('info', `Extension ${extToRemove} removed.`);
+
+    // Auto-save immediately to database so refresh won't lose changes
+    try {
+      setMappingSaving(true);
+      if (modalState.type) {
+        await API.post(`/integrations/hub/${modalState.type}/configure`, {
+          integration_type: modalState.type,
+          config_data: updatedConfig
+        });
+      }
+      if (modalState.type === 'IVR' && (modalState.config?.provider === 'DOOCTI' || updatedConfig.provider === 'DOOCTI')) {
+        await API.put('/doocti/config', {
+          extension_mapping: currentMap,
+          admin_extension: updatedConfig.admin_extension,
+          agent_extensions: agentExts,
+          did_numbers: typeof updatedConfig.phone_number === 'string' ? updatedConfig.phone_number.split(',').map(s => s.trim()) : updatedConfig.did_numbers,
+          api_url: updatedConfig.api_url,
+          account_id: updatedConfig.account_id
+        });
+      }
+      fetchStatus();
+      showToast('info', `Extension ${extToRemove} removed and saved.`);
+    } catch (saveErr) {
+      console.error('Failed to auto-save extension removal:', saveErr);
+      showToast('warning', `Extension ${extToRemove} removed locally. Please click "Save Configuration" below.`);
+    } finally {
+      setMappingSaving(false);
+    }
   };
 
   const handleIvrProviderChange = (newProvider) => {
     setModalState(prev => {
       const prevConfig = prev.config || {};
       let updatedConfig = { ...prevConfig, provider: newProvider };
+      if (newProvider === 'DOOCTI') {
+        fetchEmployees();
+        API.get('/doocti/config').then(res => {
+          if (res.data?.extension_mapping) {
+            setModalState(curr => ({
+              ...curr,
+              config: {
+                ...curr.config,
+                extension_mapping: res.data.extension_mapping || curr.config.extension_mapping
+              }
+            }));
+          }
+        }).catch(() => {});
+      }
       if (newProvider === 'DOOCTI') {
         if (!updatedConfig.api_url || updatedConfig.api_url.includes('tatateleservices') || updatedConfig.api_url.includes('smartflo')) {
           updatedConfig.api_url = 'https://beta3-app.doocti.com/';
@@ -1031,7 +1106,7 @@ const IntegrationsPage = () => {
 
                         {/* WebRTC Extension to Employee Assignment Table */}
                         <div style={{ marginTop: '20px', borderTop: '1px solid #e2e8f0', paddingTop: '16px', marginBottom: '16px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                             <div>
                               <h4 style={{ fontSize: '0.94rem', fontWeight: '700', color: '#0f172a', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <PhoneCall size={16} style={{ color: '#2563eb' }} />
@@ -1041,6 +1116,21 @@ const IntegrationsPage = () => {
                                 Configure which WebRTC Extension routes to each WA!CRM employee. Inbound and outbound call logs are automatically isolated to the mapped employee.
                               </p>
                             </div>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '4px 10px',
+                              backgroundColor: '#ecfdf5',
+                              border: '1px solid #a7f3d0',
+                              borderRadius: '999px',
+                              color: '#065f46',
+                              fontSize: '0.72rem',
+                              fontWeight: '600'
+                            }}>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981', display: 'inline-block' }}></span>
+                              {mappingSaving ? 'Saving to Database...' : 'Auto-Saved to Database'}
+                            </span>
                           </div>
 
                           {/* Extensions Table */}
@@ -1113,13 +1203,15 @@ const IntegrationsPage = () => {
                                           <button
                                             type="button"
                                             onClick={() => handleRemoveExtensionMapping(ext)}
+                                            disabled={mappingSaving}
                                             style={{
                                               background: 'none',
                                               border: 'none',
                                               color: '#ef4444',
-                                              cursor: 'pointer',
+                                              cursor: mappingSaving ? 'not-allowed' : 'pointer',
                                               padding: '4px',
-                                              borderRadius: '4px'
+                                              borderRadius: '4px',
+                                              opacity: mappingSaving ? 0.5 : 1
                                             }}
                                             title="Delete mapping"
                                           >
@@ -1214,23 +1306,24 @@ const IntegrationsPage = () => {
                             <button
                               type="button"
                               onClick={handleAddExtensionMapping}
+                              disabled={mappingSaving}
                               style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '6px',
                                 padding: '8px 14px',
-                                backgroundColor: '#2563eb',
+                                backgroundColor: mappingSaving ? '#94a3b8' : '#2563eb',
                                 color: '#ffffff',
                                 border: 'none',
                                 borderRadius: '6px',
                                 fontWeight: '600',
                                 fontSize: '0.8rem',
-                                cursor: 'pointer',
+                                cursor: mappingSaving ? 'not-allowed' : 'pointer',
                                 height: '35px'
                               }}
                             >
                               <Plus size={15} />
-                              <span>Add / Map</span>
+                              <span>{mappingSaving ? 'Saving...' : 'Add / Map'}</span>
                             </button>
                           </div>
                         </div>
