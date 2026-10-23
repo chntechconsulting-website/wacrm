@@ -23,10 +23,15 @@ API.interceptors.request.use(
 API.interceptors.response.use(
   (response) => response,
   (error) => {
-    const isLoginEndpoint = error.config && error.config.url && (error.config.url.includes('/auth/login') || error.config.url.includes('/auth/token'));
+    const url = error.config?.url || '';
+    const isExcludedFromLogout = 
+      url.includes('/auth/login') || 
+      url.includes('/auth/token') ||
+      url.includes('/doocti/') ||
+      url.includes('/integrations/');
     
-    // Only handle 401 for authenticated endpoints, never for the login endpoint itself
-    if (!isLoginEndpoint && error.response && error.response.status === 401) {
+    // Only handle 401 for authenticated core CRM endpoints, never for login or external integration webhooks
+    if (!isExcludedFromLogout && error.response && error.response.status === 401) {
       localStorage.removeItem('crm_token');
       localStorage.removeItem('crm_user');
       

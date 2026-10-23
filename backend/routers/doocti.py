@@ -601,16 +601,29 @@ async def push_doocti_call_log(
     # Optional webhook token authentication if secret_token is configured
     expected_token = doocti_cfg.get("secret_token")
     if expected_token:
-        provided_token = (
-            request.headers.get("X-Doocti-Token") or 
-            request.headers.get("Authorization") or 
-            request.query_params.get("token") or 
-            raw_data.get("token") or 
-            raw_data.get("secret_token")
-        )
-        if provided_token and str(provided_token).replace("Bearer ", "").strip() != str(expected_token).strip():
-            logger.warning(f"⛔ [DOOCTI CDR] Webhook authentication failed from IP={client_ip}")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Doocti webhook token")
+        auth_hdr = str(request.headers.get("Authorization") or "").strip()
+        is_authenticated_crm_user = False
+        if auth_hdr.startswith("Bearer "):
+            raw_jwt = auth_hdr[7:].strip()
+            try:
+                from services.auth import decode_access_token
+                token_data = decode_access_token(raw_jwt)
+                if token_data and token_data.username:
+                    is_authenticated_crm_user = True
+            except Exception:
+                is_authenticated_crm_user = False
+
+        if not is_authenticated_crm_user:
+            provided_token = (
+                request.headers.get("X-Doocti-Token") or 
+                request.query_params.get("token") or 
+                raw_data.get("token") or 
+                raw_data.get("secret_token") or
+                (auth_hdr[7:].strip() if auth_hdr.startswith("Bearer ") else auth_hdr)
+            )
+            if not provided_token or str(provided_token).strip() != str(expected_token).strip():
+                logger.warning(f"⛔ [DOOCTI CDR] Webhook authentication failed from IP={client_ip}")
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Doocti webhook token")
 
     # Sanitize payload for log auditing to prevent credential leakage
     safe_payload = sanitize_payload_for_logging(raw_data)

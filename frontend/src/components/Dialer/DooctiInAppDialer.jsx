@@ -1695,6 +1695,7 @@ const DooctiInAppDialer = () => {
             src={config.domain}
             title="Doocti Telephony Engine"
             className="doocti-telephony-iframe"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
             allow="microphone; camera; autoplay; display-capture; clipboard-read; clipboard-write"
           />
         </div>
