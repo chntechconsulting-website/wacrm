@@ -627,7 +627,7 @@ const DooctiInAppDialer = () => {
   };
 
   // End / Decline Call Handler
-  const handleEndCall = (outcomeOverride = null, isUserInitiated = false) => {
+  const handleEndCall = (outcomeOverride = null, isUserInitiated = false, phoneOverride = null) => {
     if (connectingTimeoutRef.current) {
       clearTimeout(connectingTimeoutRef.current);
       connectingTimeoutRef.current = null;
@@ -655,7 +655,7 @@ const DooctiInAppDialer = () => {
       timerIntervalRef.current = null;
     }
 
-    const targetPhone = currentCall?.number || session?.customerPhone || dialNumber || 'Unknown';
+    const targetPhone = phoneOverride || (currentCall?.number && currentCall.number !== 'Connected Call' ? currentCall.number : null) || session?.customerPhone || dialNumber || 'Unknown';
     const cleanPhone = String(targetPhone || '').replace(/[^0-9]/g, '');
     const userExt = String(config.userNumber || '1282').replace(/[^0-9]/g, '');
 
@@ -984,21 +984,22 @@ const DooctiInAppDialer = () => {
         }));
       }
 
+      const rawTermNum = msg.phone_number || msg.customer_number || msg.number || msg.destination || msg.callee || msg.caller || '';
       // Specific Terminal Outcomes
       if (['busy', 'line_busy', 'engaged'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
-        handleEndCall('BUSY');
+        handleEndCall('BUSY', false, rawTermNum);
       } else if (['failed', 'error', 'call_failed'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
         // For incoming calls that weren't answered, mark as MISSED, not FAILED
         const isInc = activeSessionRef.current?.direction === 'INBOUND' || isRinging;
-        handleEndCall(isInc ? 'MISSED' : 'FAILED');
+        handleEndCall(isInc ? 'MISSED' : 'FAILED', false, rawTermNum);
       } else if (['no_answer', 'noanswer', 'unreachable', 'timeout'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
-        handleEndCall('MISSED');
+        handleEndCall('MISSED', false, rawTermNum);
       } else if (['hangup', 'disconnected', 'ended', 'call_disconnect', 'call_ended', 'decline', 'rejected', 'terminate'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
-        handleEndCall();
+        handleEndCall(null, false, rawTermNum);
       }
     };
 

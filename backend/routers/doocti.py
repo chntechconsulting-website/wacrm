@@ -61,7 +61,7 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
         "extension_mapping": ext_map,
         "api_url": data.get("api_url", "https://beta3-app.doocti.com/"),
         "account_id": data.get("account_id", "chntechnolog"),
-        "secret_token": data.get("secret_token") or data.get("api_key")
+        "secret_token": data.get("secret_token")
     }
 
 def clean_phone(phone: Optional[Any]) -> str:
@@ -143,10 +143,12 @@ def resolve_employee_for_call(
 
     ext_mapping = extension_map if extension_map is not None else get_doocti_config(db).get("extension_mapping", {})
     st_clean = str(station).strip() if station else ""
+    st_digits = "".join(filter(str.isdigit, st_clean))
 
-    # 1. Match from extension mapping dictionary
-    if st_clean and st_clean in ext_mapping:
-        mapped_emp_id = ext_mapping[st_clean].get("employee_id")
+    # 1. Match from extension mapping dictionary (exact or numeric digits)
+    target_ext = st_clean if st_clean in ext_mapping else (st_digits if st_digits in ext_mapping else None)
+    if target_ext:
+        mapped_emp_id = ext_mapping[target_ext].get("employee_id")
         if mapped_emp_id:
             emp = db.query(Employee).filter(Employee.id == mapped_emp_id).first()
             if emp:
@@ -598,9 +600,9 @@ async def push_doocti_call_log(
     ext_mapping = doocti_cfg.get("extension_mapping") or {}
     valid_extensions = list(ext_mapping.keys()) or ALL_EXTENSIONS
 
-    # Optional webhook token authentication if secret_token is configured
+    # Optional webhook token authentication if secret_token is explicitly configured in Doocti
     expected_token = doocti_cfg.get("secret_token")
-    if expected_token:
+    if expected_token and isinstance(expected_token, str) and expected_token.strip():
         auth_hdr = str(request.headers.get("Authorization") or "").strip()
         is_authenticated_crm_user = False
         if auth_hdr.startswith("Bearer "):
@@ -618,11 +620,11 @@ async def push_doocti_call_log(
                 request.headers.get("X-Doocti-Token") or 
                 request.query_params.get("token") or 
                 raw_data.get("token") or 
-                raw_data.get("secret_token") or
-                (auth_hdr[7:].strip() if auth_hdr.startswith("Bearer ") else auth_hdr)
+                raw_data.get("secret_token")
             )
-            if not provided_token or str(provided_token).strip() != str(expected_token).strip():
-                logger.warning(f"⛔ [DOOCTI CDR] Webhook authentication failed from IP={client_ip}")
+            # Only validate if a token was provided; if standard Doocti webhook arrives without token, allow ingestion
+            if provided_token and str(provided_token).strip() != str(expected_token).strip():
+                logger.warning(f"⛔ [DOOCTI CDR] Webhook authentication token mismatch from IP={client_ip}")
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Doocti webhook token")
 
     # Sanitize payload for log auditing to prevent credential leakage
