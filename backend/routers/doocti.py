@@ -1262,10 +1262,15 @@ def get_my_doocti_agent_extension(
 
     # Find extension mapped to this employee
     found_ext = None
+    assigned_did = None
+    is_active = True
     if emp_id:
         for ext, data in ext_mapping.items():
             if isinstance(data, dict) and data.get("employee_id") == emp_id:
                 found_ext = str(ext).strip()
+                assigned_did = data.get("did_number")
+                if data.get("is_active") is False:
+                    is_active = False
                 break
 
     # Fallback mappings for known seeded employees
@@ -1273,32 +1278,81 @@ def get_my_doocti_agent_extension(
         fallback_map = {1: "1281", 8: "1283", 9: "1282", 10: "1286"}
         if emp_id in fallback_map:
             found_ext = fallback_map[emp_id]
+            did_fallback = {"1281": "07969671855", "1282": "07969671855", "1283": "07969671856", "1286": "07969671857"}
+            assigned_did = did_fallback.get(found_ext)
 
     # If admin and still no extension, assign admin extension
     if not found_ext and (current_user.role == "ADMIN" or getattr(current_user, "is_admin", False)):
         found_ext = cfg.get("admin_extension") or ADMIN_EXTENSION
+        assigned_did = "07969671855"
 
-    if found_ext:
+    # If ext found in mapping, recheck its assigned did and active status
+    if found_ext and found_ext in ext_mapping and isinstance(ext_mapping[found_ext], dict):
+        assigned_did = ext_mapping[found_ext].get("did_number") or assigned_did
+        if ext_mapping[found_ext].get("is_active") is False:
+            is_active = False
+
+    if found_ext and is_active and assigned_did:
         return {
             "status": "success",
             "has_extension": True,
+            "has_valid_did": True,
+            "is_active": True,
             "extension": found_ext,
             "agent_name": emp_name,
             "employee_id": emp_id,
-            "cli_number": primary_did,
+            "cli_number": assigned_did,
+            "assigned_did": assigned_did,
             "did_numbers": dids,
             "tenant_id": cfg.get("account_id", "chntechnolog"),
             "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
             "provider": "DOOCTI"
         }
+    elif found_ext and not is_active:
+        return {
+            "status": "warning",
+            "has_extension": True,
+            "has_valid_did": False,
+            "is_active": False,
+            "extension": found_ext,
+            "agent_name": emp_name,
+            "employee_id": emp_id,
+            "cli_number": None,
+            "assigned_did": None,
+            "did_numbers": dids,
+            "tenant_id": cfg.get("account_id", "chntechnolog"),
+            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "provider": "DOOCTI",
+            "message": f"WebRTC extension {found_ext} is currently deactivated. Please contact Administrator."
+        }
+    elif found_ext and not assigned_did:
+        return {
+            "status": "warning",
+            "has_extension": True,
+            "has_valid_did": False,
+            "is_active": True,
+            "extension": found_ext,
+            "agent_name": emp_name,
+            "employee_id": emp_id,
+            "cli_number": None,
+            "assigned_did": None,
+            "did_numbers": dids,
+            "tenant_id": cfg.get("account_id", "chntechnolog"),
+            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "provider": "DOOCTI",
+            "message": f"Extension {found_ext} does not have an outbound DID assigned. Please assign an outbound DID in Admin Settings."
+        }
     else:
         return {
             "status": "warning",
             "has_extension": False,
+            "has_valid_did": False,
+            "is_active": False,
             "extension": None,
             "agent_name": emp_name,
             "employee_id": emp_id,
-            "cli_number": primary_did,
+            "cli_number": None,
+            "assigned_did": None,
             "did_numbers": dids,
             "tenant_id": cfg.get("account_id", "chntechnolog"),
             "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),

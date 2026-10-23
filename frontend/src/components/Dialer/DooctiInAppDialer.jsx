@@ -232,6 +232,9 @@ const DooctiInAppDialer = () => {
   const [tempConfig, setTempConfig] = useState(config);
 
   // Dynamic user extension resolution based on logged-in user and extension mapping from Admin page
+  // Sync agent extension and assigned DID dynamically from backend database mapping
+  const [didErrorNotice, setDidErrorNotice] = useState(null);
+
   useEffect(() => {
     if (!user) return;
     API.get('/doocti/config')
@@ -239,9 +242,9 @@ const DooctiInAppDialer = () => {
         if (res.data?.status === 'success') {
           const mapping = res.data.extension_mapping || {};
           const dids = res.data.did_numbers || ['07969671855', '07969671856', '07969671857'];
-          const defaultCli = Array.isArray(dids) && dids.length > 0 ? dids[0] : '07969671855';
 
           let matchedExt = null;
+          let matchedData = null;
           for (const [ext, info] of Object.entries(mapping)) {
             if (
               info.employee_id === user.employee_id ||
@@ -249,12 +252,35 @@ const DooctiInAppDialer = () => {
               (info.username && info.username.toLowerCase() === (user.username || '').toLowerCase())
             ) {
               matchedExt = ext;
+              matchedData = info;
               break;
             }
           }
           if (!matchedExt && (user.role === 'ADMIN' || user.username === 'admin')) {
-            matchedExt = res.data.admin_extension || Object.keys(mapping).find(k => (mapping[k].type || '').toUpperCase() === 'ADMIN');
+            matchedExt = res.data.admin_extension || Object.keys(mapping).find(k => (mapping[k].type || '').toUpperCase() === 'ADMIN') || '1281';
+            matchedData = mapping[matchedExt] || { did_number: dids[0] || '07969671855', is_active: true };
           }
+
+          // Check assignment & DID validity
+          let assignedDid = matchedData?.did_number || null;
+          let isExtActive = matchedData ? matchedData.is_active !== false : true;
+
+          // If no assigned did in mapping but matched ext is known default, fallback
+          if (!assignedDid && matchedExt) {
+            const fallbackDidMap = { '1281': '07969671855', '1282': '07969671855', '1283': '07969671856', '1286': '07969671857' };
+            assignedDid = fallbackDidMap[matchedExt] || null;
+          }
+
+          if (!matchedExt) {
+            setDidErrorNotice('No WebRTC extension is assigned to your user account. Please contact Administrator to map an extension in Settings → Integrations.');
+          } else if (!isExtActive) {
+            setDidErrorNotice(`WebRTC extension ${matchedExt} is currently deactivated. Please contact Administrator.`);
+          } else if (!assignedDid) {
+            setDidErrorNotice(`Extension ${matchedExt} does not have an outbound DID assigned. Outbound calls are disabled until an Admin assigns a DID in Settings.`);
+          } else {
+            setDidErrorNotice(null);
+          }
+
           setConfig(prev => {
             const nextExt = matchedExt || prev.userNumber || '1282';
             const updated = {
@@ -262,8 +288,8 @@ const DooctiInAppDialer = () => {
               userId: nextExt,
               userNumber: nextExt,
               userEmail: (matchedExt && mapping[matchedExt]?.email) || prev.userEmail || 'chntechnolog_agent01@doocti.com',
-              cliNumber: prev.cliNumber || defaultCli,
-              didNumbers: Array.isArray(dids) ? dids : [defaultCli]
+              cliNumber: assignedDid || '',
+              didNumbers: Array.isArray(dids) ? dids : []
             };
             localStorage.setItem('doocti_config', JSON.stringify(updated));
             return updated;
@@ -479,6 +505,18 @@ const DooctiInAppDialer = () => {
     if (!phoneNumber) return;
     setDialerNotice(null);
 
+    // Validate outbound caller ID (DID) assignment
+    const outboundCli = String(config.cliNumber || '').trim();
+    if (!outboundCli) {
+      setDialerNotice({
+        type: 'error',
+        title: 'Call Prevented: No Outbound DID Assigned',
+        message: didErrorNotice || `Extension ${config.userNumber || ''} has no outbound DID assigned. Outbound calls are prevented to avoid displaying an incorrect Caller ID. Please contact an Administrator.`
+      });
+      toggleMinimize(false);
+      return;
+    }
+
     // Normalize phone number to 10-digit format (strip 91 country code or leading 0)
     let cleanNumber = String(phoneNumber).replace(/[^0-9]/g, '');
     if (cleanNumber.length === 12 && cleanNumber.startsWith('91')) {
@@ -490,7 +528,6 @@ const DooctiInAppDialer = () => {
     }
 
     const leadName = contactData.name || contactData.contact_name || contactData.lead_name || matchedLead?.name || 'Customer';
-    const outboundCli = String(config.cliNumber || (config.didNumbers && config.didNumbers[0]) || '07969671855').trim();
     const userExt = String(config.userNumber || '1282').trim();
     const uniqueSessionId = `doocti_${userExt}_${cleanNumber}_${Date.now()}`;
 
@@ -1191,6 +1228,32 @@ const DooctiInAppDialer = () => {
               </button>
             </div>
           </form>
+        )}
+
+        {/* Persistent Error / Warning Notice for Unassigned DID or Deactivated Extension */}
+        {didErrorNotice && !dialerNotice && (
+          <div
+            className="dialer-notice-banner"
+            style={{
+              margin: '10px 12px 4px 12px',
+              padding: '10px 12px',
+              backgroundColor: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              fontSize: '12px',
+              color: '#991b1b',
+              lineHeight: '1.4'
+            }}
+          >
+            <AlertCircle size={18} style={{ color: '#ef4444', flexShrink: 0, marginTop: '2px' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: '700', marginBottom: '2px', color: '#991b1b' }}>Outbound Calling Disabled</div>
+              <div>{didErrorNotice}</div>
+            </div>
+          </div>
         )}
 
         {/* Diagnostic Alert / Guidance Banner */}

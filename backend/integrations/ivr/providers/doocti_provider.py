@@ -102,8 +102,26 @@ class DooctiIVRProvider(BaseIVRProvider):
                 "Please configure extension mapping in CRM Settings → Integrations → Doocti Telephony."
             )
 
-        # 2. Primary outbound DID for caller ID display
-        outbound_cli = self.did_numbers[0] if self.did_numbers else "07969671855"
+        # 2. Resolve agent-specific assigned DID and check active status
+        ext_info = self.extension_mapping.get(str(agent_ext), {}) if isinstance(self.extension_mapping, dict) else {}
+        if ext_info.get("is_active") is False:
+            raise ValueError(
+                f"WebRTC extension {agent_ext} is deactivated. Please activate it in Settings -> Integrations -> Doocti Telephony."
+            )
+
+        assigned_did = ext_info.get("did_number") if isinstance(ext_info, dict) else None
+        if not assigned_did:
+            # Fallback to configured admin/agent defaults if strictly mapped in fallback_map
+            did_fallback = {"1281": "07969671855", "1282": "07969671855", "1283": "07969671856", "1286": "07969671857"}
+            assigned_did = did_fallback.get(str(agent_ext))
+
+        if not assigned_did:
+            raise ValueError(
+                f"No outbound DID number is assigned to extension {agent_ext}. "
+                "Please assign a valid DID in CRM Settings -> Integrations -> Doocti Telephony."
+            )
+
+        outbound_cli = str(assigned_did).strip()
 
         # 3. Create unique call session identifier
         ts = int(datetime.datetime.now().timestamp() * 1000)

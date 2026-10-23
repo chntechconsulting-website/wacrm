@@ -79,7 +79,9 @@ const IntegrationsPage = () => {
   const [newMapping, setNewMapping] = useState({
     extension: '',
     account_type: 'Agent',
-    employee_id: ''
+    employee_id: '',
+    did_number: '',
+    is_active: true
   });
 
   const fetchEmployees = async () => {
@@ -351,7 +353,7 @@ const IntegrationsPage = () => {
   const closeModal = () => {
     setModalState({ isOpen: false, type: null, config: {} });
     setShowSecrets({});
-    setNewMapping({ extension: '', account_type: 'Agent', employee_id: '' });
+    setNewMapping({ extension: '', account_type: 'Agent', employee_id: '', did_number: '', is_active: true });
   };
 
   const handleConfigChange = (key, value) => {
@@ -374,6 +376,10 @@ const IntegrationsPage = () => {
       showToast('error', 'Please select a CRM Employee.');
       return;
     }
+    if (!newMapping.did_number) {
+      showToast('error', 'Please select an Assigned Outbound DID number.');
+      return;
+    }
     const emp = employeesList.find(e => String(e.id) === String(newMapping.employee_id));
     if (!emp) {
       showToast('error', 'Selected employee not found in employee directory.');
@@ -381,12 +387,22 @@ const IntegrationsPage = () => {
     }
 
     const currentMap = { ...(modalState.config?.extension_mapping || {}) };
+
+    // Prevent duplicate mapping of same employee to multiple different extensions unless intended
+    const existingExtForEmp = Object.entries(currentMap).find(([k, v]) => String(v.employee_id) === String(emp.id) && k !== ext);
+    if (existingExtForEmp) {
+      showToast('warning', `Employee ${emp.name} is already assigned to extension ${existingExtForEmp[0]}. Re-assigning to ${ext}.`);
+      delete currentMap[existingExtForEmp[0]];
+    }
+
     currentMap[ext] = {
       employee_id: emp.id,
       username: emp.username || '',
       name: emp.name || '',
       role: emp.role || '',
-      type: newMapping.account_type.toUpperCase()
+      type: newMapping.account_type.toUpperCase(),
+      did_number: String(newMapping.did_number).trim(),
+      is_active: newMapping.is_active !== false
     };
 
     const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
@@ -408,7 +424,9 @@ const IntegrationsPage = () => {
     setNewMapping({
       extension: '',
       account_type: 'Agent',
-      employee_id: ''
+      employee_id: '',
+      did_number: '',
+      is_active: true
     });
 
     // Auto-save immediately to database so refresh won't lose changes
@@ -431,10 +449,115 @@ const IntegrationsPage = () => {
         });
       }
       fetchStatus();
-      showToast('success', `Extension ${ext} assigned to ${emp.name} and saved!`);
+      showToast('success', `Extension ${ext} assigned to ${emp.name} (DID: ${newMapping.did_number}) and saved!`);
     } catch (saveErr) {
       console.error('Failed to auto-save extension mapping:', saveErr);
       showToast('warning', `Extension ${ext} assigned locally. Please click "Save Configuration" below.`);
+    } finally {
+      setMappingSaving(false);
+    }
+  };
+
+  const handleToggleExtensionStatus = async (ext) => {
+    const currentMap = { ...(modalState.config?.extension_mapping || {}) };
+    if (!currentMap[ext]) return;
+    const currentActive = currentMap[ext].is_active !== false;
+    currentMap[ext] = {
+      ...currentMap[ext],
+      is_active: !currentActive
+    };
+
+    const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
+    const agentExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'AGENT');
+
+    const updatedConfig = {
+      ...modalState.config,
+      extension_mapping: currentMap,
+      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '1281',
+      extensions: agentExts.join(', ') || modalState.config?.extensions || '',
+      agent_extensions: agentExts
+    };
+
+    setModalState(prev => ({
+      ...prev,
+      config: updatedConfig
+    }));
+
+    try {
+      setMappingSaving(true);
+      if (modalState.type) {
+        await API.post(`/integrations/hub/${modalState.type}/configure`, {
+          integration_type: modalState.type,
+          config_data: updatedConfig
+        });
+      }
+      if (modalState.type === 'IVR') {
+        await API.put('/doocti/config', {
+          extension_mapping: currentMap,
+          admin_extension: updatedConfig.admin_extension,
+          agent_extensions: agentExts,
+          did_numbers: typeof updatedConfig.phone_number === 'string' ? updatedConfig.phone_number.split(',').map(s => s.trim()) : updatedConfig.did_numbers,
+          api_url: updatedConfig.api_url,
+          account_id: updatedConfig.account_id
+        });
+      }
+      fetchStatus();
+      showToast('success', `Extension ${ext} is now ${!currentActive ? 'Active' : 'Inactive'}.`);
+    } catch (saveErr) {
+      console.error('Failed to toggle extension status:', saveErr);
+      showToast('error', 'Failed to update status in database.');
+    } finally {
+      setMappingSaving(false);
+    }
+  };
+
+  const handleUpdateExtensionDid = async (ext, newDid) => {
+    const currentMap = { ...(modalState.config?.extension_mapping || {}) };
+    if (!currentMap[ext]) return;
+    currentMap[ext] = {
+      ...currentMap[ext],
+      did_number: String(newDid).trim()
+    };
+
+    const adminExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'ADMIN');
+    const agentExts = Object.keys(currentMap).filter(k => (currentMap[k].type || '').toUpperCase() === 'AGENT');
+
+    const updatedConfig = {
+      ...modalState.config,
+      extension_mapping: currentMap,
+      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '1281',
+      extensions: agentExts.join(', ') || modalState.config?.extensions || '',
+      agent_extensions: agentExts
+    };
+
+    setModalState(prev => ({
+      ...prev,
+      config: updatedConfig
+    }));
+
+    try {
+      setMappingSaving(true);
+      if (modalState.type) {
+        await API.post(`/integrations/hub/${modalState.type}/configure`, {
+          integration_type: modalState.type,
+          config_data: updatedConfig
+        });
+      }
+      if (modalState.type === 'IVR') {
+        await API.put('/doocti/config', {
+          extension_mapping: currentMap,
+          admin_extension: updatedConfig.admin_extension,
+          agent_extensions: agentExts,
+          did_numbers: typeof updatedConfig.phone_number === 'string' ? updatedConfig.phone_number.split(',').map(s => s.trim()) : updatedConfig.did_numbers,
+          api_url: updatedConfig.api_url,
+          account_id: updatedConfig.account_id
+        });
+      }
+      fetchStatus();
+      showToast('success', `DID for Extension ${ext} updated to ${newDid}.`);
+    } catch (saveErr) {
+      console.error('Failed to update extension DID:', saveErr);
+      showToast('error', 'Failed to update DID in database.');
     } finally {
       setMappingSaving(false);
     }
@@ -1140,23 +1263,27 @@ const IntegrationsPage = () => {
                                 <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569' }}>
                                   <th style={{ padding: '9px 12px', fontWeight: '700' }}>WebRTC Extension</th>
                                   <th style={{ padding: '9px 12px', fontWeight: '700' }}>Account Type</th>
-                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Employee ID</th>
-                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Username</th>
-                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Employee Name</th>
-                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Role</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Employee / Agent</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Assigned Outbound DID</th>
+                                  <th style={{ padding: '9px 12px', fontWeight: '700' }}>Status</th>
                                   <th style={{ padding: '9px 12px', fontWeight: '700', textAlign: 'center' }}>Action</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {Object.entries(modalState.config?.extension_mapping || {}).length === 0 ? (
                                   <tr>
-                                    <td colSpan="7" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>
-                                      No extensions configured yet. Use the form below to assign an extension to an employee.
+                                    <td colSpan="6" style={{ padding: '24px', textAlign: 'center', color: '#94a3b8' }}>
+                                      No extensions configured yet. Use the form below to assign an extension and DID to an employee.
                                     </td>
                                   </tr>
                                 ) : (
                                   Object.entries(modalState.config?.extension_mapping || {}).map(([ext, info]) => {
                                     const isAdmin = (info.type || '').toUpperCase() === 'ADMIN';
+                                    const isActive = info.is_active !== false;
+                                    const availableDids = (modalState.config?.phone_number || '07969671855, 07969671856, 07969671857')
+                                      .split(',')
+                                      .map(d => d.trim())
+                                      .filter(Boolean);
                                     return (
                                       <tr key={ext} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                         <td style={{ padding: '9px 12px', fontWeight: '700', fontFamily: 'monospace', color: '#0f172a' }}>
@@ -1177,27 +1304,52 @@ const IntegrationsPage = () => {
                                             {isAdmin ? 'Admin' : 'Agent'}
                                           </span>
                                         </td>
-                                        <td style={{ padding: '9px 12px', color: '#64748b', fontWeight: '500' }}>
-                                          {info.employee_id}
-                                        </td>
-                                        <td style={{ padding: '9px 12px', color: '#334155', fontWeight: '600' }}>
-                                          {info.username}
-                                        </td>
-                                        <td style={{ padding: '9px 12px', color: '#0f172a', fontWeight: '600' }}>
-                                          {info.name}
+                                        <td style={{ padding: '9px 12px' }}>
+                                          <div style={{ fontWeight: '600', color: '#0f172a' }}>{info.name || 'Unknown'}</div>
+                                          <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                                            {info.username ? `@${info.username}` : ''} • ID: {info.employee_id} • {info.role || 'Staff'}
+                                          </div>
                                         </td>
                                         <td style={{ padding: '9px 12px' }}>
-                                          <span style={{
-                                            padding: '2px 7px',
-                                            borderRadius: '4px',
-                                            fontSize: '0.7rem',
-                                            fontWeight: '600',
-                                            backgroundColor: '#f1f5f9',
-                                            color: '#475569',
-                                            border: '1px solid #e2e8f0'
-                                          }}>
-                                            {info.role}
-                                          </span>
+                                          <select
+                                            value={info.did_number || ''}
+                                            onChange={(e) => handleUpdateExtensionDid(ext, e.target.value)}
+                                            disabled={mappingSaving}
+                                            style={{
+                                              padding: '4px 8px',
+                                              borderRadius: '6px',
+                                              border: '1px solid #cbd5e1',
+                                              fontSize: '0.78rem',
+                                              fontWeight: '600',
+                                              color: info.did_number ? '#0f172a' : '#ef4444',
+                                              backgroundColor: '#f8fafc'
+                                            }}
+                                          >
+                                            <option value="">-- No DID Assigned --</option>
+                                            {availableDids.map(d => (
+                                              <option key={d} value={d}>{d}</option>
+                                            ))}
+                                          </select>
+                                        </td>
+                                        <td style={{ padding: '9px 12px' }}>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleToggleExtensionStatus(ext)}
+                                            disabled={mappingSaving}
+                                            style={{
+                                              padding: '3px 9px',
+                                              borderRadius: '999px',
+                                              fontSize: '0.72rem',
+                                              fontWeight: '700',
+                                              border: `1px solid ${isActive ? '#bbf7d0' : '#fecaca'}`,
+                                              backgroundColor: isActive ? '#f0fdf4' : '#fef2f2',
+                                              color: isActive ? '#16a34a' : '#ef4444',
+                                              cursor: 'pointer'
+                                            }}
+                                            title="Click to toggle status"
+                                          >
+                                            {isActive ? '● Active' : '○ Inactive'}
+                                          </button>
                                         </td>
                                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                                           <button
@@ -1268,7 +1420,7 @@ const IntegrationsPage = () => {
                               </label>
                               <input
                                 type="text"
-                                placeholder="e.g. 1281"
+                                placeholder="e.g. 1282"
                                 value={newMapping.extension}
                                 onChange={(e) => setNewMapping(prev => ({ ...prev, extension: e.target.value }))}
                                 style={{
@@ -1282,7 +1434,34 @@ const IntegrationsPage = () => {
                               />
                             </div>
 
-                            <div style={{ flex: '1', minWidth: '110px' }}>
+                            <div style={{ flex: '1.2', minWidth: '140px' }}>
+                              <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
+                                Assigned Outbound DID
+                              </label>
+                              <select
+                                value={newMapping.did_number}
+                                onChange={(e) => setNewMapping(prev => ({ ...prev, did_number: e.target.value }))}
+                                style={{
+                                  width: '100%',
+                                  padding: '7px 10px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #cbd5e1',
+                                  fontSize: '0.8rem',
+                                  backgroundColor: '#ffffff'
+                                }}
+                              >
+                                <option value="">-- Choose DID --</option>
+                                {(modalState.config?.phone_number || '07969671855, 07969671856, 07969671857')
+                                  .split(',')
+                                  .map(d => d.trim())
+                                  .filter(Boolean)
+                                  .map(d => (
+                                    <option key={d} value={d}>{d}</option>
+                                  ))}
+                              </select>
+                            </div>
+
+                            <div style={{ flex: '1', minWidth: '100px' }}>
                               <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', color: '#475569', marginBottom: '4px' }}>
                                 Account Type
                               </label>
