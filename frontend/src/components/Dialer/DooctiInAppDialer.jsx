@@ -602,6 +602,20 @@ const DooctiInAppDialer = () => {
     // Dispatch postMessage using wildcard target origin to ensure iframe receipt
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
+        // 1. Direct Web Dialer Method:
+        // Doocti's native dialpad dispatches { type: 'Manual', data: { number, id } }
+        // which calls An(l, d, u) without cli_number.
+        // This ensures Doocti PBX uses the agent's WebRTC station extension directly,
+        // avoiding trunk-level pilot number fallback (07969659985) and using the station's assigned DID!
+        iframeRef.current.contentWindow.postMessage({
+          type: 'Manual',
+          data: {
+            number: cleanNumber,
+            id: String(contactData.id || contactData.lead_id || matchedLead?.id || '0')
+          }
+        }, '*');
+
+        // 2. Also dispatch full CRM context metadata for contact/lead popup & C2C sync
         iframeRef.current.contentWindow.postMessage({ data: payload }, '*');
       } catch (err) {
         console.error('Failed to dispatch postMessage to Doocti iframe:', err);
