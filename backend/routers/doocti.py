@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/doocti", tags=["Doocti IVR Connector"])
 
 # -------------------------------------------------------------
-# Telephony Configuration Constants
+# Telephony Configuration Dynamic Defaults (Loaded from IntegrationConfig)
 # -------------------------------------------------------------
-DOOCTI_DIDS = ["07969671855", "07969671856", "07969671857"]
-ADMIN_EXTENSION = "1281"
-AGENT_EXTENSIONS = ["1282", "1283", "1286"]
-ALL_EXTENSIONS = ["1281", "1282", "1283", "1286"]
+DOOCTI_DIDS: List[str] = []
+ADMIN_EXTENSION = ""
+AGENT_EXTENSIONS: List[str] = []
+ALL_EXTENSIONS: List[str] = []
 
 # -------------------------------------------------------------
 # Helpers
@@ -93,13 +93,16 @@ def is_did_number(number: Optional[Any], did_list: Optional[List[str]] = None) -
             return True
     return False
 
-def is_extension_number(number: Optional[Any], ext_list: Optional[List[str]] = None) -> bool:
-    """Check if number is one of our WebRTC extensions (1281, 1282, 1283, 1286)."""
+def is_extension_number(number: Optional[Any], ext_list: Optional[List[str]] = None, ext_map: Optional[Dict[str, Any]] = None) -> bool:
+    """Check if number is one of configured WebRTC extensions in database."""
     if not number:
         return False
     st = str(number).strip()
-    exts = ext_list or ALL_EXTENSIONS
-    return st in exts
+    if ext_map and st in ext_map:
+        return True
+    if ext_list and st in ext_list:
+        return True
+    return len(st) in [3, 4, 5] and st.isdigit()
 
 def sanitize_payload_for_logging(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Mask sensitive tokens, passwords and secrets before writing to logs."""
@@ -133,10 +136,9 @@ def resolve_employee_for_call(
     """
     Accurately maps the call event to a WA!CRM Employee ID:
     1. Explicit employee_id from payload (if valid)
-    2. Configured extension mapping (1281 -> Admin, 1282 -> Chandra Mohan, 1283 -> Gowtham, 1286 -> ram)
+    2. Dynamic extension mapping from database configuration
     3. Employee database email lookup
     4. Employee database username or extension/phone lookup
-    5. Fallback mapping
     """
     if explicit_emp_id and str(explicit_emp_id).isdigit():
         emp = db.query(Employee).filter(Employee.id == int(explicit_emp_id)).first()
@@ -871,7 +873,7 @@ async def push_doocti_call_log(
                 source="DOOCTI",
                 status="CONTACTED" if status_str in ["ANSWERED", "COMPLETED"] else "NEW",
                 priority="MEDIUM",
-                requirement_notes=f"Auto-created from DooCTI Call. Station: {station_str or '1282'}, Agent: {agent_name or 'DooCTI'}"
+                requirement_notes=f"Auto-created from DooCTI Call. Station: {station_str or 'Unassigned'}, Agent: {agent_name or 'DooCTI'}"
             )
             db.add(new_lead)
             db.commit()
@@ -1009,9 +1011,9 @@ async def push_doocti_call_log(
     else:
         if call_dir == "INBOUND":
             from_num = customer_phone or clean_target
-            to_num = matched_did or station_str or (configured_dids[0] if configured_dids else "07969671855")
+            to_num = matched_did or station_str or (configured_dids[0] if configured_dids else "")
         else:
-            from_num = matched_did or station_str or (configured_dids[0] if configured_dids else "07969671855")
+            from_num = matched_did or station_str or (configured_dids[0] if configured_dids else "")
             to_num = customer_phone or clean_target
 
         call_entry = CallLog(
@@ -1253,14 +1255,14 @@ def get_my_doocti_agent_extension(
     """
     cfg = get_doocti_config(db)
     ext_mapping = cfg.get("extension_mapping") or {}
-    dids = cfg.get("did_numbers") or DOOCTI_DIDS
-    primary_did = dids[0] if dids else "07969671855"
+    dids = cfg.get("did_numbers") or []
+    primary_did = dids[0] if dids else None
 
     emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
     emp_id = emp.id if emp else None
     emp_name = emp.name if emp else (current_user.name or current_user.username)
 
-    # Find extension mapped to this employee
+    # Find extension mapped to this employee strictly from database configuration
     found_ext = None
     assigned_did = None
     is_active = True
@@ -1273,18 +1275,11 @@ def get_my_doocti_agent_extension(
                     is_active = False
                 break
 
-    # Fallback mappings for known seeded employees
-    if not found_ext and emp_id:
-        fallback_map = {1: "1281", 8: "1283", 9: "1282", 10: "1286"}
-        if emp_id in fallback_map:
-            found_ext = fallback_map[emp_id]
-            did_fallback = {"1281": "07969671855", "1282": "07969671855", "1283": "07969671856", "1286": "07969671857"}
-            assigned_did = did_fallback.get(found_ext)
-
-    # If admin and still no extension, assign admin extension
+    # If admin and still no extension, check if an admin extension is configured
     if not found_ext and (current_user.role == "ADMIN" or getattr(current_user, "is_admin", False)):
-        found_ext = cfg.get("admin_extension") or ADMIN_EXTENSION
-        assigned_did = "07969671855"
+        found_ext = cfg.get("admin_extension")
+        if found_ext and found_ext in ext_mapping and isinstance(ext_mapping[found_ext], dict):
+            assigned_did = ext_mapping[found_ext].get("did_number")
 
     # If ext found in mapping, recheck its assigned did and active status
     if found_ext and found_ext in ext_mapping and isinstance(ext_mapping[found_ext], dict):

@@ -123,11 +123,11 @@ class IVRService:
             data_dict = data if "data" in locals() and isinstance(data, dict) else {}
             doocti_account_id = data_dict.get("account_id") or "chntechnolog"
             doocti_api_url = data_dict.get("api_url") or "https://beta3-app.doocti.com/"
-            dids = data_dict.get("did_numbers") or ["07969671855", "07969671856", "07969671857"]
+            dids = data_dict.get("did_numbers") or []
             if isinstance(dids, str):
                 dids = [d.strip() for d in dids.split(",") if d.strip()]
             ext_map = data_dict.get("extension_mapping") or {}
-            admin_ext = data_dict.get("admin_extension") or "1281"
+            admin_ext = data_dict.get("admin_extension") or ""
             secret_token = data_dict.get("secret_token")
             return DooctiIVRProvider(
                 account_id=doocti_account_id,

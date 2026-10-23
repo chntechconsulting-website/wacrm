@@ -36,15 +36,15 @@ import './DooctiInAppDialer.css';
 import { formatLeadReceived } from '../../utils/dateUtils';
 import PingoMascot from '../Common/PingoMascot';
 
-// Default configuration based on Doocti deployment handover email
+// Default configuration loaded dynamically from server
 const DEFAULT_DOOCTI_CONFIG = {
   domain: 'https://beta3-app.doocti.com/',
   tenantId: 'chntechnolog',
-  userEmail: 'chntechnolog_agent01@doocti.com',
-  userId: '1282',
-  userNumber: '1282', // Agent extension
-  cliNumber: '07969671855',
-  didNumbers: ['07969671855', '07969671856', '07969671857']
+  userEmail: '',
+  userId: '',
+  userNumber: '',
+  cliNumber: '',
+  didNumbers: []
 };
 
 // Standard ITU-T Dual-Tone Multi-Frequency (DTMF) mapping
@@ -241,7 +241,7 @@ const DooctiInAppDialer = () => {
       .then(res => {
         if (res.data?.status === 'success') {
           const mapping = res.data.extension_mapping || {};
-          const dids = res.data.did_numbers || ['07969671855', '07969671856', '07969671857'];
+          const dids = res.data.did_numbers || [];
 
           let matchedExt = null;
           let matchedData = null;
@@ -257,19 +257,15 @@ const DooctiInAppDialer = () => {
             }
           }
           if (!matchedExt && (user.role === 'ADMIN' || user.username === 'admin')) {
-            matchedExt = res.data.admin_extension || Object.keys(mapping).find(k => (mapping[k].type || '').toUpperCase() === 'ADMIN') || '1281';
-            matchedData = mapping[matchedExt] || { did_number: dids[0] || '07969671855', is_active: true };
+            matchedExt = res.data.admin_extension || Object.keys(mapping).find(k => (mapping[k].type || '').toUpperCase() === 'ADMIN') || null;
+            if (matchedExt && mapping[matchedExt]) {
+              matchedData = mapping[matchedExt];
+            }
           }
 
           // Check assignment & DID validity
           let assignedDid = matchedData?.did_number || null;
           let isExtActive = matchedData ? matchedData.is_active !== false : true;
-
-          // If no assigned did in mapping but matched ext is known default, fallback
-          if (!assignedDid && matchedExt) {
-            const fallbackDidMap = { '1281': '07969671855', '1282': '07969671855', '1283': '07969671856', '1286': '07969671857' };
-            assignedDid = fallbackDidMap[matchedExt] || null;
-          }
 
           if (!matchedExt) {
             setDidErrorNotice('No WebRTC extension is assigned to your user account. Please contact Administrator to map an extension in Settings → Integrations.');
@@ -282,12 +278,12 @@ const DooctiInAppDialer = () => {
           }
 
           setConfig(prev => {
-            const nextExt = matchedExt || prev.userNumber || '1282';
+            const nextExt = matchedExt || prev.userNumber || '';
             const updated = {
               ...prev,
               userId: nextExt,
               userNumber: nextExt,
-              userEmail: (matchedExt && mapping[matchedExt]?.email) || prev.userEmail || 'chntechnolog_agent01@doocti.com',
+              userEmail: (matchedExt && mapping[matchedExt]?.email) || prev.userEmail || '',
               cliNumber: assignedDid || '',
               didNumbers: Array.isArray(dids) ? dids : []
             };
@@ -528,7 +524,16 @@ const DooctiInAppDialer = () => {
     }
 
     const leadName = contactData.name || contactData.contact_name || contactData.lead_name || matchedLead?.name || 'Customer';
-    const userExt = String(config.userNumber || '1282').trim();
+    const userExt = String(config.userNumber || '').trim();
+    if (!userExt) {
+      setDialerNotice({
+        type: 'error',
+        title: 'Call Prevented: No Extension Assigned',
+        message: 'No WebRTC extension is assigned to your user account. Please contact Administrator to map an extension in Settings.'
+      });
+      toggleMinimize(false);
+      return;
+    }
     const uniqueSessionId = `doocti_${userExt}_${cleanNumber}_${Date.now()}`;
 
     // Payload formatted specifically for Doocti C2C handler:
@@ -543,7 +548,7 @@ const DooctiInAppDialer = () => {
       crm_unique_id: uniqueSessionId,
       station: userExt,
       tenant_id: String(config.tenantId || 'chntechnolog').trim(),
-      user_email: String(config.userEmail || 'chntechnolog_agent01@doocti.com').trim(),
+      user_email: String(config.userEmail || user?.email || '').trim(),
       user_id: userExt,
       user_number: userExt
     };
@@ -642,7 +647,7 @@ const DooctiInAppDialer = () => {
       API.post('/doocti/call-log', {
         uniqueid: session.callId,
         phone_number: session.customerPhone,
-        station: config.userNumber || '1282',
+        station: config.userNumber || '',
         status: 'ANSWERED',
         call_direction: session.direction || 'INBOUND',
         answer_time: new Date(ansTime).toISOString()
@@ -694,7 +699,7 @@ const DooctiInAppDialer = () => {
 
     const targetPhone = phoneOverride || (currentCall?.number && currentCall.number !== 'Connected Call' ? currentCall.number : null) || session?.customerPhone || dialNumber || 'Unknown';
     const cleanPhone = String(targetPhone || '').replace(/[^0-9]/g, '');
-    const userExt = String(config.userNumber || '1282').replace(/[^0-9]/g, '');
+    const userExt = String(config.userNumber || '').replace(/[^0-9]/g, '');
 
     const wasAnswered = Boolean(currentCall?.answeredAt || session?.answeredAt || currentCall?.callStatus === 'CONNECTED' || currentCall?.callStatus === 'ANSWERED');
     const answerTime = currentCall?.answeredAt || session?.answeredAt;
@@ -908,10 +913,10 @@ const DooctiInAppDialer = () => {
           API.post('/doocti/call-log', {
             uniqueid: realCallId,
             phone_number: inNum || rawNum,
-            station: config.userNumber || '1282',
+            station: config.userNumber || '',
             agent: user?.name || config.userEmail,
             agent_email: user?.email || config.userEmail,
-            employee_id: user?.employee_id || user?.id || 1,
+            employee_id: user?.employee_id || user?.id,
             status: 'RINGING',
             call_direction: 'INBOUND',
             duration: 0,
@@ -1183,7 +1188,7 @@ const DooctiInAppDialer = () => {
                 type="text"
                 value={tempConfig.userNumber}
                 onChange={(e) => setTempConfig({ ...tempConfig, userNumber: e.target.value, userId: e.target.value })}
-                placeholder="1282"
+                placeholder="Extension number"
               />
             </div>
             <div>
@@ -1192,13 +1197,13 @@ const DooctiInAppDialer = () => {
                 type="email"
                 value={tempConfig.userEmail}
                 onChange={(e) => setTempConfig({ ...tempConfig, userEmail: e.target.value })}
-                placeholder="chntechnolog_agent01@doocti.com"
+                placeholder="agent@company.com"
               />
             </div>
             <div>
               <label>Outbound Caller DID:</label>
               <select
-                value={tempConfig.cliNumber || '07969671855'}
+                value={tempConfig.cliNumber || ''}
                 onChange={(e) => setTempConfig({ ...tempConfig, cliNumber: e.target.value })}
                 style={{
                   width: '100%',
@@ -1210,7 +1215,8 @@ const DooctiInAppDialer = () => {
                   marginTop: '4px'
                 }}
               >
-                {(tempConfig.didNumbers || ['07969671855', '07969671856', '07969671857']).map(did => (
+                <option value="">-- Select Assigned DID --</option>
+                {(tempConfig.didNumbers || []).map(did => (
                   <option key={did} value={did}>{did}</option>
                 ))}
               </select>
@@ -1312,9 +1318,9 @@ const DooctiInAppDialer = () => {
                 </span>
                 <span className="active-call-header-phone">
                   {activeCall?.number || 'Caller ID'}
-                  {activeCall?.callStatus === 'CONNECTING' && (
+                  {activeCall?.callStatus === 'CONNECTING' && config.cliNumber && (
                     <span style={{ fontSize: '10px', color: '#64748b', marginLeft: '6px' }}>
-                      (DID {config.cliNumber || '07969671855'})
+                      (Caller ID: {config.cliNumber})
                     </span>
                   )}
                 </span>

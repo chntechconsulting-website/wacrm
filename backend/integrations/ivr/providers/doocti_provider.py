@@ -28,14 +28,14 @@ class DooctiIVRProvider(BaseIVRProvider):
         did_numbers: Optional[List[str]] = None,
         extension_mapping: Optional[Dict[str, Any]] = None,
         secret_token: Optional[str] = None,
-        admin_extension: str = "1281"
+        admin_extension: Optional[str] = None
     ):
         self.account_id = (account_id or "chntechnolog").strip()
         self.api_url = (api_url or "https://beta3-app.doocti.com/").strip()
-        self.did_numbers = did_numbers or ["07969671855", "07969671856", "07969671857"]
+        self.did_numbers = did_numbers or []
         self.extension_mapping = extension_mapping or {}
         self.secret_token = secret_token
-        self.admin_extension = admin_extension or "1281"
+        self.admin_extension = admin_extension or ""
 
     @staticmethod
     def _clean_phone(phone: str) -> str:
@@ -49,7 +49,7 @@ class DooctiIVRProvider(BaseIVRProvider):
 
     def resolve_extension_for_employee(self, employee_id: Optional[int], from_number: Optional[str] = None) -> Optional[str]:
         """
-        Resolves the DooCTI PBX extension (e.g. 1282) assigned to the specified Employee ID.
+        Resolves the DooCTI PBX extension assigned to the specified Employee ID dynamically from configuration.
         """
         # If from_number is already a recognized extension (3 to 5 digits), use it directly
         if from_number:
@@ -58,19 +58,13 @@ class DooctiIVRProvider(BaseIVRProvider):
                 return from_clean
 
         if not employee_id:
-            return self.admin_extension
+            return self.admin_extension or None
 
         # Search extension_mapping for matching employee_id
         for ext, data in self.extension_mapping.items():
             if isinstance(data, dict):
                 if data.get("employee_id") == employee_id:
                     return str(ext).strip()
-
-        # Fallback mappings for known default employees
-        # 1: Admin (1281), 8: Gowtham (1283), 9: Chandra Mohan (1282), 10: ram (1286)
-        fallback_map = {1: "1281", 8: "1283", 9: "1282", 10: "1286"}
-        if employee_id in fallback_map:
-            return fallback_map[employee_id]
 
         return None
 
@@ -110,11 +104,6 @@ class DooctiIVRProvider(BaseIVRProvider):
             )
 
         assigned_did = ext_info.get("did_number") if isinstance(ext_info, dict) else None
-        if not assigned_did:
-            # Fallback to configured admin/agent defaults if strictly mapped in fallback_map
-            did_fallback = {"1281": "07969671855", "1282": "07969671855", "1283": "07969671856", "1286": "07969671857"}
-            assigned_did = did_fallback.get(str(agent_ext))
-
         if not assigned_did:
             raise ValueError(
                 f"No outbound DID number is assigned to extension {agent_ext}. "

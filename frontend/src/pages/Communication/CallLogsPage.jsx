@@ -771,7 +771,7 @@ const CallLogsPage = () => {
                   const rawCust = log.customer_phone || '';
                   const rawEmp = log.employee_phone || '';
                   const customerNum = (!isExt(rawCust) && rawCust) ? rawCust : (!isExt(log.to_number) && log.to_number) ? log.to_number : (!isExt(log.from_number) && log.from_number) ? log.from_number : (rawCust || log.to_number || log.from_number || '');
-                  const agentExt = (isExt(rawEmp) && rawEmp) ? rawEmp : (isExt(log.from_number) && log.from_number) ? log.from_number : (isExt(log.to_number) && log.to_number) ? log.to_number : '1282';
+                  const agentExt = (isExt(rawEmp) && rawEmp) ? rawEmp : (isExt(log.from_number) && log.from_number) ? log.from_number : (isExt(log.to_number) && log.to_number) ? log.to_number : (log.employee_id ? `ID ${log.employee_id}` : '—');
                   const leadName = log.lead_name || (log.lead_id ? `Prospect #${log.lead_id}` : (customerNum ? 'Direct Caller' : 'Call'));
                   const targetPhone = customerNum || '—';
                   const providerName = (log.provider || 'DOOCTI').toUpperCase();

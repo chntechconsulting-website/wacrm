@@ -103,10 +103,10 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         is_inbound = (call.call_direction or "").upper() == "INBOUND"
         if is_inbound:
             cust_phone = raw_from or (call.lead.phone if call.lead else "")
-            emp_phone = raw_to or (call.employee.phone if call.employee else "1282")
+            emp_phone = raw_to or (call.employee.phone if call.employee else "")
         else:
             cust_phone = raw_to or (call.lead.phone if call.lead else "")
-            emp_phone = raw_from or (call.employee.phone if call.employee else "1282")
+            emp_phone = raw_from or (call.employee.phone if call.employee else "")
 
     resolved_rec = resolve_recording_url(call.recording_url, db)
     raw_rec = str(call.recording_url or "").strip()

@@ -313,15 +313,6 @@ const IntegrationsPage = () => {
       if (initialConfig.account_id?.toLowerCase().includes('smartflo')) {
         initialConfig.account_id = 'chntechnolog';
       }
-      if (!initialConfig.phone_number || initialConfig.phone_number === '918069879797' || initialConfig.phone_number === '07969659985') {
-        initialConfig.phone_number = '07969671855, 07969671856, 07969671857';
-      }
-      if (!initialConfig.admin_extension) {
-        initialConfig.admin_extension = '1281';
-      }
-      if (!initialConfig.extensions || initialConfig.extensions === '1282, 1283') {
-        initialConfig.extensions = '1281, 1282, 1283, 1286';
-      }
       // Always fetch employee directory
       fetchEmployees();
       // Fetch latest live extension mapping from backend and sync into modal state
@@ -332,8 +323,8 @@ const IntegrationsPage = () => {
             config: {
               ...prev.config,
               extension_mapping: res.data.extension_mapping,
-              admin_extension: res.data.admin_extension || prev.config.admin_extension,
-              agent_extensions: res.data.agent_extensions || prev.config.agent_extensions
+              admin_extension: res.data.admin_extension || prev.config.admin_extension || '',
+              agent_extensions: res.data.agent_extensions || prev.config.agent_extensions || []
             }
           }));
         }
@@ -369,7 +360,7 @@ const IntegrationsPage = () => {
   const handleAddExtensionMapping = async () => {
     const ext = String(newMapping.extension || '').trim();
     if (!ext) {
-      showToast('error', 'Please enter a WebRTC Extension number (e.g. 1281, 1282).');
+      showToast('error', 'Please enter a WebRTC Extension number (e.g. 101, 102).');
       return;
     }
     if (!newMapping.employee_id) {
@@ -411,7 +402,7 @@ const IntegrationsPage = () => {
     const updatedConfig = {
       ...modalState.config,
       extension_mapping: currentMap,
-      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '1281',
+      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '',
       extensions: agentExts.join(', ') || modalState.config?.extensions || '',
       agent_extensions: agentExts
     };
@@ -473,7 +464,7 @@ const IntegrationsPage = () => {
     const updatedConfig = {
       ...modalState.config,
       extension_mapping: currentMap,
-      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '1281',
+      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '',
       extensions: agentExts.join(', ') || modalState.config?.extensions || '',
       agent_extensions: agentExts
     };
@@ -525,7 +516,7 @@ const IntegrationsPage = () => {
     const updatedConfig = {
       ...modalState.config,
       extension_mapping: currentMap,
-      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '1281',
+      admin_extension: adminExts.join(', ') || modalState.config?.admin_extension || '',
       extensions: agentExts.join(', ') || modalState.config?.extensions || '',
       agent_extensions: agentExts
     };
@@ -637,27 +628,12 @@ const IntegrationsPage = () => {
         if (!updatedConfig.account_id || updatedConfig.account_id.toLowerCase().includes('smartflo')) {
           updatedConfig.account_id = 'chntechnolog';
         }
-        if (!updatedConfig.phone_number || updatedConfig.phone_number === '918069879797' || updatedConfig.phone_number === '07969659985') {
-          updatedConfig.phone_number = '07969671855, 07969671856, 07969671857';
-        }
-        if (!updatedConfig.admin_extension) {
-          updatedConfig.admin_extension = '1281';
-        }
-        if (!updatedConfig.agent_extensions) {
-          updatedConfig.agent_extensions = '1282, 1283, 1286';
-        }
-        if (!updatedConfig.extensions || updatedConfig.extensions === '1282, 1283') {
-          updatedConfig.extensions = '1281, 1282, 1283, 1286';
-        }
       } else if (newProvider === 'SMARTFLO') {
         if (!updatedConfig.api_url || updatedConfig.api_url.includes('doocti')) {
           updatedConfig.api_url = 'https://api-smartflo.tatateleservices.com/v1/click_to_call';
         }
         if (!updatedConfig.account_id || updatedConfig.account_id.includes('chntechnolog')) {
           updatedConfig.account_id = 'Smartflo';
-        }
-        if (!updatedConfig.phone_number || updatedConfig.phone_number === '07969659985') {
-          updatedConfig.phone_number = '918069879797';
         }
       }
       return {
@@ -1215,15 +1191,17 @@ const IntegrationsPage = () => {
                         </div>
 
                         <div className="form-group">
-                          <label>DID Numbers (Inbound / Outbound Virtual Numbers)</label>
+                          <label>DID Numbers (Comma-separated Virtual / Caller ID Numbers)</label>
                           <input 
                             type="text" 
-                            value={modalState.config.phone_number || '07969671855, 07969671856, 07969671857'} 
+                            value={modalState.config.phone_number || ''} 
                             onChange={(e) => handleConfigChange('phone_number', e.target.value)}
-                            placeholder="07969671855, 07969671856, 07969671857"
+                            placeholder="e.g. Enter provider DID numbers separated by commas"
                           />
                           <small style={{ color: '#64748b', fontSize: '0.74rem' }}>
-                            Configured DIDs: 07969671855, 07969671856, 07969671857
+                            {modalState.config.phone_number 
+                              ? `Configured DIDs: ${modalState.config.phone_number}`
+                              : 'No DID numbers entered yet. Enter your Doocti DID numbers above.'}
                           </small>
                         </div>
 
@@ -1280,7 +1258,7 @@ const IntegrationsPage = () => {
                                   Object.entries(modalState.config?.extension_mapping || {}).map(([ext, info]) => {
                                     const isAdmin = (info.type || '').toUpperCase() === 'ADMIN';
                                     const isActive = info.is_active !== false;
-                                    const availableDids = (modalState.config?.phone_number || '07969671855, 07969671856, 07969671857')
+                                    const availableDids = (modalState.config?.phone_number || '')
                                       .split(',')
                                       .map(d => d.trim())
                                       .filter(Boolean);
@@ -1420,7 +1398,7 @@ const IntegrationsPage = () => {
                               </label>
                               <input
                                 type="text"
-                                placeholder="e.g. 1282"
+                                placeholder="Extension"
                                 value={newMapping.extension}
                                 onChange={(e) => setNewMapping(prev => ({ ...prev, extension: e.target.value }))}
                                 style={{
@@ -1451,7 +1429,7 @@ const IntegrationsPage = () => {
                                 }}
                               >
                                 <option value="">-- Choose DID --</option>
-                                {(modalState.config?.phone_number || '07969671855, 07969671856, 07969671857')
+                                {(modalState.config?.phone_number || '')
                                   .split(',')
                                   .map(d => d.trim())
                                   .filter(Boolean)
