@@ -57,13 +57,19 @@ def dashboard_stats(
             call_query = call_query.filter(CallLog.employee_id.in_(authorized_call_emps))
 
     total_leads = lead_query.count()
-    new_leads = lead_query.filter(or_(Lead.status == "NEW", Lead.status == "ASSIGNED")).count()
-    assigned_leads = lead_query.filter(Lead.status == "ASSIGNED").count()
+    new_leads = lead_query.filter(or_(
+        Lead.status == "NEW",
+        Lead.status == "NEW LEAD",
+        Lead.status == "New",
+        Lead.status.ilike("NEW%")
+    )).count()
+    assigned_leads = lead_query.filter(or_(Lead.status == "ASSIGNED", Lead.status.ilike("%ASSIGN%"))).count()
     contacted_leads = lead_query.filter(or_(Lead.status == "CONTACTED", Lead.status.ilike("%contact%"))).count()
-    followup_leads = lead_query.filter(or_(Lead.status == "FOLLOW_UP", Lead.status == "FOLLOW-UP")).count()
-    qualified_leads = lead_query.filter(Lead.status == "QUALIFIED").count()
-    converted_leads = lead_query.filter(or_(Lead.status == "CONVERTED", Lead.status == "WON")).count()
-    lost_leads = lead_query.filter(or_(Lead.status == "LOST", Lead.status == "NOT_INTERESTED", Lead.status == "LOST_LEAD")).count()
+    followup_leads = lead_query.filter(or_(Lead.status == "FOLLOW_UP", Lead.status == "FOLLOW-UP", Lead.status.ilike("%FOLLOW%"))).count()
+    qualified_leads = lead_query.filter(or_(Lead.status == "QUALIFIED", Lead.status == "INTERESTED")).count()
+    converted_leads = lead_query.filter(or_(Lead.status == "CONVERTED", Lead.status == "WON", Lead.status.ilike("%CONVERT%"), Lead.status.ilike("%WON%"))).count()
+    lost_leads = lead_query.filter(or_(Lead.status == "LOST", Lead.status == "NOT_INTERESTED", Lead.status == "LOST_LEAD", Lead.status.ilike("%LOST%"))).count()
+    proposal_leads = lead_query.filter(or_(Lead.status == "PROPOSAL SENT", Lead.status == "DEMO / MEETING", Lead.status.ilike("%PROPOSAL%"))).count()
 
     total_customers = db.query(Customer).count()
 
@@ -169,6 +175,27 @@ def dashboard_stats(
     )
     source_lead_counts = [{"source": src or "Unknown", "count": count} for src, count in source_counts]
 
+    # Status-wise counts (All Leads)
+    raw_status_counts = (
+        lead_query.with_entities(Lead.status, func.count(Lead.id))
+        .group_by(Lead.status)
+        .all()
+    )
+    status_lead_counts = [{"status": st or "NEW", "count": count} for st, count in raw_status_counts]
+
+    # Status-wise counts (Meta Leads filter)
+    raw_meta_status_counts = (
+        lead_query.filter(or_(
+            Lead.source == "META",
+            Lead.source == "Meta Ads",
+            Lead.source.ilike("%meta%")
+        ))
+        .with_entities(Lead.status, func.count(Lead.id))
+        .group_by(Lead.status)
+        .all()
+    )
+    meta_status_lead_counts = [{"status": st or "NEW", "count": count} for st, count in raw_meta_status_counts]
+
     # Upcoming Follow-ups (top 5) strictly scoped by role and team
     f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id).filter(Followup.status == "Pending")
     auth_fu_emp_ids = get_authorized_followup_employee_ids(current_user, db)
@@ -203,12 +230,15 @@ def dashboard_stats(
         "contacted_leads": contacted_leads,
         "followup_leads": followup_leads,
         "qualified_leads": qualified_leads,
+        "proposal_leads": proposal_leads,
         "converted_leads": converted_leads,
         "lost_leads": lost_leads,
         "connected_calls": connected_calls,
         "total_customers": total_customers,
         "employee_lead_counts": employee_lead_counts,
         "source_lead_counts": source_lead_counts,
+        "status_lead_counts": status_lead_counts,
+        "meta_status_lead_counts": meta_status_lead_counts,
         "upcoming_followups": upcoming_followups,
         "team_performance": team_performance,
         "recent_meta_leads": recent_meta_leads,

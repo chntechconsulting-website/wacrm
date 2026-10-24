@@ -104,18 +104,64 @@ const Dashboard = () => {
     { name: 'Others', count: othersCount, percentage: totalLeadsCount > 0 ? Math.round((othersCount / totalLeadsCount) * 100) : 0, color: '#94a3b8' }
   ];
 
+  // Helper to extract stage counts dynamically based on funnel filter (All Leads vs Meta Leads)
+  const activeStatusCounts = funnelFilter === 'Meta Leads' 
+    ? (stats?.meta_status_lead_counts || []) 
+    : (stats?.status_lead_counts || []);
+
+  const getStatusSum = (filterFn) => {
+    return activeStatusCounts
+      .filter(item => filterFn((item.status || '').toUpperCase()))
+      .reduce((acc, curr) => acc + (curr.count || 0), 0);
+  };
+
+  const funnelNewCount = funnelFilter === 'Meta Leads'
+    ? getStatusSum(s => s === 'NEW' || s === 'NEW LEAD' || s.startsWith('NEW'))
+    : newLeadsCount;
+
+  const funnelContactedCount = funnelFilter === 'Meta Leads'
+    ? getStatusSum(s => s === 'CONTACTED' || s.includes('CONTACT'))
+    : contactedCount;
+
+  const funnelInterestedCount = funnelFilter === 'Meta Leads'
+    ? getStatusSum(s => s === 'INTERESTED' || s === 'QUALIFIED')
+    : (stats?.qualified_leads ?? 0);
+
+  const funnelProposalCount = funnelFilter === 'Meta Leads'
+    ? getStatusSum(s => s === 'PROPOSAL SENT' || s.includes('PROPOSAL'))
+    : (stats?.proposal_leads ?? 0);
+
+  const funnelFollowupCount = funnelFilter === 'Meta Leads'
+    ? getStatusSum(s => s === 'FOLLOW_UP' || s === 'FOLLOW-UP' || s.includes('FOLLOW'))
+    : followupsCount;
+
+  const funnelConvertedCount = funnelFilter === 'Meta Leads'
+    ? getStatusSum(s => s === 'CONVERTED' || s === 'WON')
+    : convertedCount;
+
+  const funnelTotalDenominator = funnelFilter === 'Meta Leads'
+    ? activeStatusCounts.reduce((acc, curr) => acc + (curr.count || 0), 0)
+    : totalLeadsCount;
+
+  const calcPercentage = (count) => {
+    if (!funnelTotalDenominator || funnelTotalDenominator <= 0) return 0;
+    return Math.min(100, Math.round((count / funnelTotalDenominator) * 100));
+  };
+
   // Lead status funnel levels formatted cleanly
   const funnelStages = isEmployeeRole ? [
-    { label: 'Assigned Leads', count: totalLeadsCount, percentage: totalLeadsCount > 0 ? 100 : 0, color: '#2563eb' },
-    { label: 'Contacted', count: contactedCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((contactedCount / totalLeadsCount) * 100)) : 0, color: '#7c3aed' },
-    { label: 'Follow-up', count: followupsCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((followupsCount / totalLeadsCount) * 100)) : 0, color: '#f59e0b' },
-    { label: 'Converted', count: convertedCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((convertedCount / totalLeadsCount) * 100)) : 0, color: '#10b981' }
+    { label: 'Assigned Leads', count: funnelTotalDenominator, percentage: funnelTotalDenominator > 0 ? 100 : 0, color: '#2563eb' },
+    { label: 'Contacted', count: funnelContactedCount, percentage: calcPercentage(funnelContactedCount), color: '#7c3aed' },
+    { label: 'Proposal Sent', count: funnelProposalCount, percentage: calcPercentage(funnelProposalCount), color: '#3b82f6' },
+    { label: 'Follow-up', count: funnelFollowupCount, percentage: calcPercentage(funnelFollowupCount), color: '#f59e0b' },
+    { label: 'Converted', count: funnelConvertedCount, percentage: calcPercentage(funnelConvertedCount), color: '#10b981' }
   ] : [
-    { label: 'New Leads', count: newLeadsCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((newLeadsCount / totalLeadsCount) * 100)) : 0, color: '#2563eb' },
-    { label: 'Contacted', count: contactedCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((contactedCount / totalLeadsCount) * 100)) : 0, color: '#7c3aed' },
-    { label: 'Interested', count: stats?.qualified_leads ?? 0, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round(((stats?.qualified_leads ?? 0) / totalLeadsCount) * 100)) : 0, color: '#10b981' },
-    { label: 'Follow-up', count: followupsCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((followupsCount / totalLeadsCount) * 100)) : 0, color: '#f59e0b' },
-    { label: 'Converted', count: convertedCount, percentage: totalLeadsCount > 0 ? Math.min(100, Math.round((convertedCount / totalLeadsCount) * 100)) : 0, color: '#ef4444' }
+    { label: 'New Leads', count: funnelNewCount, percentage: calcPercentage(funnelNewCount), color: '#2563eb' },
+    { label: 'Contacted', count: funnelContactedCount, percentage: calcPercentage(funnelContactedCount), color: '#7c3aed' },
+    { label: 'Interested', count: funnelInterestedCount, percentage: calcPercentage(funnelInterestedCount), color: '#10b981' },
+    { label: 'Proposal Sent', count: funnelProposalCount, percentage: calcPercentage(funnelProposalCount), color: '#3b82f6' },
+    { label: 'Follow-up', count: funnelFollowupCount, percentage: calcPercentage(funnelFollowupCount), color: '#f59e0b' },
+    { label: 'Converted', count: funnelConvertedCount, percentage: calcPercentage(funnelConvertedCount), color: '#ef4444' }
   ];
 
   // Real Follow-up reminders from database
