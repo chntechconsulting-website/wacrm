@@ -384,8 +384,8 @@ def get_leads_stats(
                 "allLeads": 0, "metaLeads": 0, "websiteLeads": 0, "manualLeads": 0,
                 "excelLeads": 0, "reinquiryLeads": 0, "myLeads": 0, "callLogs": 0, "followups": 0
             }
-    elif scope == "team" and current_emp:
-        team_ids = get_team_employee_ids(current_emp.id, db)
+    elif scope == "team":
+        team_ids = get_team_employee_ids_from_user(current_user, db)
         base_query = base_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
 
     all_count = base_query.count()

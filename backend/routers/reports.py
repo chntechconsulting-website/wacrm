@@ -41,10 +41,10 @@ def dashboard_stats(
 
     if scope == "own" and current_emp:
         lead_query = lead_query.filter(Lead.assigned_to == current_emp.id)
-    elif scope == "team" and current_emp:
-        from routers.leads import get_team_employee_ids
-        team_ids = get_team_employee_ids(current_emp.id, db)
-        lead_query = lead_query.filter(Lead.assigned_to.in_(team_ids))
+    elif scope == "team":
+        from services.hierarchy_service import get_team_employee_ids_from_user
+        team_ids = get_team_employee_ids_from_user(current_user, db)
+        lead_query = lead_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
 
     # Apply strict permission scope for calls
     authorized_call_emps = get_authorized_call_employee_ids(current_user, db)
@@ -133,15 +133,15 @@ def dashboard_stats(
                 Lead.assigned_to == current_emp.id
             )
         )
-    elif current_user.role == "MANAGER" and current_emp:
-        subordinates = db.query(Employee.id).filter(Employee.manager_id == current_emp.id).all()
-        sub_ids = [s[0] for s in subordinates]
-        sub_ids.append(current_emp.id)
+    elif current_user.role in ["MANAGER", "SALES_MANAGER"] or scope == "team":
+        from services.hierarchy_service import get_team_employee_ids_from_user
+        sub_ids = get_team_employee_ids_from_user(current_user, db)
         act_query = act_query.filter(
             or_(
                 LeadActivity.performed_by.in_(sub_ids),
                 LeadActivity.employee_id.in_(sub_ids),
-                Lead.assigned_to.in_(sub_ids)
+                Lead.assigned_to.in_(sub_ids),
+                Lead.assigned_to == None
             )
         )
     raw_activities = act_query.order_by(desc(LeadActivity.created_at)).limit(5).all()
@@ -277,10 +277,10 @@ def sales_overview_report(
 
     if scope == "own" and current_emp:
         lead_query = lead_query.filter(Lead.assigned_to == current_emp.id)
-    elif scope == "team" and current_emp:
-        from routers.leads import get_team_employee_ids
-        team_ids = get_team_employee_ids(current_emp.id, db)
-        lead_query = lead_query.filter(Lead.assigned_to.in_(team_ids))
+    elif scope == "team":
+        from services.hierarchy_service import get_team_employee_ids_from_user
+        team_ids = get_team_employee_ids_from_user(current_user, db)
+        lead_query = lead_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
 
     # Optional Filters
     if salesperson_id and salesperson_id > 0:
@@ -605,15 +605,15 @@ def sales_revenue_report(
             Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == current_emp.id))
         ))
         lead_query = lead_query.filter(Lead.assigned_to == current_emp.id)
-    elif scope == "team" and current_emp:
-        from routers.leads import get_team_employee_ids
-        team_ids = get_team_employee_ids(current_emp.id, db)
+    elif scope == "team":
+        from services.hierarchy_service import get_team_employee_ids_from_user
+        team_ids = get_team_employee_ids_from_user(current_user, db)
         team_names = [e.name for e in active_emps if e.id in team_ids]
         quote_query = quote_query.filter(or_(
             Quotation.prepared_by.in_(team_names),
-            Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to.in_(team_ids)))
+            Quotation.lead_id.in_(db.query(Lead.id).filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None)))
         ))
-        lead_query = lead_query.filter(Lead.assigned_to.in_(team_ids))
+        lead_query = lead_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
 
     # Salesperson Filter
     if salesperson_id and salesperson_id > 0:
