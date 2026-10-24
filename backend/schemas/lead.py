@@ -17,6 +17,7 @@ class LeadBase(BaseModel):
     company_size: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    country: Optional[str] = "India"
     location: Optional[str] = None
 
     source: str = "Manual"  # Meta Ads, Excel, Manual, Website, Referral
@@ -35,7 +36,7 @@ class LeadBase(BaseModel):
     @field_validator(
         "email", "followup_date", "followup_time", "whatsapp_number",
         "first_name", "last_name", "name", "designation", "company",
-        "industry", "website", "company_size", "city", "state", "location",
+        "industry", "website", "company_size", "city", "state", "country", "location",
         "campaign_name", "website_id", "website_name", "landing_page",
         "rating", "priority", "requirement_notes",
         mode="before", check_fields=False
@@ -74,6 +75,7 @@ class LeadUpdate(BaseModel):
     company_size: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    country: Optional[str] = "India"
     location: Optional[str] = None
 
     source: Optional[str] = None
@@ -90,7 +92,7 @@ class LeadUpdate(BaseModel):
     @field_validator(
         "email", "followup_date", "followup_time", "whatsapp_number",
         "first_name", "last_name", "name", "phone", "designation", "company",
-        "industry", "website", "company_size", "city", "state", "location",
+        "industry", "website", "company_size", "city", "state", "country", "location",
         "source", "status", "campaign_name", "rating", "priority", "requirement_notes",
         mode="before", check_fields=False
     )

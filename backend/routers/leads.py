@@ -147,6 +147,7 @@ def build_lead_out(lead: Lead) -> LeadOut:
         company_size=lead.company_size,
         city=lead.city,
         state=lead.state,
+        country=getattr(lead, 'country', 'India') or 'India',
         location=loc,
         source=lead.source,
         status=lead.status,
@@ -1048,6 +1049,7 @@ def update_lead(
     if lead_in.company_size is not None: lead.company_size = lead_in.company_size
     if lead_in.city is not None: lead.city = lead_in.city
     if lead_in.state is not None: lead.state = lead_in.state
+    if hasattr(lead_in, 'country') and lead_in.country is not None: lead.country = lead_in.country
     old_status = lead.status
     if lead_in.status is not None:
         lead.status = lead_in.status

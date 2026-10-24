@@ -23,6 +23,7 @@ class Lead(Base):
     company_size = Column(String(50), nullable=True)
     city = Column(String(100), nullable=True)
     state = Column(String(100), nullable=True)
+    country = Column(String(100), nullable=True, default="India")
     location = Column(String(150), nullable=True)
 
     meta_lead_id = Column(String(100), unique=True, index=True, nullable=True)

@@ -3,7 +3,6 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import PingoPopupService from '../../services/pingoPopupService';
-import TimePickerSelect from '../../components/Common/TimePickerSelect';
 import { 
   UserPlus, 
   ArrowLeft, 
@@ -32,8 +31,95 @@ const STATUS_OPTIONS = [
 ];
 
 const SOURCE_OPTIONS = ['MANUAL', 'META', 'WEBSITE', 'EXCEL', 'REFERRAL'];
-const RATING_OPTIONS = ['Hot', 'Warm', 'Cold'];
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
+
+const INDUSTRY_OPTIONS = [
+  'Information Technology',
+  'Manufacturing',
+  'Healthcare',
+  'Education',
+  'Finance & Banking',
+  'Retail & E-commerce',
+  'Real Estate',
+  'Logistics & Transportation',
+  'Construction',
+  'Telecommunications',
+  'Hospitality',
+  'Agriculture',
+  'Other'
+];
+
+const COMPANY_SIZE_OPTIONS = [
+  '1–10 Employees',
+  '11–50 Employees',
+  '51–200 Employees',
+  '201–500 Employees',
+  '501–1,000 Employees',
+  '1,001–5,000 Employees',
+  '5,001+ Employees'
+];
+
+const COUNTRIES_LIST = [
+  'India',
+  'United States',
+  'United Kingdom',
+  'United Arab Emirates',
+  'Canada',
+  'Australia',
+  'Singapore',
+  'Saudi Arabia',
+  'Germany',
+  'France',
+  'Malaysia',
+  'Qatar',
+  'Oman',
+  'Kuwait',
+  'Bahrain',
+  'South Africa',
+  'New Zealand',
+  'Ireland',
+  'Netherlands',
+  'Switzerland',
+  'Japan',
+  'Other'
+];
+
+const INDIAN_STATES_LIST = [
+  'Andhra Pradesh',
+  'Arunachal Pradesh',
+  'Assam',
+  'Bihar',
+  'Chhattisgarh',
+  'Goa',
+  'Gujarat',
+  'Haryana',
+  'Himachal Pradesh',
+  'Jharkhand',
+  'Karnataka',
+  'Kerala',
+  'Madhya Pradesh',
+  'Maharashtra',
+  'Manipur',
+  'Meghalaya',
+  'Mizoram',
+  'Nagaland',
+  'Odisha',
+  'Punjab',
+  'Rajasthan',
+  'Sikkim',
+  'Tamil Nadu',
+  'Telangana',
+  'Tripura',
+  'Uttar Pradesh',
+  'Uttarakhand',
+  'West Bengal',
+  'Delhi',
+  'Puducherry',
+  'Chandigarh',
+  'Jammu & Kashmir',
+  'Ladakh',
+  'Other'
+];
 
 const formatApiError = (err, fallback = 'Failed to process request.') => {
   const detail = err?.response?.data?.detail;
@@ -95,22 +181,20 @@ const CreateLeadPage = () => {
 
     company: '',
     industry: '',
+    custom_industry: '',
     website: '',
     company_size: '',
+    country: 'India',
     city: '',
     state: '',
 
     source: 'MANUAL',
     status: 'NEW LEAD',
     campaign_name: '',
-    rating: 'Warm',
     assigned_to: '',
     priority: 'Medium',
 
-    requirement_notes: '',
-
-    followup_date: '',
-    followup_time: '10:00 AM'
+    requirement_notes: ''
   });
 
   // --- BULK IMPORT STATE ---
@@ -139,30 +223,42 @@ const CreateLeadPage = () => {
     setError('');
     setSuccess('');
 
-    if (!formData.first_name || !formData.last_name || !formData.phone) {
-      setError('First Name, Last Name, and Phone Number are required.');
+    if (!formData.first_name || !formData.first_name.trim() || !formData.phone || !formData.phone.trim()) {
+      setError('First Name and Phone Number are required.');
       return;
     }
 
     try {
       setLoading(true);
-      const fullName = `${formData.first_name.trim()} ${formData.last_name.trim()}`.trim();
+      const fn = formData.first_name ? formData.first_name.trim() : '';
+      const ln = formData.last_name ? formData.last_name.trim() : '';
+      const fullName = `${fn} ${ln}`.trim() || fn;
+      const resolvedIndustry = formData.industry === 'Other'
+        ? (formData.custom_industry ? formData.custom_industry.trim() : 'Other')
+        : (formData.industry ? formData.industry.trim() : null);
+
       const payload = {
-        ...formData,
+        first_name: fn || null,
+        last_name: ln || null,
         name: fullName,
-        email: formData.email && formData.email.trim() ? formData.email.trim() : null,
+        phone: formData.phone.trim(),
         whatsapp_number: formData.whatsapp_number && formData.whatsapp_number.trim() ? formData.whatsapp_number.trim() : null,
+        email: formData.email && formData.email.trim() ? formData.email.trim() : null,
+        designation: formData.designation && formData.designation.trim() ? formData.designation.trim() : null,
+
         company: formData.company && formData.company.trim() ? formData.company.trim() : null,
-        industry: formData.industry && formData.industry.trim() ? formData.industry.trim() : null,
+        industry: resolvedIndustry,
         website: formData.website && formData.website.trim() ? formData.website.trim() : null,
         company_size: formData.company_size && formData.company_size.trim() ? formData.company_size.trim() : null,
+        country: formData.country && formData.country.trim() ? formData.country.trim() : 'India',
         city: formData.city && formData.city.trim() ? formData.city.trim() : null,
         state: formData.state && formData.state.trim() ? formData.state.trim() : null,
-        designation: formData.designation && formData.designation.trim() ? formData.designation.trim() : null,
+
+        source: formData.source || 'MANUAL',
+        status: formData.status || 'NEW LEAD',
         campaign_name: formData.campaign_name && formData.campaign_name.trim() ? formData.campaign_name.trim() : null,
+        priority: formData.priority || 'Medium',
         requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
-        followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null,
-        followup_time: formData.followup_time && formData.followup_time.trim() ? formData.followup_time.trim() : null,
         assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null
       };
 
@@ -440,10 +536,11 @@ const CreateLeadPage = () => {
                   />
                 </div>
                 <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Last Name *</label>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>
+                    Last Name <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: '0.8rem' }}>(Optional)</span>
+                  </label>
                   <input 
                     type="text" 
-                    required 
                     placeholder="Enter last name" 
                     value={formData.last_name}
                     onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
@@ -512,12 +609,25 @@ const CreateLeadPage = () => {
                 </div>
                 <div className="form-group">
                   <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Industry</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Technology / Retail" 
+                  <select
                     value={formData.industry}
                     onChange={(e) => setFormData({ ...formData, industry: e.target.value })}
-                  />
+                  >
+                    <option value="">-- Select Industry --</option>
+                    {INDUSTRY_OPTIONS.map(ind => (
+                      <option key={ind} value={ind}>{ind}</option>
+                    ))}
+                  </select>
+                  {formData.industry === 'Other' && (
+                    <input 
+                      type="text" 
+                      placeholder="Specify your industry..." 
+                      value={formData.custom_industry}
+                      onChange={(e) => setFormData({ ...formData, custom_industry: e.target.value })}
+                      style={{ marginTop: '8px' }}
+                      autoFocus
+                    />
+                  )}
                 </div>
               </div>
 
@@ -533,32 +643,69 @@ const CreateLeadPage = () => {
                 </div>
                 <div className="form-group">
                   <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Company Size</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. 10-50 employees" 
+                  <select
                     value={formData.company_size}
                     onChange={(e) => setFormData({ ...formData, company_size: e.target.value })}
-                  />
+                  >
+                    <option value="">-- Select Company Size --</option>
+                    {COMPANY_SIZE_OPTIONS.map(cs => (
+                      <option key={cs} value={cs}>{cs}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
+              {/* Geographic Info: Country, State, City */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginTop: '12px' }}>
+                <div className="form-group">
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Country</label>
+                  <select
+                    value={formData.country}
+                    onChange={(e) => {
+                      const newCountry = e.target.value;
+                      setFormData(prev => ({
+                        ...prev,
+                        country: newCountry,
+                        // Reset state if switching away from India
+                        state: newCountry === 'India' ? prev.state : ''
+                      }));
+                    }}
+                  >
+                    {COUNTRIES_LIST.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>State</label>
+                  {formData.country === 'India' ? (
+                    <select
+                      value={formData.state}
+                      onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                    >
+                      <option value="">-- Select State --</option>
+                      {INDIAN_STATES_LIST.map(st => (
+                        <option key={st} value={st}>{st}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input 
+                      type="text" 
+                      placeholder="e.g. State / Province" 
+                      value={formData.state}
+                      onChange={(e) => setFormData({ ...formData, state: e.target.value })}
+                    />
+                  )}
+                </div>
+
                 <div className="form-group">
                   <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>City</label>
                   <input 
                     type="text" 
-                    placeholder="e.g. Mumbai" 
+                    placeholder="e.g. Mumbai / Chennai" 
                     value={formData.city}
                     onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                  />
-                </div>
-                <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>State</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Maharashtra" 
-                    value={formData.state}
-                    onChange={(e) => setFormData({ ...formData, state: e.target.value })}
                   />
                 </div>
               </div>
@@ -592,27 +739,6 @@ const CreateLeadPage = () => {
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
                 <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Campaign Name</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Summer Promo 2026" 
-                    value={formData.campaign_name}
-                    onChange={(e) => setFormData({ ...formData, campaign_name: e.target.value })}
-                  />
-                </div>
-                <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Rating</label>
-                  <select 
-                    value={formData.rating} 
-                    onChange={(e) => setFormData({ ...formData, rating: e.target.value })}
-                  >
-                    {RATING_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
-                <div className="form-group">
                   <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Assign To</label>
                   <select 
                     value={formData.assigned_to} 
@@ -636,6 +762,18 @@ const CreateLeadPage = () => {
                   </select>
                 </div>
               </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', marginTop: '12px' }}>
+                <div className="form-group">
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Campaign Name (Optional)</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Summer Promo 2026" 
+                    value={formData.campaign_name}
+                    onChange={(e) => setFormData({ ...formData, campaign_name: e.target.value })}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* SECTION 4: REQUIREMENT NOTES */}
@@ -651,30 +789,6 @@ const CreateLeadPage = () => {
                   onChange={(e) => setFormData({ ...formData, requirement_notes: e.target.value })}
                   style={{ width: '100%', paddingTop: '10px' }}
                 />
-              </div>
-            </div>
-
-            {/* SECTION 5: FOLLOW-UP SCHEDULE */}
-            <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ fontSize: '1rem', fontWeight: '700', color: 'var(--primary)', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
-                Follow-up Schedule
-              </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
-                <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Date</label>
-                  <input 
-                    type="date" 
-                    value={formData.followup_date}
-                    onChange={(e) => setFormData({ ...formData, followup_date: e.target.value })}
-                  />
-                </div>
-                <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Time</label>
-                  <TimePickerSelect 
-                    value={formData.followup_time}
-                    onChange={(e) => setFormData({ ...formData, followup_time: e.target.value })}
-                  />
-                </div>
               </div>
             </div>
 

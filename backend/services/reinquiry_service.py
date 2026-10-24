@@ -276,6 +276,7 @@ class ReInquiryService:
             company_size=enquiry_data.get("company_size"),
             city=enquiry_data.get("city"),
             state=enquiry_data.get("state"),
+            country=enquiry_data.get("country") or "India",
             location=enquiry_data.get("location"),
             source=src,
             status=enquiry_data.get("status") or ("ASSIGNED" if assigned_to_id else "NEW"),
