@@ -164,11 +164,11 @@ export const COMPANIES = [
     email: 'info@chnindia.com',
     phone: '+91 84366 00600',
     bank: {
-      bankName: 'AXIS BANK',
+      bankName: 'HDFC Bank',
       accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
-      accountNumber: '921020014696411',
-      ifsc: 'UTIB0003702',
-      branch: 'Eldams Road Branch',
+      accountNumber: '50200120393881',
+      ifsc: 'HDFC0001867',
+      branch: 'Mahalingapuram Branch',
       accountType: 'Current'
     },
     footer: 'For any enquiry, reach out via email at info@chnindia.com, call on +91 84366 00600'
@@ -195,11 +195,11 @@ export const COMPANIES = [
     email: 'info@chnindia.com',
     phone: '+91 84366 00600',
     bank: {
-      bankName: 'AXIS BANK',
+      bankName: 'HDFC Bank',
       accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
-      accountNumber: '921020014696411',
-      ifsc: 'UTIB0003702',
-      branch: 'Eldams Road Branch',
+      accountNumber: '50200120393881',
+      ifsc: 'HDFC0001867',
+      branch: 'Mahalingapuram Branch',
       accountType: 'Current'
     },
     footer: 'For any enquiry, reach out via email at info@chnindia.com, call on +91 84366 00600'

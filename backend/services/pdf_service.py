@@ -39,11 +39,11 @@ COMPANY_INFO = {
     "address_line2": "Chennai, Tamil Nadu 600035",
     "phone": "+91 84366 00600",
     "email": "info@chnindia.com",
-    "bank_name": "AXIS BANK",
+    "bank_name": "HDFC Bank",
     "account_name": "CHN TECHNOLOGIES PRIVATE LIMITED",
-    "account_number": "921020014696411",
-    "ifsc": "UTIB0003702",
-    "branch": "Eldams Road Branch",
+    "account_number": "50200120393881",
+    "ifsc": "HDFC0001867",
+    "branch": "Mahalingapuram Branch",
     "account_type": "Current"
 }
 
@@ -671,10 +671,10 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
 
     if is_proforma:
         bank_flowable = [
-            Paragraph("<b>PAYMENT DETAILS (AXIS BANK)</b>", style_panel_title),
+            Paragraph(f"<b>PAYMENT DETAILS ({COMPANY_INFO['bank_name'].upper()})</b>", style_panel_title),
             Paragraph(f"<b>A/c Name:</b> {COMPANY_INFO['account_name']}", style_panel_body),
             Paragraph(f"<b>Bank:</b> {COMPANY_INFO['bank_name']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>A/c No:</b> {COMPANY_INFO['account_number']}", style_panel_body),
-            Paragraph(f"<b>IFSC:</b> {COMPANY_INFO['ifsc']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Branch:</b> {COMPANY_INFO.get('branch', 'Eldams Road Branch')}", style_panel_body),
+            Paragraph(f"<b>IFSC:</b> {COMPANY_INFO['ifsc']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Branch:</b> {COMPANY_INFO.get('branch', 'Mahalingapuram Branch')}", style_panel_body),
             Paragraph(f"<b>Type:</b> {COMPANY_INFO['account_type']}", style_panel_body),
         ]
     elif is_invoice:
