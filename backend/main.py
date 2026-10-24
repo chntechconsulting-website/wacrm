@@ -144,6 +144,7 @@ def startup_db_client():
                 result = conn.execute(text("SHOW COLUMNS FROM leads"))
                 columns = [row[0] for row in result.fetchall()]
                 missing_cols = {
+                    "country": "VARCHAR(100) DEFAULT 'India'",
                     "website_id": "VARCHAR(50) NULL",
                     "website_name": "VARCHAR(100) NULL",
                     "landing_page": "VARCHAR(255) NULL",
