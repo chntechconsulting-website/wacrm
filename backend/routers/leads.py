@@ -198,7 +198,7 @@ def build_lead_out(lead: Lead) -> LeadOut:
 def list_leads(
     search: Optional[str] = None,
     status_filter: Optional[str] = None,
-    status: Optional[str] = None,
+    status_val: Optional[str] = Query(None, alias="status"),
     source_filter: Optional[str] = None,
     source: Optional[str] = None,
     priority_filter: Optional[str] = None,
@@ -268,7 +268,7 @@ def list_leads(
             )
         )
 
-    eff_status = status_filter or status
+    eff_status = status_filter or status_val
     if eff_status and eff_status.upper() != "ALL":
         st_clean = eff_status.strip().upper()
         if st_clean in ["RE-INQUIRY", "REINQUIRY"]:
