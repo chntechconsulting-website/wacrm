@@ -43,6 +43,7 @@ COMPANY_INFO = {
     "account_name": "CHN TECHNOLOGIES PRIVATE LIMITED",
     "account_number": "921020014696411",
     "ifsc": "UTIB0003702",
+    "branch": "Eldams Road Branch",
     "account_type": "Current"
 }
 
@@ -673,9 +674,8 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
             Paragraph("<b>PAYMENT DETAILS (AXIS BANK)</b>", style_panel_title),
             Paragraph(f"<b>A/c Name:</b> {COMPANY_INFO['account_name']}", style_panel_body),
             Paragraph(f"<b>Bank:</b> {COMPANY_INFO['bank_name']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>A/c No:</b> {COMPANY_INFO['account_number']}", style_panel_body),
-            Paragraph(f"<b>IFSC:</b> {COMPANY_INFO['ifsc']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Type:</b> {COMPANY_INFO['account_type']}", style_panel_body),
-            Spacer(1, 1 * mm),
-            Paragraph("<font color='#dc2626'><b>* For UPI / QR Code payment, please refer to Page 2.</b></font>", style_notes)
+            Paragraph(f"<b>IFSC:</b> {COMPANY_INFO['ifsc']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Branch:</b> {COMPANY_INFO.get('branch', 'Eldams Road Branch')}", style_panel_body),
+            Paragraph(f"<b>Type:</b> {COMPANY_INFO['account_type']}", style_panel_body),
         ]
     elif is_invoice:
         bank_flowable = [
@@ -707,37 +707,8 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     ]))
     story.append(KeepTogether(bottom_table))
 
-    # 6. Proforma Invoice Page 2: Dedicated Scan & Pay Page
-    if is_proforma:
-        story.append(PageBreak())
-        story.append(Spacer(1, 8 * mm))
-        story.append(Paragraph("PAYMENT — SCAN TO PAY", style_title))
-        story.append(Paragraph(f"Proforma Invoice No: {data['doc_number']}", style_doc_num))
-        story.append(Paragraph(f"Amount: ₹ {_format_inr(data['grand_total'])}", style_grand_val))
-        story.append(Spacer(1, 6 * mm))
-
-        qr_box = [
-            Paragraph("<b>Scan with any UPI App to Pay Instantly</b>", style_panel_title),
-            Paragraph("GPay, PhonePe, Paytm, BHIM or any Banking UPI App", style_panel_body),
-            Spacer(1, 4 * mm),
-            Paragraph(f"<b>UPI Payee:</b> {COMPANY_INFO['account_name']}", style_panel_body),
-            Paragraph(f"<b>A/c No:</b> {COMPANY_INFO['account_number']}", style_panel_body),
-            Paragraph(f"<b>IFSC:</b> {COMPANY_INFO['ifsc']}", style_panel_body),
-            Spacer(1, 4 * mm),
-            Paragraph("<i>Please share transaction UTR / Reference with your account manager after payment.</i>", style_notes)
-        ]
-        qr_table = Table([[qr_box]], colWidths=[150 * mm])
-        qr_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), BRAND_RED_50),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 16),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
-            ('LEFTPADDING', (0, 0), (-1, -1), 16),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 16),
-            ('BOX', (0, 0), (-1, -1), 1, BRAND_RED_600),
-        ]))
-        story.append(qr_table)
+    # 6. Proforma Invoice Page 2: Dedicated Scan & Pay Page (Removed per request)
+    # Proforma Invoices are now concise 1-page documents with Axis Bank account details on Page 1.
 
     doc.build(story, canvasmaker=NumberedCanvas)
     buffer.seek(0)

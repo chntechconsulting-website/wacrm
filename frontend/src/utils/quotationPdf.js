@@ -557,6 +557,7 @@ export function generateBillingPdf(docData, download = true) {
             [{ text: 'Bank:', style: 'p1BankLabel' }, { text: company.bank.bankName, style: 'p1BankVal' }],
             [{ text: 'A/c:', style: 'p1BankLabel' }, { text: company.bank.accountNumber, style: 'p1BankVal' }],
             [{ text: 'IFSC:', style: 'p1BankLabel' }, { text: company.bank.ifsc, style: 'p1BankVal' }],
+            ...(company.bank.branch ? [[{ text: 'Branch:', style: 'p1BankLabel' }, { text: company.bank.branch, style: 'p1BankVal' }]] : []),
             [{ text: 'Type:', style: 'p1BankLabel' }, { text: company.bank.accountType, style: 'p1BankVal' }]
           ]
         },
@@ -569,92 +570,9 @@ export function generateBillingPdf(docData, download = true) {
           paddingRight: () => 6
         },
         margin: [0, 1, 0, 4]
-      },
-      {
-        text: '* For UPI / QR Code payment, please refer to Page 2.',
-        style: 'qrPageRef',
-        margin: [0, 2, 0, 2]
       }
     ],
     margin: [0, 4, 0, 4]
-  };
-
-  // Proforma Invoice Page 2: Dedicated Scan & Pay Page with CHN QR poster card
-  const page2ScanToPayBlock = {
-    stack: [
-      {
-        text: 'PAYMENT — SCAN TO PAY',
-        style: 'scanToPayTitle',
-        alignment: 'center',
-        margin: [0, 12, 0, 4]
-      },
-      {
-        text: `Proforma Invoice No: ${docData.number || 'DRAFT'}`,
-        style: 'scanToPayDocNo',
-        alignment: 'center',
-        margin: [0, 0, 0, 4]
-      },
-      {
-        text: `Amount: ₹ ${fmt(grandTotal)}`,
-        style: 'scanToPayAmount',
-        alignment: 'center',
-        margin: [0, 0, 0, 14]
-      },
-      {
-        image: CHN_QR_CARD_BASE64,
-        width: 250,
-        alignment: 'center',
-        margin: [0, 0, 0, 12]
-      },
-      {
-        text: 'Scan this QR code to pay via UPI / Google Pay / PhonePe / Paytm',
-        style: 'scanInstruction',
-        alignment: 'center',
-        margin: [0, 0, 0, 16]
-      },
-      {
-        columns: [
-          { width: '*', text: '' },
-          {
-            width: 320,
-            table: {
-              widths: [100, 220],
-              body: [
-                [{ text: 'Account Name', style: 'p2BankLabel' }, { text: company.bank.accountName, style: 'p2BankValue' }],
-                [{ text: 'Bank', style: 'p2BankLabel' }, { text: company.bank.bankName, style: 'p2BankValue' }],
-                [{ text: 'A/c Number', style: 'p2BankLabel' }, { text: company.bank.accountNumber, style: 'p2BankValue' }],
-                [{ text: 'IFSC', style: 'p2BankLabel' }, { text: company.bank.ifsc, style: 'p2BankValue' }],
-                [{ text: 'Type', style: 'p2BankLabel' }, { text: company.bank.accountType, style: 'p2BankValue' }]
-              ]
-            },
-            layout: {
-              hLineWidth: () => 0.5,
-              vLineWidth: () => 0,
-              hLineColor: () => BRAND.ink100,
-              paddingTop: () => 3,
-              paddingBottom: () => 3,
-              paddingLeft: () => 0,
-              paddingRight: () => 4
-            }
-          },
-          { width: '*', text: '' }
-        ],
-        margin: [0, 0, 0, 18]
-      },
-      {
-        text: company.legalName,
-        style: 'p2CompanyLegal',
-        alignment: 'center',
-        margin: [0, 0, 0, 3]
-      },
-      {
-        text: `Phone: ${company.phone} | Email: ${company.email}`,
-        style: 'p2CompanyContact',
-        alignment: 'center',
-        margin: [0, 0, 0, 0]
-      }
-    ],
-    pageBreak: 'before'
   };
 
   // ---------- Bank Details (Only if Invoice or explicitly requested, Quotations don't show by default) ---
@@ -774,7 +692,6 @@ export function generateBillingPdf(docData, download = true) {
   if (isProforma) {
     content.push(proformaPaymentBlock);
     content.push(signatureBlock);
-    content.push(page2ScanToPayBlock);
   } else {
     if (termsBlock) content.push(termsBlock);
     if (bankPanel) content.push(bankPanel);

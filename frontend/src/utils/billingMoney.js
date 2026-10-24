@@ -168,6 +168,7 @@ export const COMPANIES = [
       accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
       accountNumber: '921020014696411',
       ifsc: 'UTIB0003702',
+      branch: 'Eldams Road Branch',
       accountType: 'Current'
     },
     footer: 'For any enquiry, reach out via email at info@chnindia.com, call on +91 84366 00600'
@@ -198,6 +199,7 @@ export const COMPANIES = [
       accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
       accountNumber: '921020014696411',
       ifsc: 'UTIB0003702',
+      branch: 'Eldams Road Branch',
       accountType: 'Current'
     },
     footer: 'For any enquiry, reach out via email at info@chnindia.com, call on +91 84366 00600'
