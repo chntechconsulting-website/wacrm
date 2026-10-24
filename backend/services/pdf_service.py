@@ -110,12 +110,18 @@ class NumberedCanvas(canvas.Canvas):
 
     def draw_footer(self, page_count):
         self.saveState()
+        # Computer-generated disclaimer centered at the bottom of the page
+        self.setFont("Helvetica-Oblique", 7)
+        self.setFillColor(INK_500)
+        disclaimer = "This is a computer-generated document. No physical signature is required. Errors and omissions excepted."
+        self.drawCentredString(A4[0] / 2.0, 16 * mm, disclaimer)
+
         self.setFont("Helvetica", 7.5)
         self.setFillColor(INK_500)
         footer_text = f"For any enquiry, reach out via email at {COMPANY_INFO['email']}, call on {COMPANY_INFO['phone']}"
-        self.drawString(28 * mm, 12 * mm, footer_text)
+        self.drawString(14 * mm, 10 * mm, footer_text)
         page_str = f"Page {self._pageNumber} of {page_count}"
-        self.drawRightString(A4[0] - 28 * mm, 12 * mm, page_str)
+        self.drawRightString(A4[0] - 14 * mm, 10 * mm, page_str)
         self.restoreState()
 
 
@@ -317,24 +323,24 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         "PanelTitle",
         parent=styles["Normal"],
         fontName="Helvetica-Bold",
-        fontSize=8,
-        leading=11,
+        fontSize=8.5,
+        leading=12,
         textColor=primary_color
     )
     style_panel_name = ParagraphStyle(
         "PanelName",
         parent=styles["Normal"],
         fontName="Helvetica-Bold",
-        fontSize=9.5,
-        leading=13,
+        fontSize=10,
+        leading=14,
         textColor=INK_900
     )
     style_panel_body = ParagraphStyle(
         "PanelBody",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=8,
-        leading=11,
+        fontSize=8.5,
+        leading=12,
         textColor=INK_700
     )
     style_th = ParagraphStyle(

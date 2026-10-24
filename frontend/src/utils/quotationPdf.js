@@ -548,8 +548,8 @@ export function generateBillingPdf(docData, download = true) {
   // Proforma Invoice Payment Details for Page 1
   const proformaPaymentBlock = {
     stack: [
-      { text: 'PAYMENT DETAILS', style: 'sectionHeading', margin: [0, 6, 0, 3] },
-      { text: company.bank.accountName, style: 'panelName', margin: [0, 0, 0, 2] },
+      { text: 'PAYMENT DETAILS', style: 'sectionHeading', margin: [0, 8, 0, 4] },
+      { text: company.bank.accountName, style: 'panelName', fontSize: 10.5, margin: [0, 0, 0, 4] },
       {
         table: {
           widths: ['auto', 'auto'],
@@ -564,15 +564,15 @@ export function generateBillingPdf(docData, download = true) {
         layout: {
           hLineWidth: () => 0,
           vLineWidth: () => 0,
-          paddingTop: () => 1,
-          paddingBottom: () => 1,
+          paddingTop: () => 2,
+          paddingBottom: () => 2,
           paddingLeft: () => 0,
-          paddingRight: () => 6
+          paddingRight: () => 8
         },
-        margin: [0, 1, 0, 4]
+        margin: [0, 2, 0, 6]
       }
     ],
-    margin: [0, 4, 0, 4]
+    margin: [0, 4, 0, 6]
   };
 
   // ---------- Bank Details (Only if Invoice or explicitly requested, Quotations don't show by default) ---
@@ -664,8 +664,8 @@ export function generateBillingPdf(docData, download = true) {
     terms: { fontSize: 8, color: BRAND.ink700, lineHeight: 1.35 },
     bankLabel: { fontSize: 8, color: BRAND.ink500 },
     bankValue: { fontSize: 8, color: BRAND.ink900, bold: true },
-    p1BankLabel: { fontSize: 8, color: BRAND.ink500 },
-    p1BankVal: { fontSize: 8, bold: true, color: BRAND.ink900 },
+    p1BankLabel: { fontSize: 9, color: BRAND.ink500 },
+    p1BankVal: { fontSize: 9.5, bold: true, color: BRAND.ink900 },
     qrPageRef: { fontSize: 8, bold: true, color: BRAND.brand700 },
     scanToPayTitle: { fontSize: 16, bold: true, color: BRAND.brand700, characterSpacing: 0.5 },
     scanToPayDocNo: { fontSize: 10.5, color: BRAND.ink700 },
@@ -675,7 +675,7 @@ export function generateBillingPdf(docData, download = true) {
     p2BankValue: { fontSize: 8.5, bold: true, color: BRAND.ink900 },
     p2CompanyLegal: { fontSize: 10.5, bold: true, color: BRAND.ink900 },
     p2CompanyContact: { fontSize: 8.5, color: BRAND.ink500 },
-    disclaimer: { fontSize: 7.5, color: BRAND.ink500, italics: true, lineHeight: 1.3 },
+    disclaimer: { fontSize: 7, color: BRAND.ink500, italics: true, lineHeight: 1.2 },
     footer: { fontSize: 7.5, color: BRAND.ink500 }
   };
 
@@ -691,36 +691,44 @@ export function generateBillingPdf(docData, download = true) {
 
   if (isProforma) {
     content.push(proformaPaymentBlock);
-    content.push(signatureBlock);
   } else {
     if (termsBlock) content.push(termsBlock);
     if (bankPanel) content.push(bankPanel);
-    content.push(signatureBlock);
   }
 
   const docDefinition = {
     pageSize: 'A4',
     pageOrientation: 'portrait',
-    pageMargins: [28, 24, 28, 30],
+    pageMargins: [28, 24, 28, 38],
     defaultStyle: { font: 'Roboto', color: BRAND.ink900 },
     styles,
     content,
     footer: (currentPage, pageCount) => ({
-      columns: [
+      stack: [
         {
-          text: `For any enquiry, reach out via email at ${company.email}, call on ${company.phone}`,
-          style: 'footer',
-          alignment: 'left',
-          width: '*'
+          text: 'This is a computer-generated document. No physical signature is required. Errors and omissions excepted.',
+          style: 'disclaimer',
+          alignment: 'center',
+          margin: [0, 0, 0, 4]
         },
         {
-          text: `Page ${currentPage} of ${pageCount}`,
-          style: 'footer',
-          alignment: 'right',
-          width: 80
+          columns: [
+            {
+              text: `For any enquiry, reach out via email at ${company.email}, call on ${company.phone}`,
+              style: 'footer',
+              alignment: 'left',
+              width: '*'
+            },
+            {
+              text: `Page ${currentPage} of ${pageCount}`,
+              style: 'footer',
+              alignment: 'right',
+              width: 80
+            }
+          ]
         }
       ],
-      margin: [28, 0, 28, 12]
+      margin: [28, 0, 28, 10]
     })
   };
 
