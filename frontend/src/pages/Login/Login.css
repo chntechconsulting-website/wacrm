@@ -1065,7 +1065,7 @@ input.wa-input:focus,
   }
 
   .wa-login-container {
-    gap: 36px;
+    gap: 32px;
   }
 }
 
@@ -1073,81 +1073,222 @@ input.wa-input:focus,
   .wa-login-viewport {
     height: auto;
     min-height: 100vh;
-    padding: 24px 16px;
-    align-items: flex-start;
+    min-height: 100dvh;
+    padding: 24px 16px 40px;
+    align-items: center;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .wa-login-container {
     flex-direction: column;
     align-items: center;
-    gap: 32px;
+    justify-content: center;
+    gap: 24px;
+    width: 100%;
+    margin: auto 0;
+  }
+
+  /* On tablet/mobile: prioritize auth card first for immediate login, hero below */
+  .wa-auth-section {
+    order: 1;
+    max-width: 440px;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    justify-content: center;
+  }
+
+  .wa-login-card {
+    height: auto;
+    max-height: none;
+    width: 100%;
+    max-width: 440px;
+    padding: 24px 20px;
   }
 
   .wa-hero-panel {
-    max-width: 480px;
+    order: 2;
+    max-width: 440px;
+    width: 100%;
+    height: auto;
+    min-height: auto;
     text-align: center;
     align-items: center;
+    margin-top: 8px;
+    padding-top: 18px;
+    border-top: 1px dashed rgba(226, 232, 240, 0.8);
   }
 
-  .wa-brand-image-logo {
-    margin: 0 auto;
+  .dark-theme .wa-hero-panel {
+    border-top-color: rgba(51, 65, 85, 0.6);
+  }
+
+  .wa-brand-wrapper {
+    display: none; /* Logo is already shown prominently in the Login Card */
+  }
+
+  .wa-hero-title {
+    font-size: 1.6rem;
+    line-height: 1.25;
+    margin-bottom: 6px;
   }
 
   .wa-hero-desc {
     text-align: center;
+    font-size: 0.88rem;
+    margin-bottom: 16px;
   }
 
   .wa-features-grid {
     width: 100%;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+
+  .wa-feature-pill {
+    height: auto;
+    min-height: 52px;
+    padding: 8px 12px;
+  }
+
+  .wa-feature-icon-box {
+    width: 34px;
+    height: 34px;
+  }
+
+  .wa-feature-text {
+    font-size: 0.8rem;
   }
 
   .wa-hero-stats {
     justify-content: center;
+    gap: 16px;
+    width: 100%;
   }
 
-  .wa-auth-section {
-    max-width: 440px;
-    width: 100%;
+  .wa-stat-item {
     justify-content: center;
+  }
+
+  .wa-stat-number {
+    font-size: 1.35rem;
+  }
+
+  .wa-stat-label {
+    font-size: 0.72rem;
   }
 }
 
-@media (max-width: 480px) {
-  .wa-login-card {
-    padding: 26px 20px;
-    border-radius: 22px;
+@media (max-width: 600px) {
+  .wa-login-viewport {
+    padding: 16px 12px 32px;
   }
 
-  .wa-hero-title {
-    font-size: 1.85rem;
+  .wa-dot-pattern-top,
+  .wa-dot-pattern-bottom,
+  .wa-dot-pattern-right {
+    display: none; /* remove clutter on mobile screens */
+  }
+
+  .wa-login-card {
+    padding: 22px 16px 20px;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px -8px rgba(15, 23, 42, 0.12);
+  }
+
+  .wa-card-image-logo {
+    height: 34px;
+  }
+
+  .wa-card-title {
+    font-size: 1.24rem;
+  }
+
+  .wa-card-subtitle {
+    font-size: 0.8rem;
+  }
+
+  input.wa-input[type="text"],
+  input.wa-input[type="password"],
+  input.wa-input[type="email"],
+  .wa-input {
+    height: 44px !important;
+    font-size: 16px !important; /* 16px prevents iOS Safari auto-zoom on input focus */
+    padding-left: 46px !important;
+    padding-right: 44px !important;
+  }
+
+  .wa-input-icon {
+    left: 14px;
+  }
+
+  .wa-submit-btn,
+  .wa-google-btn {
+    height: 44px;
+    font-size: 0.92rem;
+  }
+
+  .wa-options-row {
+    margin: 8px 0 12px 0;
+  }
+
+  .wa-remember-me,
+  .wa-forgot-link {
+    font-size: 0.8rem;
   }
 
   .wa-features-grid {
     grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .wa-hero-stats {
-    flex-direction: column;
-    gap: 14px;
-    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 20px;
   }
 
-  .wa-stat-item:not(:first-child)::before {
-    display: none;
+  .wa-stat-item {
+    flex: 1 1 40%;
+  }
+
+  .wa-modal-card {
+    width: 92% !important;
+    max-width: 360px !important;
+    padding: 20px 16px !important;
+    border-radius: 16px !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .wa-login-viewport {
+    padding: 10px 8px 24px;
+  }
+
+  .wa-login-card {
+    padding: 18px 12px 16px;
   }
 
   .wa-options-row {
     flex-direction: column;
     align-items: flex-start;
-    gap: 12px;
+    gap: 10px;
+  }
+
+  .wa-hero-stats {
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+    padding-left: 10px;
   }
 }
 
-@media (max-height: 580px) {
+@media (max-height: 600px) {
   .wa-login-viewport {
     height: auto;
     min-height: 100vh;
+    min-height: 100dvh;
     overflow-y: auto;
-    padding: 16px;
+    padding: 12px 12px 24px;
   }
 }
