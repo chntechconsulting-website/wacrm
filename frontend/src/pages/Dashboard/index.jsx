@@ -167,9 +167,6 @@ const Dashboard = () => {
   // Real Follow-up reminders from database
   const followupReminders = stats?.upcoming_followups?.length ? stats.upcoming_followups : [];
 
-  // Real Activities from database
-  const todayActivities = stats?.today_activities?.length ? stats.today_activities : [];
-
   // Real Top Performing Team members from database
   const teamMembers = stats?.team_performance?.length ? stats.team_performance : [];
 
@@ -748,56 +745,9 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* 5. ROW 4: ACTIVITIES, TEAM PERFORMANCE & META LEADS (3 COLUMNS GRID) */}
-      <div className="dashboard-bottom-grid">
-        {/* CARD 1: TODAY'S ACTIVITIES */}
-        <div className="content-card" style={{ borderRadius: '18px', padding: '24px', display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: '800', color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Calendar size={20} style={{ color: '#2563eb' }} /> Today's Activities
-            </h3>
-            <Link to="/communication/activities" style={{ fontSize: '0.82rem', color: '#2563eb', fontWeight: '700', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              View All <ArrowUpRight size={15} />
-            </Link>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {todayActivities.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '24px 0', color: '#94a3b8', fontSize: '0.85rem' }}>
-                No activities recorded today.
-              </div>
-            ) : (
-              todayActivities.map((act) => (
-                <div key={act.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{
-                      width: '32px', height: '32px', borderRadius: '8px',
-                      backgroundColor: '#f1f5f9', color: '#475569',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center'
-                    }}>
-                      {act.icon === 'call' ? <PhoneCall size={16} /> : act.icon === 'whatsapp' ? <MessageCircle size={16} /> : <Calendar size={16} />}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '0.82rem', fontWeight: '700', color: '#0f172a' }}>{act.title}</div>
-                      <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{act.time}</div>
-                    </div>
-                  </div>
-
-                  <span style={{
-                    padding: '3px 8px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: '700',
-                    backgroundColor: act.status === 'Completed' ? '#d1fae5' : act.status === 'Pending' ? '#fef3c7' : '#e0f2fe',
-                    color: act.status === 'Completed' ? '#059669' : act.status === 'Pending' ? '#d97706' : '#2563eb'
-                  }}>
-                    {act.status}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* CARD 2: TOP PERFORMING TEAM (Only for ADMIN & MANAGER) */}
-        {user?.role?.toUpperCase() !== 'EMPLOYEE' && (
+      {/* 5. ROW 4: TOP PERFORMING TEAM (Only for ADMIN & MANAGER) */}
+      {user?.role?.toUpperCase() !== 'EMPLOYEE' && (
+        <div className="dashboard-bottom-grid">
           <div className="content-card" style={{ borderRadius: '18px', padding: '24px', display: 'flex', flexDirection: 'column', height: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h3 style={{ fontSize: '1.05rem', fontWeight: '800', color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -856,8 +806,8 @@ const Dashboard = () => {
               </table>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
     </div>
   );
