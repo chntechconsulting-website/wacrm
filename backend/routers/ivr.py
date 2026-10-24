@@ -70,7 +70,7 @@ def resolve_recording_url(raw_url: Optional[str], db: Session) -> Optional[str]:
         except Exception:
             pass
         if not base:
-            base = "https://bmxrx2cviyka.compat.objectstorage.ap-mumbai-1.oraclecloud.com/doocti/cti_chntechnolog_20261009"
+            return None
 
         base = base.strip().rstrip('/')
         match = re.search(r'https?://[^/]+(?:/audio)?(/.*)', url_str)

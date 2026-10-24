@@ -61,8 +61,8 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
         "admin_extension": admin_ext,
         "agent_extensions": agent_exts,
         "extension_mapping": ext_map,
-        "api_url": data.get("api_url", "https://beta3-app.doocti.com/"),
-        "account_id": data.get("account_id", "chntechnolog"),
+        "api_url": data.get("api_url", ""),
+        "account_id": data.get("account_id", ""),
         "secret_token": data.get("secret_token")
     }
 
@@ -1299,8 +1299,8 @@ def get_my_doocti_agent_extension(
             "cli_number": assigned_did,
             "assigned_did": assigned_did,
             "did_numbers": dids,
-            "tenant_id": cfg.get("account_id", "chntechnolog"),
-            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "tenant_id": cfg.get("account_id", ""),
+            "webphone_url": cfg.get("api_url", ""),
             "provider": "DOOCTI"
         }
     elif found_ext and not is_active:
@@ -1315,8 +1315,8 @@ def get_my_doocti_agent_extension(
             "cli_number": None,
             "assigned_did": None,
             "did_numbers": dids,
-            "tenant_id": cfg.get("account_id", "chntechnolog"),
-            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "tenant_id": cfg.get("account_id", ""),
+            "webphone_url": cfg.get("api_url", ""),
             "provider": "DOOCTI",
             "message": f"WebRTC extension {found_ext} is currently deactivated. Please contact Administrator."
         }
@@ -1332,8 +1332,8 @@ def get_my_doocti_agent_extension(
             "cli_number": None,
             "assigned_did": None,
             "did_numbers": dids,
-            "tenant_id": cfg.get("account_id", "chntechnolog"),
-            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "tenant_id": cfg.get("account_id", ""),
+            "webphone_url": cfg.get("api_url", ""),
             "provider": "DOOCTI",
             "message": f"Extension {found_ext} does not have an outbound DID assigned. Please assign an outbound DID in Admin Settings."
         }
@@ -1349,8 +1349,8 @@ def get_my_doocti_agent_extension(
             "cli_number": None,
             "assigned_did": None,
             "did_numbers": dids,
-            "tenant_id": cfg.get("account_id", "chntechnolog"),
-            "webphone_url": cfg.get("api_url", "https://beta3-app.doocti.com/"),
+            "tenant_id": cfg.get("account_id", ""),
+            "webphone_url": cfg.get("api_url", ""),
             "provider": "DOOCTI",
             "message": f"User '{emp_name}' does not have an assigned DooCTI PBX extension. Please configure in Settings → Integrations."
         }

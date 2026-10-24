@@ -306,23 +306,18 @@ const IntegrationsPage = () => {
     setShowSecrets({});
     const initialConfig = { ...item.masked_config };
     if (item.integration_type === 'IVR') {
-      const provider = initialConfig.provider || 'DOOCTI';
-      if (initialConfig.api_url?.includes('smartflo') || initialConfig.api_url?.includes('tatateleservices')) {
-        initialConfig.api_url = 'https://beta3-app.doocti.com/';
-      }
-      if (initialConfig.account_id?.toLowerCase().includes('smartflo')) {
-        initialConfig.account_id = 'chntechnolog';
-      }
       // Always fetch employee directory
       fetchEmployees();
       // Fetch latest live extension mapping from backend and sync into modal state
       API.get('/doocti/config').then(res => {
-        if (res.data?.extension_mapping && Object.keys(res.data.extension_mapping).length > 0) {
+        if (res.data) {
           setModalState(prev => ({
             ...prev,
             config: {
               ...prev.config,
-              extension_mapping: res.data.extension_mapping,
+              api_url: res.data.api_url || prev.config.api_url || '',
+              account_id: res.data.account_id || prev.config.account_id || '',
+              extension_mapping: res.data.extension_mapping || prev.config.extension_mapping || {},
               admin_extension: res.data.admin_extension || prev.config.admin_extension || '',
               agent_extensions: res.data.agent_extensions || prev.config.agent_extensions || []
             }
@@ -610,31 +605,18 @@ const IntegrationsPage = () => {
       if (newProvider === 'DOOCTI') {
         fetchEmployees();
         API.get('/doocti/config').then(res => {
-          if (res.data?.extension_mapping) {
+          if (res.data) {
             setModalState(curr => ({
               ...curr,
               config: {
                 ...curr.config,
-                extension_mapping: res.data.extension_mapping || curr.config.extension_mapping
+                api_url: res.data.api_url || curr.config.api_url || '',
+                account_id: res.data.account_id || curr.config.account_id || '',
+                extension_mapping: res.data.extension_mapping || curr.config.extension_mapping || {}
               }
             }));
           }
         }).catch(() => {});
-      }
-      if (newProvider === 'DOOCTI') {
-        if (!updatedConfig.api_url || updatedConfig.api_url.includes('tatateleservices') || updatedConfig.api_url.includes('smartflo')) {
-          updatedConfig.api_url = 'https://beta3-app.doocti.com/';
-        }
-        if (!updatedConfig.account_id || updatedConfig.account_id.toLowerCase().includes('smartflo')) {
-          updatedConfig.account_id = 'chntechnolog';
-        }
-      } else if (newProvider === 'SMARTFLO') {
-        if (!updatedConfig.api_url || updatedConfig.api_url.includes('doocti')) {
-          updatedConfig.api_url = 'https://api-smartflo.tatateleservices.com/v1/click_to_call';
-        }
-        if (!updatedConfig.account_id || updatedConfig.account_id.includes('chntechnolog')) {
-          updatedConfig.account_id = 'Smartflo';
-        }
       }
       return {
         ...prev,
@@ -1171,12 +1153,12 @@ const IntegrationsPage = () => {
                     {modalState.config.provider === 'DOOCTI' ? (
                       <>
                         <div className="form-group">
-                          <label>Doocti In-App WebRTC Domain</label>
+                          <label>Doocti In-App WebRTC Domain (WebPhone URL)</label>
                           <input 
                             type="text" 
-                            value={modalState.config.api_url || 'https://beta3-app.doocti.com/'} 
+                            value={modalState.config.api_url || ''} 
                             onChange={(e) => handleConfigChange('api_url', e.target.value)}
-                            placeholder="https://beta3-app.doocti.com/"
+                            placeholder="e.g. https://beta3-app.doocti.com/"
                           />
                         </div>
 
@@ -1184,9 +1166,9 @@ const IntegrationsPage = () => {
                           <label>Tenant ID / Organization Name</label>
                           <input 
                             type="text" 
-                            value={modalState.config.account_id || 'chntechnolog'} 
+                            value={modalState.config.account_id || ''} 
                             onChange={(e) => handleConfigChange('account_id', e.target.value)}
-                            placeholder="chntechnolog"
+                            placeholder="e.g. chntechnolog"
                           />
                         </div>
 

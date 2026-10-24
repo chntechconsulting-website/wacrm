@@ -121,8 +121,8 @@ class IVRService:
 
         elif provider_name in ["DOOCTI", "DOOCTI_IVR", "DOOCTI_TELEPHONY"]:
             data_dict = data if "data" in locals() and isinstance(data, dict) else {}
-            doocti_account_id = data_dict.get("account_id") or "chntechnolog"
-            doocti_api_url = data_dict.get("api_url") or "https://beta3-app.doocti.com/"
+            doocti_account_id = data_dict.get("account_id") or ""
+            doocti_api_url = data_dict.get("api_url") or ""
             dids = data_dict.get("did_numbers") or []
             if isinstance(dids, str):
                 dids = [d.strip() for d in dids.split(",") if d.strip()]

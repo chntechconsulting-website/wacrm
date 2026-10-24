@@ -38,8 +38,8 @@ import PingoMascot from '../Common/PingoMascot';
 
 // Default configuration loaded dynamically from server
 const DEFAULT_DOOCTI_CONFIG = {
-  domain: 'https://beta3-app.doocti.com/',
-  tenantId: 'chntechnolog',
+  domain: '',
+  tenantId: '',
   userEmail: '',
   userId: '',
   userNumber: '',
@@ -281,6 +281,8 @@ const DooctiInAppDialer = () => {
             const nextExt = matchedExt || prev.userNumber || '';
             const updated = {
               ...prev,
+              domain: res.data.api_url || res.data.webphone_url || prev.domain || '',
+              tenantId: res.data.account_id || res.data.tenant_id || prev.tenantId || '',
               userId: nextExt,
               userNumber: nextExt,
               userEmail: (matchedExt && mapping[matchedExt]?.email) || prev.userEmail || '',
@@ -547,7 +549,7 @@ const DooctiInAppDialer = () => {
       cli_number: outboundCli,
       crm_unique_id: uniqueSessionId,
       station: userExt,
-      tenant_id: String(config.tenantId || 'chntechnolog').trim(),
+      tenant_id: String(config.tenantId || '').trim(),
       user_email: String(config.userEmail || user?.email || '').trim(),
       user_id: userExt,
       user_number: userExt
@@ -606,7 +608,7 @@ const DooctiInAppDialer = () => {
         // Doocti's native dialpad dispatches { type: 'Manual', data: { number, id } }
         // which triggers An(number, station, id) without cli_number.
         // This directs Doocti Asterisk PBX to use the agent's WebRTC extension station routing,
-        // avoiding trunk pilot fallback (07969659985).
+        // avoiding trunk pilot fallback.
         // NOTE: We do NOT send a secondary C2C message with cli_number because Doocti's listener
         // is debounced by 1000ms; sending both caused the second message (with cli_number)
         // to overwrite the Manual message, triggering the Asterisk trunk pilot fallback!

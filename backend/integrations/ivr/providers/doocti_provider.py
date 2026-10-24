@@ -23,15 +23,15 @@ class DooctiIVRProvider(BaseIVRProvider):
 
     def __init__(
         self,
-        account_id: str = "chntechnolog",
-        api_url: str = "https://beta3-app.doocti.com/",
+        account_id: str = "",
+        api_url: str = "",
         did_numbers: Optional[List[str]] = None,
         extension_mapping: Optional[Dict[str, Any]] = None,
         secret_token: Optional[str] = None,
         admin_extension: Optional[str] = None
     ):
-        self.account_id = (account_id or "chntechnolog").strip()
-        self.api_url = (api_url or "https://beta3-app.doocti.com/").strip()
+        self.account_id = (account_id or "").strip()
+        self.api_url = (api_url or "").strip()
         self.did_numbers = did_numbers or []
         self.extension_mapping = extension_mapping or {}
         self.secret_token = secret_token
