@@ -56,7 +56,7 @@ const Reports = () => {
     { source: 'Meta Ads', count: metaCount, color: '#2563eb' },
     { source: 'Excel Import', count: excelCount, color: '#10b981' },
     { source: 'Website Forms', count: websiteCount, color: '#8b5cf6' },
-    { source: 'Manual Entry', count: manualCount, color: '#f59e0b' },
+    { source: 'Quick Add', count: manualCount, color: '#f59e0b' },
     { source: 'Others', count: othersCount, color: '#94a3b8' }
   ];
 
@@ -91,7 +91,7 @@ const Reports = () => {
     { name: 'Meta Ads', count: metaCount },
     { name: 'Excel Import', count: excelCount },
     { name: 'Website Forms', count: websiteCount },
-    { name: 'Manual Entry', count: manualCount },
+    { name: 'Quick Add', count: manualCount },
     { name: 'Others', count: othersCount }
   ];
   sourceList.sort((a, b) => b.count - a.count);

@@ -72,7 +72,7 @@ const AnalyticsPage = () => {
   const sourceData = [
     { source: 'Meta Ads', count: metaCount, percentage: totalLeads > 0 ? Math.round((metaCount / totalLeads) * 100) : 0, color: '#7c3aed' },
     { source: 'Website Forms', count: websiteCount, percentage: totalLeads > 0 ? Math.round((websiteCount / totalLeads) * 100) : 0, color: '#0d9488' },
-    { source: 'Manual Entry', count: manualCount, percentage: totalLeads > 0 ? Math.round((manualCount / totalLeads) * 100) : 0, color: '#2563eb' },
+    { source: 'Quick Add', count: manualCount, percentage: totalLeads > 0 ? Math.round((manualCount / totalLeads) * 100) : 0, color: '#2563eb' },
     { source: 'Excel Uploads', count: excelCount, percentage: totalLeads > 0 ? Math.round((excelCount / totalLeads) * 100) : 0, color: '#f59e0b' }
   ];
 
@@ -97,7 +97,7 @@ const AnalyticsPage = () => {
     { name: 'Meta Ads', count: metaCount },
     { name: 'Excel Uploads', count: excelCount },
     { name: 'Website Forms', count: websiteCount },
-    { name: 'Manual Entry', count: manualCount }
+    { name: 'Quick Add', count: manualCount }
   ];
   sourceList.sort((a, b) => b.count - a.count);
   const topChannel = totalLeads > 0 && sourceList[0].count > 0 ? sourceList[0] : null;

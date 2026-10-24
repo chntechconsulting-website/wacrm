@@ -378,7 +378,7 @@ const CreateLeadPage = () => {
           }}
         >
           <UserPlus size={16} />
-          <span>Manual Entry (Create Lead)</span>
+          <span>Quick Add (Create Lead)</span>
         </button>
 
         <button
