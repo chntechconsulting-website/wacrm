@@ -11,6 +11,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 // Public Auth & Compliance Pages
 import Login from './pages/Login';
 import PrivacyPolicyPage from './pages/Public/PrivacyPolicyPage';
+import TermsAndConditionsPage from './pages/Public/TermsAndConditionsPage';
 import DataDeletionPage from './pages/Public/DataDeletionPage';
 
 // CRM Module Pages
@@ -73,6 +74,9 @@ function App() {
           {/* Public Authentication & Meta Compliance Routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/privacy" element={<PrivacyPolicyPage />} />
+          <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+          <Route path="/terms" element={<TermsAndConditionsPage />} />
+          <Route path="/terms-and-conditions" element={<TermsAndConditionsPage />} />
           <Route path="/data-deletion" element={<DataDeletionPage />} />
 
           {/* Protected Main CRM Application Routes */}
