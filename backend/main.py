@@ -35,7 +35,8 @@ from routers import (
     workflow,
     roles,
     doocti,
-    field_visits
+    field_visits,
+    export
 )
 
 # Ensure upload directory exists
@@ -89,6 +90,7 @@ app.include_router(leads.router, prefix=settings.API_V1_STR)
 app.include_router(customers.router, prefix=settings.API_V1_STR)
 app.include_router(followups.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
+app.include_router(export.router, prefix=settings.API_V1_STR)
 app.include_router(integrations.router, prefix=settings.API_V1_STR)
 app.include_router(ivr.router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp.router, prefix=settings.API_V1_STR)

@@ -119,6 +119,7 @@ function App() {
 
               {/* REPORTS & ANALYTICS Section Routes */}
               <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/reports/export" element={<ReportsPage />} />
               <Route path="/analytics" element={<ReportsPage />} />
 
               {/* SETTINGS & USERS Section Routes */}

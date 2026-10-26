@@ -38,7 +38,8 @@ import {
   Filter,
   Clock,
   Award,
-  XCircle
+  XCircle,
+  Database
 } from 'lucide-react';
 
 // Lite tone color presets for testing
@@ -746,6 +747,16 @@ const Sidebar = ({
                 isCollapsed={isCollapsed}
                 onClick={handleItemClick}
               />
+              {isAdmin && (
+                <SidebarItem
+                  to="/reports?tab=export"
+                  exactMatch={true}
+                  icon={Database}
+                  label="Data Export"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
             </SidebarSection>
           )}
 
