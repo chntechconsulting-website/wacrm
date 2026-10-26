@@ -369,6 +369,9 @@ class MetaLeadService:
         # Fallback values if API is unavailable or in mock test mode
         name = parsed["name"] or f"Meta Lead #{leadgen_id[-6:]}"
         phone = parsed["phone"] or (f"+9198{leadgen_id[-8:]}" if len(leadgen_id) >= 8 else "+919876543210")
+        if "<test lead:" in phone.lower() or len(phone) > 25:
+            # Meta test lead dummy phone string e.g. "<test lead: dummy data for phone_number>"
+            phone = f"+9198{leadgen_id[-8:]}" if len(leadgen_id) >= 8 else "+919876543210"
         email = parsed["email"] or f"lead_{leadgen_id}@meta-leads.com"
 
         # 4. Process via ReInquiryService
