@@ -70,7 +70,8 @@ def resolve_recording_url(raw_url: Optional[str], db: Session) -> Optional[str]:
         except Exception:
             pass
         if not base:
-            return None
+            # Default authoritative Doocti audio storage endpoint
+            base = "https://beta3-app.doocti.com/audio"
 
         base = base.strip().rstrip('/')
         match = re.search(r'https?://[^/]+(?:/audio)?(/.*)', url_str)
@@ -128,7 +129,7 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
 
     if resolved_rec:
         rec_status = "RECORDING_AVAILABLE"
-    elif is_loopback or (is_recent and status_upper not in ["BUSY", "MISSED", "FAILED"]):
+    elif is_recent and status_upper not in ["BUSY", "MISSED", "FAILED"]:
         rec_status = "RECORDING_PROCESSING"
     else:
         rec_status = "RECORDING_UNAVAILABLE"
