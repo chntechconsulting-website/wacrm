@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, ZoomIn, ZoomOut, RotateCw, FileText, CheckCircle, ExternalLink, RefreshCw } from 'lucide-react';
-import { getPdfBlob, generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf } from '../../utils/quotationPdf';
+import { X, Download, FileText, CheckCircle, ExternalLink, RefreshCw } from 'lucide-react';
+import { getPdfBlob, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf } from '../../utils/quotationPdf';
 import PingoPopupService from '../../services/pingoPopupService';
 import API from '../../services/api';
 
 /**
  * Universal PDF Preview Modal for Quotations, Purchase Orders (PO), Proformas, and Tax Invoices.
- * 
- * Allows the user to inspect the exact rendered document layout, multiline item descriptions,
- * tax computation, terms, etc., before explicitly hitting "Download PDF".
+ * Uses robust inline styling and verified PDF blob generation so it renders reliably across all screen sizes.
  */
 export default function DocumentPdfPreviewModal({
   isOpen,
@@ -37,14 +35,14 @@ export default function DocumentPdfPreviewModal({
       setLoading(true);
       setError(null);
 
-      // Strategy 1: If document has an ID or server download endpoint, try fetching exact backend generated PDF if applicable
       const dType = (docData.docType || docData.doc_type || 'quotation').toLowerCase();
       const rawId = docData.id || docData.docId;
       const cleanId = rawId ? String(rawId).replace('local_', '').trim() : null;
 
       let fetchedBlob = null;
 
-      if (cleanId && !String(cleanId).startsWith('PREVIEW') && !docData.isDraftPreview) {
+      // Strategy 1: If document has a valid server ID and is not draft preview, try server download
+      if (cleanId && !String(cleanId).startsWith('DRAFT') && !String(cleanId).startsWith('PREVIEW') && !docData.isDraftPreview) {
         try {
           let endpoint;
           if (dType === 'invoice') {
@@ -66,7 +64,7 @@ export default function DocumentPdfPreviewModal({
         }
       }
 
-      // Strategy 2: If no server blob, generate client-side with pdfMake
+      // Strategy 2: Client-side vector generation with pdfMake
       if (!fetchedBlob) {
         try {
           fetchedBlob = await getPdfBlob(docData);
@@ -133,7 +131,6 @@ export default function DocumentPdfPreviewModal({
         link.click();
         link.remove();
       } else {
-        // Fallback to direct download
         if (isInvoice) {
           generateTaxInvoicePdf(docData, true);
         } else if (isProforma) {
@@ -167,51 +164,83 @@ export default function DocumentPdfPreviewModal({
     }
   };
 
-  const primaryColor = isInvoice ? '#1e40af' : '#dc2626';
+  const primaryColor = isInvoice ? '#1e3a8a' : '#dc2626';
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5"
       style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100vh',
         backgroundColor: 'rgba(15, 23, 42, 0.75)',
         backdropFilter: 'blur(4px)',
-        animation: 'fadeIn 0.2s ease-out'
+        zIndex: 100000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '16px'
       }}
       onClick={onClose}
     >
       <div 
-        className="bg-white rounded-xl shadow-2xl flex flex-col w-full max-w-5xl overflow-hidden"
         style={{
+          backgroundColor: '#ffffff',
+          borderRadius: '16px',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+          display: 'flex',
+          flexDirection: 'column',
+          width: '94vw',
+          maxWidth: '1080px',
           height: '92vh',
+          maxHeight: '92vh',
+          overflow: 'hidden',
           border: '1px solid #cbd5e1'
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header Bar */}
         <div 
-          className="flex items-center justify-between px-5 py-3.5 border-b"
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 20px',
             background: isInvoice 
               ? 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)' 
               : 'linear-gradient(135deg, #991b1b 0%, #dc2626 100%)',
-            color: '#ffffff'
+            color: '#ffffff',
+            flexShrink: 0
           }}
         >
-          <div className="flex items-center gap-3">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div 
-              className="p-2 rounded-lg flex items-center justify-center"
-              style={{ background: 'rgba(255, 255, 255, 0.2)' }}
+              style={{
+                padding: '8px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'rgba(255, 255, 255, 0.2)'
+              }}
             >
-              <FileText size={20} className="text-white" />
+              <FileText size={20} color="#ffffff" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white tracking-wide leading-tight">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff', letterSpacing: '0.01em' }}>
                   {docLabel} Preview
-                </h3>
+                </span>
                 <span 
-                  className="px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wider"
                   style={{
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
                     backgroundColor: 'rgba(255, 255, 255, 0.25)',
                     color: '#ffffff'
                   }}
@@ -219,22 +248,29 @@ export default function DocumentPdfPreviewModal({
                   #{docNumber}
                 </span>
               </div>
-              <p className="text-xs text-white/80 mt-0.5">
-                Review the document formatting and line item breakdown before downloading
-              </p>
+              <div style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.85)', marginTop: '2px' }}>
+                Review document formatting, item details and taxes before downloading
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {blobUrl && (
               <button
                 type="button"
                 onClick={openInNewTab}
-                className="btn btn-sm text-white/90 hover:text-white flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  border: '1px solid rgba(255, 255, 255, 0.25)',
-                  fontSize: '0.8rem'
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  background: 'rgba(255, 255, 255, 0.18)',
+                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  color: '#ffffff',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
                 }}
                 title="Open PDF in a new browser tab"
               >
@@ -244,36 +280,54 @@ export default function DocumentPdfPreviewModal({
             <button
               type="button"
               onClick={onClose}
-              className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"
+              style={{
+                background: 'rgba(255, 255, 255, 0.15)',
+                border: 'none',
+                borderRadius: '6px',
+                color: '#ffffff',
+                padding: '6px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
               title="Close Preview"
             >
-              <X size={20} />
+              <X size={18} />
             </button>
           </div>
         </div>
 
         {/* PDF Viewer Body */}
         <div 
-          className="flex-1 bg-slate-100 flex items-center justify-center relative overflow-hidden"
-          style={{ minHeight: '300px' }}
+          style={{
+            flex: 1,
+            backgroundColor: '#525659',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            position: 'relative',
+            overflow: 'hidden',
+            minHeight: '200px'
+          }}
         >
           {loading && (
-            <div className="flex flex-col items-center justify-center gap-3 text-slate-600">
-              <RefreshCw size={32} className="animate-spin text-slate-400" />
-              <p className="text-sm font-medium">Generating pixel-perfect PDF preview...</p>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', color: '#f8fafc' }}>
+              <RefreshCw size={32} className="spinning" style={{ color: '#94a3b8' }} />
+              <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>Generating pixel-perfect PDF preview...</div>
             </div>
           )}
 
           {error && (
-            <div className="flex flex-col items-center justify-center gap-3 text-center p-6 max-w-md">
-              <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center font-bold text-xl">!</div>
-              <h4 className="text-sm font-bold text-slate-800">Preview Generation Issue</h4>
-              <p className="text-xs text-slate-600 leading-relaxed">{error}</p>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center', padding: '24px', maxWidth: '450px', backgroundColor: '#ffffff', borderRadius: '12px', margin: '20px' }}>
+              <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1.25rem' }}>!</div>
+              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0f172a' }}>Preview Generation Issue</div>
+              <div style={{ fontSize: '0.78rem', color: '#64748b', lineHeight: 1.5 }}>{error}</div>
               <button
                 type="button"
                 onClick={handleDownload}
-                className="btn btn-sm btn-primary mt-2 flex items-center gap-1.5"
-                style={{ backgroundColor: primaryColor }}
+                className="btn btn-primary"
+                style={{ backgroundColor: primaryColor, borderColor: primaryColor, display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', marginTop: '6px' }}
               >
                 <Download size={14} /> Download Document Directly
               </button>
@@ -282,26 +336,42 @@ export default function DocumentPdfPreviewModal({
 
           {!loading && !error && blobUrl && (
             <iframe
-              src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
+              src={`${blobUrl}#toolbar=1&navpanes=0&scrollbar=1&view=FitH`}
               title={`${docLabel} Preview`}
-              className="w-full h-full border-0"
-              style={{ display: 'block', backgroundColor: '#525659' }}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                display: 'block',
+                backgroundColor: '#525659'
+              }}
             />
           )}
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-between px-5 py-3 bg-white border-t border-slate-200">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <CheckCircle size={14} className="text-emerald-600" />
-            <span>Format: Official High-Resolution Vector PDF • Ready for client dispatch</span>
+        <div 
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 20px',
+            backgroundColor: '#ffffff',
+            borderTop: '1px solid #e2e8f0',
+            flexShrink: 0
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: '#64748b' }}>
+            <CheckCircle size={14} color="#16a34a" />
+            <span>Format: Official High-Resolution Vector PDF</span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <button
               type="button"
               onClick={onClose}
-              className="btn btn-secondary px-4 py-2 text-xs font-medium rounded-lg text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
+              className="btn btn-secondary"
+              style={{ padding: '8px 16px', fontSize: '0.82rem' }}
             >
               Close
             </button>
@@ -309,10 +379,16 @@ export default function DocumentPdfPreviewModal({
               type="button"
               onClick={handleDownload}
               disabled={loading || downloading}
-              className="btn flex items-center gap-2 px-5 py-2 text-xs font-semibold rounded-lg text-white shadow-sm transition hover:opacity-95"
+              className="btn btn-primary"
               style={{
                 backgroundColor: primaryColor,
-                borderColor: primaryColor
+                borderColor: primaryColor,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 20px',
+                fontSize: '0.82rem',
+                fontWeight: 600
               }}
             >
               <Download size={15} />

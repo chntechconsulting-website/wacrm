@@ -785,31 +785,46 @@ export function generateTaxInvoicePdf(docData, download = true) {
  * Returns a Promise that resolves to a Blob of the generated PDF document.
  * Works uniformly for quotation, po, proforma, and tax invoice.
  */
-export function getPdfBlob(docData) {
-  return new Promise((resolve, reject) => {
-    try {
-      const dType = (docData.docType || docData.doc_type || 'quotation').toLowerCase();
-      let pdfObj;
-      if (dType === 'invoice') {
-        pdfObj = generateTaxInvoicePdf(docData, false);
-      } else if (dType === 'proforma') {
-        pdfObj = generateProformaPdf(docData, false);
-      } else if (dType === 'po' || dType === 'purchase_order') {
-        pdfObj = generatePoPdf(docData, false);
-      } else {
-        pdfObj = generateQuotationPdf(docData, false);
-      }
+export async function getPdfBlob(docData) {
+  const dType = (docData.docType || docData.doc_type || 'quotation').toLowerCase();
+  let pdfObj;
+  if (dType === 'invoice') {
+    pdfObj = generateTaxInvoicePdf(docData, false);
+  } else if (dType === 'proforma') {
+    pdfObj = generateProformaPdf(docData, false);
+  } else if (dType === 'po' || dType === 'purchase_order') {
+    pdfObj = generatePoPdf(docData, false);
+  } else {
+    pdfObj = generateQuotationPdf(docData, false);
+  }
 
-      if (pdfObj && typeof pdfObj.getBlob === 'function') {
-        pdfObj.getBlob((blob) => {
-          resolve(blob);
-        });
-      } else {
-        reject(new Error('PDF generator object did not expose getBlob method.'));
-      }
-    } catch (err) {
-      reject(err);
+  if (!pdfObj) {
+    throw new Error('PDF generator failed to create document.');
+  }
+
+  // In pdfmake 0.3+, getBlob() returns a Promise.
+  // In older versions, getBlob(callback) takes a callback.
+  // We handle both transparently:
+  if (typeof pdfObj.getBlob === 'function') {
+    const res = pdfObj.getBlob();
+    if (res && typeof res.then === 'function') {
+      return await res;
     }
-  });
+    // Fallback if callback-based
+    return new Promise((resolve, reject) => {
+      try {
+        pdfObj.getBlob((blob) => resolve(blob));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  if (typeof pdfObj.getBuffer === 'function') {
+    const buf = await pdfObj.getBuffer();
+    return new Blob([buf], { type: 'application/pdf' });
+  }
+
+  throw new Error('PDF generator object does not support getBlob or getBuffer.');
 }
 
