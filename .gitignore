@@ -54,6 +54,7 @@ dist/
 uploads/
 backend/uploads/
 backups/
+database_backups/
 scratch/
 crop*.png
 test_rupee.pdf
