@@ -6,6 +6,7 @@ import {
   Plus, 
   Trash2, 
   Download, 
+  Eye,
   Check, 
   X, 
   Building2, 
@@ -31,7 +32,8 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
+import DocumentPdfPreviewModal from './PdfPreviewModal';
 import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
 const DEFAULT_TERMS_QUOTATION = 
@@ -458,6 +460,8 @@ export default function QuotationModal({
     (initialData.productCategory || initialData.product_category || 'wahrms').toLowerCase()
   );
   const [allowDuplicateIntent, setAllowDuplicateIntent] = useState(Boolean(initialData.allowDuplicate));
+  const [previewDocData, setPreviewDocData] = useState(null);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   // Manageable Product Bundle Master state (WAHRMS & Biometric)
   const [bundles, setBundles] = useState(ALL_FALLBACK_BUNDLES);
@@ -806,17 +810,19 @@ export default function QuotationModal({
   };
 
 
-  const handleDownloadPdf = () => {
+  const handleOpenPdfPreview = () => {
     const payload = buildDocPayload();
     const docData = {
       ...payload,
+      id: initialData?.id || initialData?.docId || null,
+      docId: initialData?.id || initialData?.docId || null,
       docType,
       doc_type: docType,
       companyId: selectedCompanyId,
       company: activeCompany,
       number: isEditMode && (initialData.docNumber || initialData.number) 
         ? (initialData.docNumber || initialData.number)
-        : `PREVIEW-${docType.toUpperCase()}`,
+        : `DRAFT-${docType.toUpperCase()}`,
       customerName,
       companyName,
       phone,
@@ -836,20 +842,16 @@ export default function QuotationModal({
       lineItems,
       terms,
       issueDateFormatted: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-      validTillFormatted: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      validTillFormatted: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      isDraftPreview: true
     };
-    if (docType === 'proforma') {
-      generateProformaPdf(docData, true);
-    } else if (docType === 'invoice') {
-      generateTaxInvoicePdf(docData, true);
-    } else {
-      generateQuotationPdf(docData, true);
-    }
-    PingoPopupService.triggerDownloadSuccess({
-      docType: docType === 'invoice' ? 'Tax Invoice' : (docType === 'proforma' ? 'Proforma Invoice' : 'Quotation'),
-      reference: docData.number || customerName || 'Document',
-      customMessage: `${docType === 'invoice' ? 'Tax Invoice' : (docType === 'proforma' ? 'Proforma Invoice' : 'Quotation')} downloaded successfully!`
-    });
+    setPreviewDocData(docData);
+    setShowPreviewModal(true);
+  };
+
+  const handleDownloadPdf = () => {
+    // Open preview dialog first so user reviews before downloading
+    handleOpenPdfPreview();
   };
 
   const handleSaveAndIssue = async () => {
@@ -1673,18 +1675,19 @@ export default function QuotationModal({
             </button>
             <button 
               type="button" 
-              onClick={handleDownloadPdf} 
+              onClick={handleOpenPdfPreview} 
               className="btn btn-outline"
               style={{
-                color: docType === 'invoice' ? '#1e40af' : '#0f766e',
-                borderColor: docType === 'invoice' ? '#93c5fd' : '#0f766e',
-                backgroundColor: docType === 'invoice' ? '#eff6ff' : '#f0fdfa',
+                color: docType === 'invoice' ? '#1e40af' : (docType === 'po' ? '#0369a1' : '#dc2626'),
+                borderColor: docType === 'invoice' ? '#93c5fd' : (docType === 'po' ? '#bae6fd' : '#fca5a5'),
+                backgroundColor: docType === 'invoice' ? '#eff6ff' : (docType === 'po' ? '#f0f9ff' : '#fef2f2'),
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px'
               }}
+              title="Preview document before downloading"
             >
-              <Download size={15} /> {docType === 'invoice' ? 'Download Tax Invoice' : (docType === 'proforma' ? 'Download Proforma' : 'Download Quotation')}
+              <Eye size={15} /> Preview & Download
             </button>
             {!isReadOnly && (
               <button 
@@ -1694,12 +1697,22 @@ export default function QuotationModal({
                 style={{ backgroundColor: docType === 'invoice' ? '#1d4ed8' : '#0f766e', borderColor: docType === 'invoice' ? '#1d4ed8' : '#0f766e', display: 'flex', alignItems: 'center', gap: '6px' }}
                 disabled={saving}
               >
-                <Check size={16} /> {saving ? (isEditMode ? 'Saving Changes...' : 'Issuing...') : (isEditMode ? 'Save & Update' : `Issue ${docType === 'invoice' ? 'Tax Invoice' : docType.toUpperCase()}`)}
+                <Check size={16} /> {saving ? (isEditMode ? 'Saving Changes...' : 'Issuing...') : (isEditMode ? 'Save & Update' : `Issue ${docType === 'invoice' ? 'Tax Invoice' : (docType === 'po' ? 'PO' : docType.toUpperCase())}`)}
               </button>
             )}
           </div>
         </div>
       </div>
+
+      {/* PDF Interactive Preview & Download Modal */}
+      {showPreviewModal && previewDocData && (
+        <DocumentPdfPreviewModal
+          isOpen={showPreviewModal}
+          onClose={() => setShowPreviewModal(false)}
+          docData={previewDocData}
+          title={`${docType === 'invoice' ? 'Tax Invoice' : (docType === 'po' ? 'Purchase Order' : (docType === 'proforma' ? 'Proforma Invoice' : 'Quotation'))} Preview`}
+        />
+      )}
     </div>
   );
 }

@@ -767,9 +767,49 @@ export function generateProformaPdf(docData, download = true) {
   }, download);
 }
 
+export function generatePoPdf(docData, download = true) {
+  return generateBillingPdf({
+    ...docData,
+    docType: 'po',
+    doc_type: 'po'
+  }, download);
+}
+
 import { buildTaxInvoiceModelPdf } from './taxInvoicePdf';
 
 export function generateTaxInvoicePdf(docData, download = true) {
   return buildTaxInvoiceModelPdf(docData, download);
+}
+
+/**
+ * Returns a Promise that resolves to a Blob of the generated PDF document.
+ * Works uniformly for quotation, po, proforma, and tax invoice.
+ */
+export function getPdfBlob(docData) {
+  return new Promise((resolve, reject) => {
+    try {
+      const dType = (docData.docType || docData.doc_type || 'quotation').toLowerCase();
+      let pdfObj;
+      if (dType === 'invoice') {
+        pdfObj = generateTaxInvoicePdf(docData, false);
+      } else if (dType === 'proforma') {
+        pdfObj = generateProformaPdf(docData, false);
+      } else if (dType === 'po' || dType === 'purchase_order') {
+        pdfObj = generatePoPdf(docData, false);
+      } else {
+        pdfObj = generateQuotationPdf(docData, false);
+      }
+
+      if (pdfObj && typeof pdfObj.getBlob === 'function') {
+        pdfObj.getBlob((blob) => {
+          resolve(blob);
+        });
+      } else {
+        reject(new Error('PDF generator object did not expose getBlob method.'));
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 

@@ -25,7 +25,8 @@ import {
   Pencil
 } from 'lucide-react';
 import QuotationModal from '../../components/Billing/QuotationModal';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
+import DocumentPdfPreviewModal from '../../components/Billing/PdfPreviewModal';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
@@ -83,6 +84,10 @@ const WAQuotesPage = () => {
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [retryingSyncId, setRetryingSyncId] = useState(null);
   const [actionToast, setActionToast] = useState(null);
+
+  // PDF Interactive Preview State
+  const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
+  const [showPdfPreviewModal, setShowPdfPreviewModal] = useState(false);
 
   const { user } = useAuth();
   const userRole = (user?.role || '').toUpperCase();
@@ -398,83 +403,35 @@ const WAQuotesPage = () => {
     }
   };
 
-  const handleDownloadDoc = async (doc) => {
+  const handleOpenPdfPreview = (doc) => {
     if (!doc) return;
-    if (doc.pdfUrl) {
-      window.open(doc.pdfUrl, '_blank');
-      return;
-    }
     const dType = (doc.docType || doc.doc_type || 'quotation').toLowerCase();
-    const docId = doc.id || doc.docId || doc.number;
-
-    // Call dedicated backend download endpoint
-    try {
-      const cleanId = String(docId).replace('local_', '').trim();
-      let endpoint;
-      let filenamePrefix;
-      if (dType === 'invoice') {
-        endpoint = `/integrations/waquote/invoices/${cleanId}/download`;
-        filenamePrefix = 'Tax_Invoice';
-      } else if (dType === 'proforma') {
-        endpoint = `/integrations/waquote/proformas/${cleanId}/download`;
-        filenamePrefix = 'Proforma_Invoice';
-      } else {
-        endpoint = `/integrations/waquote/quotations/${cleanId}/download`;
-        filenamePrefix = 'Quotation';
-      }
-
-      const response = await API.get(endpoint, { responseType: 'blob' });
-      const blob = new Blob([response.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      const cleanNum = (doc.number || doc.doc_number || doc.docNumber || 'DOC').replace(/[\\/]/g, '-').replace(/[^a-zA-Z0-9-_]/g, '');
-      link.download = `${filenamePrefix}_${cleanNum}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      PingoPopupService.triggerDownloadSuccess({
-        docType: dType === 'invoice' ? 'Tax Invoice' : (dType === 'proforma' ? 'Proforma Invoice' : 'Quotation'),
-        reference: cleanNum,
-        customMessage: `${dType === 'invoice' ? 'Tax Invoice' : (dType === 'proforma' ? 'Proforma Invoice' : 'Quotation')} downloaded successfully!`
-      });
-      return;
-    } catch (err) {
-      console.warn('Backend download endpoint call failed, falling back to client-side generator', err);
-    }
-
-    // Instant client-side fallback
     const docData = {
       ...doc,
+      id: doc.id || doc.docId || null,
+      docId: doc.id || doc.docId || null,
       docType: dType,
       doc_type: dType,
-      customerName: doc.customer?.name || doc.customer_name || 'Customer',
-      companyName: doc.customer?.companyName || doc.company_name || '',
+      number: doc.number || doc.doc_number || doc.docNumber || 'DOC',
+      customerName: doc.customer?.name || doc.customer_name || doc.customerName || 'Customer',
+      companyName: doc.customer?.companyName || doc.company_name || doc.companyName || '',
       phone: doc.customer?.phone || doc.phone || '',
       email: doc.customer?.email || doc.email || '',
       address: doc.customer?.address?.line1 || doc.address || '',
       state: doc.customer?.address?.state || doc.state || 'Tamil Nadu',
       stateCode: doc.customer?.address?.stateCode || doc.state_code || '33',
       gstin: doc.customer?.gstin || doc.gstin || '',
-      lineItems: doc.lineItems || doc.line_items || [],
-      terms: doc.termsAndConditions || doc.terms_and_conditions || '',
+      lineItems: doc.lineItems || doc.line_items || doc.items || [],
+      terms: doc.termsAndConditions || doc.terms_and_conditions || doc.terms || '',
       preparedBy: doc.preparedBy || doc.prepared_by || ''
     };
+    setPreviewPdfDoc(docData);
+    setShowPdfPreviewModal(true);
+  };
 
-    if (dType === 'proforma') {
-      generateProformaPdf(docData, true);
-    } else if (dType === 'invoice') {
-      generateTaxInvoicePdf(docData, true);
-    } else {
-      generateQuotationPdf(docData, true);
-    }
-    const cleanNum = (doc.number || doc.doc_number || doc.docNumber || 'DOC').replace(/[\\/]/g, '-').replace(/[^a-zA-Z0-9-_]/g, '');
-    PingoPopupService.triggerDownloadSuccess({
-      docType: dType === 'invoice' ? 'Tax Invoice' : (dType === 'proforma' ? 'Proforma Invoice' : 'Quotation'),
-      reference: cleanNum,
-      customMessage: `${dType === 'invoice' ? 'Tax Invoice' : (dType === 'proforma' ? 'Proforma Invoice' : 'Quotation')} generated & downloaded successfully!`
-    });
+  const handleDownloadDoc = async (doc) => {
+    // Open preview dialog first so user reviews before downloading
+    handleOpenPdfPreview(doc);
   };
 
   const handleRefresh = () => {
@@ -995,13 +952,13 @@ const WAQuotesPage = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDownloadDoc(doc)}
+                            onClick={() => handleOpenPdfPreview(doc)}
                             className="btn btn-sm btn-outline flex items-center gap-1"
                             style={{ color: '#0f766e', borderColor: '#99f6e4', backgroundColor: '#f0fdfa' }}
-                            title="Download PDF"
+                            title="Preview PDF before downloading"
                           >
-                            <Download size={13} />
-                            PDF
+                            <Eye size={13} />
+                            Preview PDF
                           </button>
                         </div>
                       </td>
@@ -1259,15 +1216,15 @@ const WAQuotesPage = () => {
               </button>
               <button
                 type="button"
-                onClick={() => handleDownloadDoc(selectedDoc)}
+                onClick={() => handleOpenPdfPreview(selectedDoc)}
                 className="btn btn-primary flex items-center gap-2"
                 style={{
                   backgroundColor: '#0f766e',
                   borderColor: '#0f766e'
                 }}
               >
-                <Download size={16} />
-                {(selectedDoc.docType || selectedDoc.doc_type) === 'proforma' ? 'Download Proforma' : 'Download Quotation'}
+                <Eye size={16} />
+                Preview & Download
               </button>
               <button
                 type="button"
@@ -1471,6 +1428,18 @@ const WAQuotesPage = () => {
         initialData={modalInitialData}
         onSuccess={handleDocSuccess}
       />
+
+      {/* PDF Interactive Preview & Download Modal */}
+      {showPdfPreviewModal && previewPdfDoc && (
+        <DocumentPdfPreviewModal
+          isOpen={showPdfPreviewModal}
+          onClose={() => {
+            setShowPdfPreviewModal(false);
+            setPreviewPdfDoc(null);
+          }}
+          docData={previewPdfDoc}
+        />
+      )}
     </div>
   );
 };
