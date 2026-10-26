@@ -714,12 +714,13 @@ const CallLogsPage = () => {
                       pose="inspect"
                       height={120}
                       title="No Call Logs Found"
-                      description={searchTerm || filterType !== 'ALL' || dateFilter ? "No call records match your current telephony filters." : "No outbound or inbound calls have been logged yet."}
-                      secondaryActionLabel={searchTerm || filterType !== 'ALL' || dateFilter ? "Clear Filters" : null}
+                      description={(search || statusFilter || employeeFilter || providerFilter) ? "No call records match your current telephony filters." : "No outbound or inbound calls have been logged yet."}
+                      secondaryActionLabel={(search || statusFilter || employeeFilter || providerFilter) ? "Clear Filters" : null}
                       onSecondaryAction={() => {
-                        setSearchTerm('');
-                        setFilterType('ALL');
-                        setDateFilter('');
+                        setSearch('');
+                        setStatusFilter('');
+                        setEmployeeFilter('');
+                        setProviderFilter('');
                       }}
                     />
                   </td>
