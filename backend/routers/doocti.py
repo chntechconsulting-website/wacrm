@@ -63,6 +63,7 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
         "extension_mapping": ext_map,
         "api_url": data.get("api_url", ""),
         "account_id": data.get("account_id", ""),
+        "recording_base_url": data.get("recording_base_url", "https://bmxrx2cviyka.compat.objectstorage.ap-mumbai-1.oraclecloud.com/doocti/cti_chntechnolog_20261009"),
         "secret_token": data.get("secret_token")
     }
 
@@ -1168,6 +1169,7 @@ class DooctiConfigUpdatePayload(BaseModel):
     extension_mapping: Optional[Dict[str, Any]] = None
     api_url: Optional[str] = None
     account_id: Optional[str] = None
+    recording_base_url: Optional[str] = None
     secret_token: Optional[str] = None
     webhook_url: Optional[str] = None
 
@@ -1223,6 +1225,8 @@ def update_doocti_telephony_config(
         data["api_url"] = payload.api_url
     if payload.account_id is not None:
         data["account_id"] = payload.account_id
+    if payload.recording_base_url is not None:
+        data["recording_base_url"] = str(payload.recording_base_url).strip().rstrip('/')
     if payload.secret_token is not None:
         data["secret_token"] = payload.secret_token
     if payload.webhook_url is not None:

@@ -69,9 +69,9 @@ def resolve_recording_url(raw_url: Optional[str], db: Session) -> Optional[str]:
                 base = data.get("recording_base_url") or data.get("media_url")
         except Exception:
             pass
-        if not base:
-            # Default authoritative Doocti audio storage endpoint
-            base = "https://beta3-app.doocti.com/audio"
+        if not base or "beta3-app.doocti.com" in base:
+            # Authoritative Oracle Cloud Object Storage endpoint for Doocti recordings
+            base = "https://bmxrx2cviyka.compat.objectstorage.ap-mumbai-1.oraclecloud.com/doocti/cti_chntechnolog_20261009"
 
         base = base.strip().rstrip('/')
         match = re.search(r'https?://[^/]+(?:/audio)?(/.*)', url_str)
