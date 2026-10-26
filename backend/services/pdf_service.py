@@ -364,8 +364,8 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         "TDDesc",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=6.8,
-        leading=9,
+        fontSize=6.5,
+        leading=8.5,
         textColor=INK_500
     )
     style_td_num = ParagraphStyle(
@@ -523,10 +523,10 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     is_intra = (data["tax_mode"] == "intra")
     if is_intra:
         headers = ['#', 'Item / Description', 'HSN', 'Qty', 'Rate', 'Amount', 'Tax %', 'CGST', 'SGST', 'Total']
-        col_widths = [7 * mm, 70 * mm, 12 * mm, 9 * mm, 15 * mm, 15 * mm, 11 * mm, 13 * mm, 13 * mm, 17 * mm]
+        col_widths = [6 * mm, 80 * mm, 11 * mm, 8 * mm, 14 * mm, 14 * mm, 10 * mm, 12 * mm, 12 * mm, 15 * mm]
     else:
         headers = ['#', 'Item / Description', 'HSN', 'Qty', 'Rate', 'Amount', 'Tax %', 'IGST', 'Total']
-        col_widths = [7 * mm, 78 * mm, 13 * mm, 9 * mm, 16 * mm, 16 * mm, 12 * mm, 14 * mm, 17 * mm]
+        col_widths = [6 * mm, 88 * mm, 12 * mm, 8 * mm, 15 * mm, 15 * mm, 11 * mm, 13 * mm, 14 * mm]
 
     table_data = [[Paragraph(f"<b>{h}</b>", style_th) for h in headers]]
 

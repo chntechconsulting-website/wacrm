@@ -425,8 +425,8 @@ export function generateBillingPdf(docData, download = true) {
     ];
   });
 
-  const intraWidths = [14, '*', 40, 20, 48, 50, 28, 44, 44, 52];
-  const interWidths = [14, '*', 40, 20, 52, 56, 30, 52, 58];
+  const intraWidths = [12, '*', 38, 16, 44, 46, 26, 40, 40, 48];
+  const interWidths = [12, '*', 38, 16, 48, 52, 28, 48, 54];
 
   const itemsTable = {
     table: {
@@ -651,7 +651,7 @@ export function generateBillingPdf(docData, download = true) {
     td: { fontSize: 8, color: BRAND.ink700 },
     tdNum: { fontSize: 8, color: BRAND.ink900 },
     tdItem: { fontSize: 8.5, color: BRAND.ink900, bold: true, lineHeight: 1.15 },
-    tdDesc: { fontSize: 7, color: BRAND.ink500, lineHeight: 1.15, margin: [0, 1, 0, 0] },
+    tdDesc: { fontSize: 6.8, color: BRAND.ink500, lineHeight: 1.12, margin: [0, 1, 0, 0] },
     docTitle: { fontSize: 10.5, bold: true, color: BRAND.brand700, characterSpacing: 0.5 },
     docTitleNumber: { fontSize: 10.5, bold: true, color: BRAND.ink900 },
     sumLabel: { fontSize: 8.5, color: BRAND.ink700 },
