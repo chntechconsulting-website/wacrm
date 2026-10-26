@@ -342,9 +342,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [assigneeId, setAssigneeId] = useState('');
   const [noteText, setNoteText] = useState('');
 
-  const fetchLeads = async () => {
+  const fetchLeads = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const params = {};
       if (search) params.search = search;
       if (statusFilter) params.status_filter = statusFilter;
@@ -365,10 +365,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setTotal(res.data.total);
       window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
-      console.error(err);
-      setError('Failed to fetch leads list.');
+      if (!silent) {
+        console.error(err);
+        setError('Failed to fetch leads list.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -385,6 +387,16 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     fetchLeads();
     fetchEmployees();
     fetchSourceCounts();
+  }, [search, statusFilter, sourceFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+
+  // Real-time automatic lead synchronization: poll quietly every 5 seconds so new Meta leads appear automatically
+  useEffect(() => {
+    const syncInterval = setInterval(() => {
+      fetchLeads(true);
+      fetchSourceCounts();
+    }, 5000);
+
+    return () => clearInterval(syncInterval);
   }, [search, statusFilter, sourceFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
 
   const handleOpenCreateModal = () => {
