@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import IVRCallModal from '../../components/IVR/IVRCallModal';
@@ -262,6 +262,11 @@ const getStatusBadge = (status) => {
 
 const CallLogsPage = () => {
   const { user } = useAuth();
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const initialStatusFromUrl = queryParams.get('status') || queryParams.get('call_status') || '';
+  const initialEmployeeFromUrl = queryParams.get('employee_id') || '';
+
   const [callLogs, setCallLogs] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -269,8 +274,8 @@ const CallLogsPage = () => {
   
   // Filters & Pagination
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [employeeFilter, setEmployeeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState(initialStatusFromUrl);
+  const [employeeFilter, setEmployeeFilter] = useState(initialEmployeeFromUrl);
   const [providerFilter, setProviderFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -375,6 +380,15 @@ const CallLogsPage = () => {
   useEffect(() => {
     fetchEmployees();
   }, []);
+
+  // Sync filters if URL search params change
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const urlStatus = params.get('status') || params.get('call_status');
+    const urlEmp = params.get('employee_id');
+    if (urlStatus !== null) setStatusFilter(urlStatus);
+    if (urlEmp !== null) setEmployeeFilter(urlEmp);
+  }, [location.search]);
 
   useEffect(() => {
     fetchCallLogs(false);

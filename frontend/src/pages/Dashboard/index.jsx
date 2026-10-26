@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { 
@@ -27,6 +27,7 @@ import PingoEmptyState from '../../components/Common/PingoEmptyState';
 
 const Dashboard = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [recentLeads, setRecentLeads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -247,7 +248,15 @@ const Dashboard = () => {
       {/* 2. TOP METRIC CARDS GRID (6 KPI CARDS) */}
       <div className="dashboard-kpi-grid">
         {/* Total Leads */}
-        <div className="stat-card" style={{ padding: '18px 20px', borderRadius: '16px' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => navigate(isEmployeeRole ? '/leads/my' : '/leads')}
+          style={{ padding: '18px 20px', borderRadius: '16px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(isEmployeeRole ? '/leads/my' : '/leads'); } }}
+          title={isEmployeeRole ? 'View all assigned leads' : 'View all leads in CRM'}
+        >
           <div style={{
             width: '46px', height: '46px', borderRadius: '14px',
             backgroundColor: 'rgba(59, 130, 246, 0.12)', color: '#2563eb',
@@ -266,7 +275,15 @@ const Dashboard = () => {
         </div>
 
         {/* New Leads */}
-        <div className="stat-card" style={{ padding: '18px 20px', borderRadius: '16px' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => navigate(isEmployeeRole ? '/leads/my?status=NEW' : '/leads?status=NEW')}
+          style={{ padding: '18px 20px', borderRadius: '16px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(isEmployeeRole ? '/leads/my?status=NEW' : '/leads?status=NEW'); } }}
+          title="View new leads"
+        >
           <div style={{
             width: '46px', height: '46px', borderRadius: '14px',
             backgroundColor: 'rgba(16, 185, 129, 0.12)', color: '#10b981',
@@ -285,7 +302,15 @@ const Dashboard = () => {
         </div>
 
         {/* Connected Calls */}
-        <div className="stat-card" style={{ padding: '18px 20px', borderRadius: '16px' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => navigate('/communication/calls?status=Completed')}
+          style={{ padding: '18px 20px', borderRadius: '16px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/communication/calls?status=Completed'); } }}
+          title="View connected call logs"
+        >
           <div style={{
             width: '46px', height: '46px', borderRadius: '14px',
             backgroundColor: 'rgba(139, 92, 246, 0.12)', color: '#8b5cf6',
@@ -304,7 +329,15 @@ const Dashboard = () => {
         </div>
 
         {/* Follow-ups */}
-        <div className="stat-card" style={{ padding: '18px 20px', borderRadius: '16px' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => navigate('/communication/followups')}
+          style={{ padding: '18px 20px', borderRadius: '16px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/communication/followups'); } }}
+          title="View follow-ups list"
+        >
           <div style={{
             width: '46px', height: '46px', borderRadius: '14px',
             backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b',
@@ -323,7 +356,15 @@ const Dashboard = () => {
         </div>
 
         {/* Converted Leads */}
-        <div className="stat-card" style={{ padding: '18px 20px', borderRadius: '16px' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => navigate(isEmployeeRole ? '/leads/my?status=WON' : '/leads?status=WON')}
+          style={{ padding: '18px 20px', borderRadius: '16px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(isEmployeeRole ? '/leads/my?status=WON' : '/leads?status=WON'); } }}
+          title="View converted leads"
+        >
           <div style={{
             width: '46px', height: '46px', borderRadius: '14px',
             backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#059669',
@@ -340,7 +381,15 @@ const Dashboard = () => {
         </div>
 
         {/* Lost Leads */}
-        <div className="stat-card" style={{ padding: '18px 20px', borderRadius: '16px' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => navigate(isEmployeeRole ? '/leads/my?status=LOST' : '/leads?status=LOST')}
+          style={{ padding: '18px 20px', borderRadius: '16px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(isEmployeeRole ? '/leads/my?status=LOST' : '/leads?status=LOST'); } }}
+          title="View lost leads"
+        >
           <div style={{
             width: '46px', height: '46px', borderRadius: '14px',
             backgroundColor: 'rgba(239, 68, 68, 0.12)', color: '#ef4444',
@@ -481,7 +530,11 @@ const Dashboard = () => {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
             {/* Donut Chart graphic */}
-            <div style={{ position: 'relative', width: '120px', height: '120px', flexShrink: 0 }}>
+            <div 
+              style={{ position: 'relative', width: '120px', height: '120px', flexShrink: 0, cursor: 'pointer' }}
+              title="Click to view all leads"
+              onClick={() => navigate(isEmployeeRole ? '/leads/my' : '/leads')}
+            >
               <svg viewBox="0 0 36 36" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
                 {/* Background Ring */}
                 <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f1f5f9" strokeWidth="4.5" />
@@ -493,6 +546,10 @@ const Dashboard = () => {
                     const dashVal = item.percentage;
                     const offsetVal = -accumulatedOffset;
                     accumulatedOffset += item.percentage;
+                    const querySource = item.name === 'Others' ? '' : item.name.replace(' Ads', '').replace(' Import', '').toUpperCase();
+                    const targetUrl = isEmployeeRole 
+                      ? (querySource ? `/leads/my?source=${querySource}` : '/leads/my') 
+                      : (querySource ? `/leads?source=${querySource}` : '/leads');
                     return (
                       <circle
                         key={item.name}
@@ -504,7 +561,14 @@ const Dashboard = () => {
                         strokeWidth="4.5"
                         strokeDasharray={`${dashVal} ${100 - dashVal}`}
                         strokeDashoffset={offsetVal}
-                      />
+                        style={{ cursor: 'pointer', transition: 'stroke-width 0.2s' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(targetUrl);
+                        }}
+                      >
+                        <title>{`${item.name}: ${item.count} leads (${item.percentage}%) - Click to filter`}</title>
+                      </circle>
                     );
                   });
                 })()}
@@ -513,7 +577,7 @@ const Dashboard = () => {
               <div style={{
                 position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                textAlign: 'center'
+                textAlign: 'center', pointerEvents: 'none'
               }}>
                 <span style={{ fontSize: '1.1rem', fontWeight: '800', color: '#0f172a', lineHeight: '1' }}>
                   {totalLeadsCount.toLocaleString()}
@@ -526,17 +590,34 @@ const Dashboard = () => {
 
             {/* Legend List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflow: 'hidden' }}>
-              {sourceBreakdown.map((item) => (
-                <div key={item.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: item.color, flexShrink: 0 }} />
-                    <span style={{ color: '#475569', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>
+              {sourceBreakdown.map((item) => {
+                const querySource = item.name === 'Others' ? '' : item.name.replace(' Ads', '').replace(' Import', '').toUpperCase();
+                const targetUrl = isEmployeeRole 
+                  ? (querySource ? `/leads/my?source=${querySource}` : '/leads/my') 
+                  : (querySource ? `/leads?source=${querySource}` : '/leads');
+                return (
+                  <div 
+                    key={item.name} 
+                    onClick={() => navigate(targetUrl)}
+                    style={{ 
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+                      fontSize: '0.78rem', cursor: 'pointer', padding: '3px 6px', borderRadius: '6px',
+                      transition: 'background-color 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f1f5f9'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    title={`Filter by ${item.name}`}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: item.color, flexShrink: 0 }} />
+                      <span style={{ color: '#475569', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</span>
+                    </div>
+                    <span style={{ color: '#0f172a', fontWeight: '700', whiteSpace: 'nowrap', marginLeft: '6px', flexShrink: 0 }}>
+                      {item.count}&nbsp;<span style={{ color: '#94a3b8', fontWeight: '500' }}>({item.percentage}%)</span>
+                    </span>
                   </div>
-                  <span style={{ color: '#0f172a', fontWeight: '700', whiteSpace: 'nowrap', marginLeft: '6px', flexShrink: 0 }}>
-                    {item.count}&nbsp;<span style={{ color: '#94a3b8', fontWeight: '500' }}>({item.percentage}%)</span>
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -564,46 +645,75 @@ const Dashboard = () => {
 
           {/* Lead Status Funnel Visualization */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '9px', width: '100%', flex: 1, justifyContent: 'center' }}>
-            {funnelStages.map((stage) => (
-              <div 
-                key={stage.label}
-                style={{
-                  width: '100%',
-                  backgroundColor: stage.color,
-                  borderRadius: '10px',
-                  padding: '8px 14px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '5px',
-                  color: '#ffffff',
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
-                  boxSizing: 'border-box',
-                  transition: 'all 0.3s ease'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                    <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ffffff', flexShrink: 0 }} />
-                    <span style={{ fontSize: '0.78rem', fontWeight: '700', whiteSpace: 'nowrap' }}>{stage.label}</span>
+            {funnelStages.map((stage) => {
+              const stageStatusMap = {
+                'New Leads': 'NEW',
+                'Assigned Leads': '',
+                'Contacted': 'CONTACTED',
+                'Interested': 'INTERESTED',
+                'Proposal Sent': 'PROPOSAL SENT',
+                'Follow-up': 'FOLLOW_UP',
+                'Converted': 'WON'
+              };
+              const mappedStatus = stageStatusMap[stage.label] || '';
+              const params = new URLSearchParams();
+              if (mappedStatus) params.append('status', mappedStatus);
+              if (funnelFilter === 'Meta Leads') params.append('source', 'META');
+              const qs = params.toString();
+              const targetUrl = `${isEmployeeRole ? '/leads/my' : '/leads'}${qs ? `?${qs}` : ''}`;
+
+              return (
+                <div 
+                  key={stage.label}
+                  onClick={() => navigate(targetUrl)}
+                  style={{
+                    width: '100%',
+                    backgroundColor: stage.color,
+                    borderRadius: '10px',
+                    padding: '8px 14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '5px',
+                    color: '#ffffff',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
+                    boxSizing: 'border-box',
+                    transition: 'all 0.2s ease',
+                    cursor: 'pointer'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = '0 4px 10px rgba(0,0,0,0.12)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.06)';
+                  }}
+                  title={`Filter by ${stage.label} (${stage.count} leads)`}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                      <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ffffff', flexShrink: 0 }} />
+                      <span style={{ fontSize: '0.78rem', fontWeight: '700', whiteSpace: 'nowrap' }}>{stage.label}</span>
+                    </div>
+                    <span style={{ fontSize: '0.78rem', fontWeight: '800', whiteSpace: 'nowrap', marginLeft: '10px', flexShrink: 0 }}>
+                      {stage.count.toLocaleString()}&nbsp;<span style={{ opacity: 0.9, fontWeight: '500' }}>({stage.percentage}%)</span>
+                    </span>
                   </div>
-                  <span style={{ fontSize: '0.78rem', fontWeight: '800', whiteSpace: 'nowrap', marginLeft: '10px', flexShrink: 0 }}>
-                    {stage.count.toLocaleString()}&nbsp;<span style={{ opacity: 0.9, fontWeight: '500' }}>({stage.percentage}%)</span>
-                  </span>
+                  {/* Visual Progress Bar inside the pill */}
+                  <div style={{ width: '100%', height: '3.5px', backgroundColor: 'rgba(255, 255, 255, 0.28)', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div 
+                      style={{ 
+                        width: `${Math.min(100, Math.max(0, stage.percentage))}%`, 
+                        height: '100%', 
+                        backgroundColor: '#ffffff', 
+                        borderRadius: '2px',
+                        transition: 'width 0.4s ease'
+                      }} 
+                    />
+                  </div>
                 </div>
-                {/* Visual Progress Bar inside the pill */}
-                <div style={{ width: '100%', height: '3.5px', backgroundColor: 'rgba(255, 255, 255, 0.28)', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div 
-                    style={{ 
-                      width: `${Math.min(100, Math.max(0, stage.percentage))}%`, 
-                      height: '100%', 
-                      backgroundColor: '#ffffff', 
-                      borderRadius: '2px',
-                      transition: 'width 0.4s ease'
-                    }} 
-                  />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -644,10 +754,17 @@ const Dashboard = () => {
                     const srcStyle = getSourceBadgeColor(ld.source);
                     const stStyle = getStatusBadgeColor(ld.status);
                     return (
-                      <tr key={ld.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <tr 
+                        key={ld.id} 
+                        style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background-color 0.15s ease' }}
+                        onClick={() => navigate(`/leads?openLeadId=${ld.id}`)}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        title={`Click to view details for ${ld.name || 'Lead'}`}
+                      >
                         <td style={{ padding: '10px' }}>{idx + 1}</td>
                         <td style={{ padding: '10px' }}>
-                          <strong>{ld.name}</strong>
+                          <strong style={{ color: '#1e40af' }}>{ld.name}</strong>
                         </td>
                         <td style={{ padding: '10px' }}>{ld.phone}</td>
                         <td style={{ padding: '10px' }}>
@@ -701,45 +818,63 @@ const Dashboard = () => {
                 description="No upcoming follow-up reminders right now."
               />
             ) : (
-              followupReminders.map((item) => (
-                <div key={item.id} style={{
-                  background: '#f8fafc',
-                  padding: '12px 16px',
-                  borderRadius: '12px',
-                  border: '1px solid #e2e8f0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{
-                      width: '36px', height: '36px', borderRadius: '10px',
-                      backgroundColor: item.type === 'whatsapp' ? 'rgba(37, 211, 102, 0.12)' : 'rgba(37, 99, 235, 0.12)',
-                      color: item.type === 'whatsapp' ? '#25d366' : '#2563eb',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center'
-                    }}>
-                      {item.type === 'whatsapp' ? <MessageCircle size={18} /> : <PhoneCall size={18} />}
+              followupReminders.map((item) => {
+                const targetUrl = item.lead_id ? `/leads?openLeadId=${item.lead_id}` : '/communication/followups';
+                return (
+                  <div 
+                    key={item.id} 
+                    onClick={() => navigate(targetUrl)}
+                    style={{
+                      background: '#f8fafc',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      border: '1px solid #e2e8f0',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f1f5f9';
+                      e.currentTarget.style.borderColor = '#cbd5e1';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f8fafc';
+                      e.currentTarget.style.borderColor = '#e2e8f0';
+                    }}
+                    title={item.lead_id ? `View lead ${item.lead_name || ''}` : 'View follow-up'}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{
+                        width: '36px', height: '36px', borderRadius: '10px',
+                        backgroundColor: item.type === 'whatsapp' ? 'rgba(37, 211, 102, 0.12)' : 'rgba(37, 99, 235, 0.12)',
+                        color: item.type === 'whatsapp' ? '#25d366' : '#2563eb',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}>
+                        {item.type === 'whatsapp' ? <MessageCircle size={18} /> : <PhoneCall size={18} />}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.88rem', fontWeight: '700', color: '#0f172a' }}>{item.lead_name || item.name}</div>
+                        <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{item.notes || item.note || 'Follow-up call'}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: '0.88rem', fontWeight: '700', color: '#0f172a' }}>{item.lead_name || item.name}</div>
-                      <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{item.notes || item.note || 'Follow-up call'}</div>
-                    </div>
-                  </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '500' }}>
-                      {item.followup_date ? `${formatDateDDMMYYYY(item.followup_date)} ${formatTime12Hour(item.followup_time)}` : (item.time || '-')}
-                    </span>
-                    <span style={{
-                      padding: '3px 10px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: '700',
-                      backgroundColor: (item.priority || '').toUpperCase() === 'HIGH' ? '#ffe4e6' : (item.priority || '').toUpperCase() === 'MEDIUM' ? '#fef3c7' : '#e0f2fe',
-                      color: (item.priority || '').toUpperCase() === 'HIGH' ? '#e11d48' : (item.priority || '').toUpperCase() === 'MEDIUM' ? '#d97706' : '#0284c7'
-                    }}>
-                      {item.priority || 'Medium'}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '500' }}>
+                        {item.followup_date ? `${formatDateDDMMYYYY(item.followup_date)} ${formatTime12Hour(item.followup_time)}` : (item.time || '-')}
+                      </span>
+                      <span style={{
+                        padding: '3px 10px', borderRadius: '10px', fontSize: '0.72rem', fontWeight: '700',
+                        backgroundColor: (item.priority || '').toUpperCase() === 'HIGH' ? '#ffe4e6' : (item.priority || '').toUpperCase() === 'MEDIUM' ? '#fef3c7' : '#e0f2fe',
+                        color: (item.priority || '').toUpperCase() === 'HIGH' ? '#e11d48' : (item.priority || '').toUpperCase() === 'MEDIUM' ? '#d97706' : '#0284c7'
+                      }}>
+                        {item.priority || 'Medium'}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -785,14 +920,21 @@ const Dashboard = () => {
                     </tr>
                   ) : (
                     teamMembers.map((tm, idx) => (
-                      <tr key={tm.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <tr 
+                        key={tm.id} 
+                        style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background-color 0.15s ease' }}
+                        onClick={() => navigate(`/leads?assigned_to=${tm.id}`)}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        title={`Filter leads assigned to ${tm.name}`}
+                      >
                         <td style={{ padding: '8px' }}>{idx + 1}</td>
                         <td style={{ padding: '8px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: '#3b82f6', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.72rem', fontWeight: '700' }}>
                               {tm.avatar}
                             </div>
-                            <strong>{tm.name}</strong>
+                            <strong style={{ color: '#1e40af' }}>{tm.name}</strong>
                           </div>
                         </td>
                         <td style={{ padding: '8px' }}>{tm.leads}</td>

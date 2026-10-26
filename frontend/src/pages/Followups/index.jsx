@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { 
@@ -37,8 +38,10 @@ const Followups = () => {
   const [loading, setLoading] = useState(true);
 
   // Filters
-  const [statusFilter, setStatusFilter] = useState('');
-  const [priorityFilter, setPriorityFilter] = useState('');
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const [statusFilter, setStatusFilter] = useState(queryParams.get('status') || queryParams.get('status_filter') || '');
+  const [priorityFilter, setPriorityFilter] = useState(queryParams.get('priority') || queryParams.get('priority_filter') || '');
   const [search, setSearch] = useState('');
 
   // Alerts
@@ -92,6 +95,15 @@ const Followups = () => {
       console.error(err);
     }
   };
+
+  // Sync filters if URL query params change
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const urlStatus = params.get('status') || params.get('status_filter');
+    const urlPriority = params.get('priority') || params.get('priority_filter');
+    if (urlStatus !== null) setStatusFilter(urlStatus);
+    if (urlPriority !== null) setPriorityFilter(urlPriority);
+  }, [location.search]);
 
   useEffect(() => {
     fetchFollowups();

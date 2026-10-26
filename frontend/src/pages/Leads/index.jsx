@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import PingoPopupService from '../../services/pingoPopupService';
@@ -88,10 +88,17 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
 
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const initialStatusFromUrl = searchParams.get('status') || searchParams.get('status_filter') || '';
+  const initialSourceFromUrl = searchParams.get('source') || searchParams.get('source_filter') || defaultSource || '';
+  const initialAssignedToFromUrl = searchParams.get('assigned_to') || searchParams.get('assigned_to_filter') || '';
+
   // Filters & Search
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState(defaultSource);
+  const [statusFilter, setStatusFilter] = useState(initialStatusFromUrl);
+  const [sourceFilter, setSourceFilter] = useState(initialSourceFromUrl);
+  const [assignedToFilter, setAssignedToFilter] = useState(initialAssignedToFromUrl);
   const [sortOrder, setSortOrder] = useState('desc'); // 'desc' = newest received first, 'asc' = oldest received first
   const [receivedDateFilter, setReceivedDateFilter] = useState(''); // 'YYYY-MM-DD'
 
@@ -129,12 +136,18 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
-  // Sync state if defaultSource prop changes
+  // Sync state if defaultSource prop or URL query params change
   useEffect(() => {
-    if (defaultSource) {
-      setSourceFilter(defaultSource);
-    }
-  }, [defaultSource]);
+    const params = new URLSearchParams(location.search);
+    const urlStatus = params.get('status') || params.get('status_filter');
+    const urlSource = params.get('source') || params.get('source_filter');
+    const urlAssigned = params.get('assigned_to') || params.get('assigned_to_filter');
+
+    if (urlStatus !== null) setStatusFilter(urlStatus);
+    if (urlSource !== null) setSourceFilter(urlSource);
+    else if (defaultSource) setSourceFilter(defaultSource);
+    if (urlAssigned !== null) setAssignedToFilter(urlAssigned);
+  }, [location.search, defaultSource]);
 
   // Alerts
   const [error, setError] = useState('');
@@ -358,6 +371,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
       if (sortOrder) params.sort_order = sortOrder;
       if (receivedDateFilter) params.date_filter = receivedDateFilter;
+      if (assignedToFilter) params.assigned_to_filter = assignedToFilter;
 
       const endpoint = defaultFilter === 'my-leads' ? '/leads/my' : '/leads/';
       const res = await API.get(endpoint, { params });
@@ -387,7 +401,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     fetchLeads();
     fetchEmployees();
     fetchSourceCounts();
-  }, [search, statusFilter, sourceFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+  }, [search, statusFilter, sourceFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
 
   // Real-time automatic lead synchronization: poll quietly every 5 seconds so new Meta leads appear automatically
   useEffect(() => {
@@ -397,7 +411,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }, 5000);
 
     return () => clearInterval(syncInterval);
-  }, [search, statusFilter, sourceFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+  }, [search, statusFilter, sourceFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
 
   const handleOpenCreateModal = () => {
     setFormData({
@@ -532,7 +546,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
   // Automatically open lead details drawer from URL search parameter (?openLeadId=123) or custom window event
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
+    const searchParams = new URLSearchParams(location.search);
     const targetLeadId = searchParams.get('openLeadId');
     if (targetLeadId) {
       handleOpenDetailDrawer({ id: parseInt(targetLeadId, 10) });
@@ -547,7 +561,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     return () => {
       window.removeEventListener('openLeadDrawer', handleCustomOpenDrawer);
     };
-  }, []);
+  }, [location.search]);
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
