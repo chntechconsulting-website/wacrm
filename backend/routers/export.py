@@ -501,3 +501,78 @@ def export_all_call_logs(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+# -----------------------------------------------------------------------------
+# 6. Admin Purge Operation (All Leads & Call Logs)
+# -----------------------------------------------------------------------------
+@router.post("/purge-leads-calls")
+def purge_all_leads_and_calls(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["ADMIN"]))
+):
+    """
+    Dedicated Admin-only endpoint to clear all leads and all call logs,
+    preserving customers, quotations, users, permissions, and settings.
+    """
+    from sqlalchemy import text
+    from models.lead import Lead, LeadAssignment, LeadStatusHistory, LeadEnquiry
+    from models.call_log import CallLog
+    from models.activity import LeadActivity
+    from models.followup import Followup
+    from models.customer import Customer
+    from models.quotation import Quotation
+
+    try:
+        # 1. Detach foreign keys safely
+        db.execute(text("UPDATE customers SET converted_from_lead = NULL WHERE converted_from_lead IS NOT NULL"))
+        db.execute(text("UPDATE quotations SET lead_id = NULL WHERE lead_id IS NOT NULL"))
+        db.execute(text("UPDATE messages SET lead_id = NULL WHERE lead_id IS NOT NULL"))
+        db.execute(text("UPDATE conversations SET lead_id = NULL WHERE lead_id IS NOT NULL"))
+        db.flush()
+
+        # 2. Delete child tables
+        del_calls = db.query(CallLog).delete(synchronize_session=False)
+        del_acts = db.query(LeadActivity).delete(synchronize_session=False)
+        del_asgns = db.query(LeadAssignment).delete(synchronize_session=False)
+        del_hist = db.query(LeadStatusHistory).delete(synchronize_session=False)
+        del_enqs = db.query(LeadEnquiry).delete(synchronize_session=False)
+        del_fups = db.query(Followup).delete(synchronize_session=False)
+        
+        # Safe raw SQL for optional workflow tables
+        db.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        try:
+            db.execute(text("DELETE FROM field_visits"))
+        except Exception:
+            pass
+        try:
+            db.execute(text("DELETE FROM finance_handoffs"))
+        except Exception:
+            pass
+        try:
+            db.execute(text("DELETE FROM support_handoffs"))
+        except Exception:
+            pass
+        try:
+            db.execute(text("DELETE FROM workflow_timeline_events"))
+        except Exception:
+            pass
+
+        # 3. Delete parent leads
+        del_leads = db.query(Lead).delete(synchronize_session=False)
+        db.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": "All leads and all call logs successfully purged.",
+            "deleted_counts": {
+                "leads": del_leads,
+                "call_logs": del_calls,
+                "activities": del_acts,
+                "followups": del_fups
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Purge failed: {str(e)}")
