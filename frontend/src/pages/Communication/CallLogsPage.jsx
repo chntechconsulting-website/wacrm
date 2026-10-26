@@ -32,72 +32,21 @@ const AudioRecordingPlayer = ({ src, logId }) => {
   const [audioDuration, setAudioDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isReady, setIsReady] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(true);
-  const [currentSrc, setCurrentSrc] = useState(src);
+  const [isFailed, setIsFailed] = useState(false);
 
   const audioRef = useRef(null);
-  const retryCountRef = useRef(0);
-  const checkTimerRef = useRef(null);
-  const isCancelledRef = useRef(false);
 
-  // Verification & Auto-Retry Loop for up to 60 seconds
+  // Reset audio state when src changes
   useEffect(() => {
-    isCancelledRef.current = false;
-    retryCountRef.current = 0;
+    setIsPlaying(false);
+    setCurrentTime(0);
     setIsReady(false);
-    setIsProcessing(true);
-    setCurrentSrc(src);
+    setIsFailed(false);
+    setAudioDuration(0);
 
-    const checkUrlAvailability = async () => {
-      if (isCancelledRef.current) return;
-
-      const cleanUrl = (src || '').split('?')[0];
-      if (!cleanUrl) {
-        setIsProcessing(false);
-        setIsReady(false);
-        return;
-      }
-
-      try {
-        // Fast HEAD request to Oracle Cloud object storage (CORS supported)
-        const cacheBustUrl = `${cleanUrl}?_chk=${Date.now()}`;
-        const res = await fetch(cacheBustUrl, { method: 'HEAD', cache: 'no-cache' });
-        if (isCancelledRef.current) return;
-
-        if (res.ok) {
-          // File is confirmed ready on cloud storage
-          setCurrentSrc(cacheBustUrl);
-          if (audioRef.current) {
-            audioRef.current.load();
-          }
-          return;
-        }
-      } catch (err) {
-        // HEAD 404 or network error while Asterisk is transcoding/uploading
-      }
-
-      // If not yet available, retry every 2 seconds up to 30 times (60 seconds)
-      retryCountRef.current += 1;
-      if (retryCountRef.current < 30) {
-        if (!isCancelledRef.current) {
-          checkTimerRef.current = setTimeout(checkUrlAvailability, 2000);
-        }
-      } else {
-        // Exceeded 60-second retry policy without confirmed audio
-        if (!isCancelledRef.current) {
-          setIsProcessing(false);
-          setIsReady(false);
-        }
-      }
-    };
-
-    // Kick off verification
-    checkUrlAvailability();
-
-    return () => {
-      isCancelledRef.current = true;
-      if (checkTimerRef.current) clearTimeout(checkTimerRef.current);
-    };
+    if (audioRef.current) {
+      audioRef.current.load();
+    }
   }, [src]);
 
   const formatAudioTime = (seconds) => {
@@ -113,7 +62,7 @@ const AudioRecordingPlayer = ({ src, logId }) => {
       if (dur && !isNaN(dur) && isFinite(dur) && dur > 0) {
         setAudioDuration(dur);
         setIsReady(true);
-        setIsProcessing(false);
+        setIsFailed(false);
       }
     }
   };
@@ -123,21 +72,16 @@ const AudioRecordingPlayer = ({ src, logId }) => {
       const dur = audioRef.current.duration;
       if (dur && !isNaN(dur) && isFinite(dur) && dur > 0) {
         setAudioDuration(dur);
-        setIsReady(true);
-        setIsProcessing(false);
       }
+      setIsReady(true);
+      setIsFailed(false);
     }
   };
 
   const handleError = () => {
-    // Keep processing state while retry loop is active; do NOT prematurely switch to unavailable
-    if (retryCountRef.current < 30) {
-      setIsProcessing(true);
-      setIsReady(false);
-    } else {
-      setIsProcessing(false);
-      setIsReady(false);
-    }
+    // When audio element cannot load the file (e.g., 404, invalid host, or not ready yet)
+    setIsReady(false);
+    setIsFailed(true);
   };
 
   const togglePlay = () => {
@@ -168,11 +112,15 @@ const AudioRecordingPlayer = ({ src, logId }) => {
     }
   };
 
+  if (!src || isFailed) {
+    return <span className="no-recording-text">No recording available</span>;
+  }
+
   return (
     <div className="audio-player-wrapper">
       <audio
         ref={audioRef}
-        src={currentSrc}
+        src={src}
         preload="metadata"
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
@@ -214,16 +162,14 @@ const AudioRecordingPlayer = ({ src, logId }) => {
             {formatAudioTime(currentTime)} / {formatAudioTime(audioDuration)}
           </span>
         </div>
-      ) : isProcessing ? (
+      ) : (
         <span 
           className="recording-status-badge processing" 
-          title="Audio recording is currently being processed by Doocti PBX (auto-updating...)"
+          title="Loading audio recording..."
         >
           <span className="recording-pulse-dot" />
-          Recording Processing
+          Loading Audio...
         </span>
-      ) : (
-        <span className="no-recording-text">No recording available</span>
       )}
     </div>
   );
