@@ -544,10 +544,12 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     for idx, item in enumerate(line_items, 1):
         desc = item.get("description", "Item")
         # Split multiline descriptions nicely, supporting linebreaks or delimiter patterns
-        raw_str = str(desc).strip()
+        raw_str = str(desc)
+        raw_str = re.sub(r'No\s*Of\s*[\r\n]+\s*Onboardings?', 'No Of Onboardings', raw_str, flags=re.I)
+        raw_str = re.sub(r'Unit\s*[\r\n]+\s*Price', 'Unit Price', raw_str, flags=re.I).strip()
         raw_lines = [l.strip() for l in raw_str.split("\n") if l.strip()]
         desc_parts = []
-        delimiter_regex = re.compile(r'(?=(?:WaPayroll|Duration\s*:?|No\s*Of\s*onboardings\s*:?|No\s*of\s*onboarding\s*:?|Onboardings?\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))', re.I)
+        delimiter_regex = re.compile(r'(?=(?:WaPayroll|Duration\s*:?|(?:No\s*Of\s+onboardings?|(?<!No\s*Of\s+)onboardings?)\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))', re.I)
         for line_seg in raw_lines:
             parts = [p.strip() for p in delimiter_regex.split(line_seg) if p.strip()]
             if len(parts) > 1:

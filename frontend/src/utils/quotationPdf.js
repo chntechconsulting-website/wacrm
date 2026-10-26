@@ -51,12 +51,19 @@ function formatDateDisplay(d) {
 export function splitDescriptionIntoLines(rawDescription) {
   if (!rawDescription) return ['—'];
   
-  const rawStr = String(rawDescription).trim();
+  // Normalize and mend any accidental linebreaks inside key labels
+  let rawStr = String(rawDescription)
+    .replace(/No\s*Of\s*[\r\n]+\s*Onboardings?/gi, 'No Of Onboardings')
+    .replace(/No\s*of\s*[\r\n]+\s*onboardings?/gi, 'No Of onboardings')
+    .replace(/Unit\s*[\r\n]+\s*Price/gi, 'Unit Price')
+    .trim();
+
   // Split on existing linebreaks first
   const rawLines = rawStr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   
   const finalLines = [];
-  const delimiterPattern = /(?=(?:WaPayroll|Duration\s*:?|No\s*Of\s*onboardings\s*:?|No\s*of\s*onboarding\s*:?|Onboardings?\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))/i;
+  // Notice we use negative lookbehind or non-overlapping pattern so "Onboardings" does not split "No Of onboardings"
+  const delimiterPattern = /(?=(?:WaPayroll|Duration\s*:?|(?:No\s*Of\s+onboardings?|(?<!No\s*Of\s+)onboardings?)\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))/i;
   
   for (const line of rawLines) {
     const normalized = line.replace(/\s+/g, ' ');
