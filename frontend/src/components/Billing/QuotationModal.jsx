@@ -31,7 +31,7 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generateTaxInvoicePdf } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
 import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
 const DEFAULT_TERMS_QUOTATION = 
@@ -117,6 +117,14 @@ export const ADD_ON_SERVICES = [
   }
 ];
 
+export const formatItemDescriptionForEditor = (itemOrDesc) => {
+  if (!itemOrDesc) return '';
+  const raw = typeof itemOrDesc === 'string' ? itemOrDesc : (itemOrDesc.description || itemOrDesc.name || '');
+  if (!raw) return '';
+  const lines = splitDescriptionIntoLines(raw);
+  return lines.join('\n');
+};
+
 export const PRESET_SERVICES = ADD_ON_SERVICES;
 
 export const FALLBACK_WAHRMS_BUNDLES = [
@@ -136,7 +144,7 @@ export const FALLBACK_WAHRMS_BUNDLES = [
       {
         item_code: 'HR_ATM_SUB',
         name: 'WAHRMS HR + Attendance Subscription',
-        description: 'WAHRMS HR + Attendance Subscription',
+        description: 'WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25',
         hsn: '998314',
         qty: 120,
         rate: 45,
@@ -171,7 +179,7 @@ export const FALLBACK_WAHRMS_BUNDLES = [
       {
         item_code: 'HR_ATM_PAYROLL_SUB',
         name: 'WAHRMS Complete Suite (HR + ATM + Payroll) Subscription',
-        description: 'WAHRMS Complete Suite (HR + ATM + Payroll) Subscription',
+        description: 'WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25',
         hsn: '998314',
         qty: 120,
         rate: 65,
@@ -206,7 +214,7 @@ export const FALLBACK_WAHRMS_BUNDLES = [
       {
         item_code: 'HR_PAYROLL_SUB',
         name: 'WAHRMS HR + Payroll Cloud Subscription',
-        description: 'WAHRMS HR + Payroll Cloud Subscription',
+        description: 'WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25',
         hsn: '998314',
         qty: 120,
         rate: 50,
@@ -532,7 +540,7 @@ export default function QuotationModal({
           id: item.id || Date.now() + idx,
           isBundleItem: item.isBundleItem !== undefined ? Boolean(item.isBundleItem) : Boolean(item.bundleId || (incomingBundle && idx < 2)),
           bundleId: item.bundleId || (item.isBundleItem ? incomingBundle : null),
-          description: item.name || (item.description ? item.description.split('\n')[0] : ''),
+          description: formatItemDescriptionForEditor(item.description || item.name || ''),
           hsn: item.hsn || item.hsnCode || (isBio ? '85437099' : '998314'),
           qty: Number(item.qty ?? item.quantity ?? 1),
           rate: Number(item.rate ?? item.unitPrice ?? item.price ?? 0),
@@ -550,7 +558,7 @@ export default function QuotationModal({
           id: Date.now() + idx,
           isBundleItem: true,
           bundleId: targetCode,
-          description: itm.name || (itm.description ? itm.description.split('\n')[0] : ''),
+          description: formatItemDescriptionForEditor(itm.description || itm.name || ''),
           hsn: itm.hsn || (isBio ? '85437099' : '998314'),
           qty: Number(itm.qty !== undefined ? itm.qty : 1),
           rate: Number(itm.rate !== undefined ? itm.rate : 0),
@@ -585,7 +593,7 @@ export default function QuotationModal({
         id: item.id || Date.now() + idx,
         isBundleItem: item.isBundleItem !== undefined ? Boolean(item.isBundleItem) : Boolean(item.bundleId),
         bundleId: item.bundleId || (item.isBundleItem ? incomingBundle : null),
-        description: item.name || (item.description ? item.description.split('\n')[0] : ''),
+        description: formatItemDescriptionForEditor(item.description || item.name || ''),
         hsn: item.hsn || item.hsnCode || '998314',
         qty: Number(item.qty ?? item.quantity ?? 1),
         rate: Number(item.rate ?? item.unitPrice ?? item.price ?? 0),
@@ -598,7 +606,7 @@ export default function QuotationModal({
       id: Date.now() + idx,
       isBundleItem: true,
       bundleId: defaultBundle.bundleCode,
-      description: itm.name || (itm.description ? itm.description.split('\n')[0] : ''),
+      description: formatItemDescriptionForEditor(itm.description || itm.name || ''),
       hsn: itm.hsn || '998314',
       qty: Number(itm.qty !== undefined ? itm.qty : 1),
       rate: Number(itm.rate !== undefined ? itm.rate : 0),
@@ -667,7 +675,7 @@ export default function QuotationModal({
       id: Date.now() + idx,
       isBundleItem: true,
       bundleId: bCode,
-      description: itm.name || (itm.description ? itm.description.split('\n')[0] : ''),
+      description: formatItemDescriptionForEditor(itm.description || itm.name || ''),
       hsn: itm.hsn || (isBio ? '85437099' : '998314'),
       qty: Number(itm.qty !== undefined ? itm.qty : 1),
       rate: Number(itm.rate !== undefined ? itm.rate : 0),
@@ -725,7 +733,7 @@ export default function QuotationModal({
       id: Date.now(),
       isBundleItem: false,
       bundleId: null,
-      description: preset.name || (preset.description ? preset.description.split('\n')[0] : ''),
+      description: formatItemDescriptionForEditor(preset.description || preset.name || ''),
       hsn: preset.hsn || '998314',
       qty: preset.qty !== undefined ? preset.qty : 1,
       rate: preset.rate !== undefined ? preset.rate : 0,
@@ -1482,18 +1490,20 @@ export default function QuotationModal({
                             </div>
                           )}
                           <textarea 
-                            rows={2}
+                            rows={4}
                             value={item.description} 
                             onChange={(e) => handleLineChange(idx, 'description', e.target.value)} 
-                            placeholder="Product or service name" 
+                            placeholder="Item / Description&#10;Duration: 12 Months&#10;No Of onboardings: 250&#10;Unit Price: 25" 
                             style={{
                               width: '100%',
-                              padding: '6px 8px',
+                              minHeight: '78px',
+                              padding: '8px 10px',
                               fontSize: '0.84rem',
                               borderRadius: '6px',
                               border: '1px solid #cbd5e1',
-                              lineHeight: '1.35',
-                              resize: 'vertical'
+                              lineHeight: '1.45',
+                              resize: 'vertical',
+                              whiteSpace: 'pre-wrap'
                             }}
                           />
                         </td>

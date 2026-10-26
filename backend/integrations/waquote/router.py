@@ -120,7 +120,7 @@ DEFAULT_WAHRMS_BUNDLES = [
             {
                 "item_code": "HR_ATM_SUB",
                 "name": "WAHRMS HR + Attendance Subscription",
-                "description": "WAHRMS HR + Attendance Subscription",
+                "description": "WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25",
                 "hsn": "998314",
                 "qty": 120,
                 "rate": 45.0,
@@ -157,7 +157,7 @@ DEFAULT_WAHRMS_BUNDLES = [
             {
                 "item_code": "HR_ATM_PAYROLL_SUB",
                 "name": "WAHRMS Complete Suite (HR + ATM + Payroll) Subscription",
-                "description": "WAHRMS Complete Suite (HR + ATM + Payroll) Subscription",
+                "description": "WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25",
                 "hsn": "998314",
                 "qty": 120,
                 "rate": 65.0,
@@ -194,7 +194,7 @@ DEFAULT_WAHRMS_BUNDLES = [
             {
                 "item_code": "HR_PAYROLL_SUB",
                 "name": "WAHRMS HR + Payroll Cloud Subscription",
-                "description": "WAHRMS HR + Payroll Cloud Subscription",
+                "description": "WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25",
                 "hsn": "998314",
                 "qty": 120,
                 "rate": 50.0,

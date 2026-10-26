@@ -25,7 +25,7 @@ import {
   Pencil
 } from 'lucide-react';
 import QuotationModal from '../../components/Billing/QuotationModal';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generateTaxInvoicePdf } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
@@ -1182,21 +1182,35 @@ const WAQuotesPage = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {(selectedDoc.lineItemsSummary || selectedDoc.items || selectedDoc.lineItems || []).map((item, idx) => (
-                    <tr key={idx}>
-                      <td>
-                        <div style={{ fontWeight: 600, whiteSpace: 'pre-line', lineHeight: '1.4' }}>
-                          {item.description || item.name || 'Custom Item'}
-                        </div>
-                        {item.notes && <div style={{ fontSize: '0.74rem', color: '#64748b' }}>{item.notes}</div>}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>{item.qty ?? item.quantity ?? 1}</td>
-                      <td style={{ textAlign: 'right' }}>{formatINR(item.rate ?? 0)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                        {formatINR(item.total ?? ((item.qty || 1) * (item.rate || 0)))}
-                      </td>
-                    </tr>
-                  ))}
+                  {(selectedDoc.lineItemsSummary || selectedDoc.items || selectedDoc.lineItems || []).map((item, idx) => {
+                    const descLines = splitDescriptionIntoLines(item.description || item.name || 'Custom Item');
+                    const mainTitle = descLines[0] || 'Custom Item';
+                    const subDetails = descLines.slice(1);
+                    return (
+                      <tr key={idx}>
+                        <td>
+                          <div style={{ fontWeight: 700, color: '#0f172a', lineHeight: '1.4' }}>
+                            {mainTitle}
+                          </div>
+                          {subDetails.length > 0 && (
+                            <div style={{ marginTop: '3px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              {subDetails.map((sub, sIdx) => (
+                                <div key={sIdx} style={{ fontSize: '0.80rem', color: '#475569', lineHeight: '1.3' }}>
+                                  {sub}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {item.notes && <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '4px' }}>{item.notes}</div>}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>{item.qty ?? item.quantity ?? 1}</td>
+                        <td style={{ textAlign: 'right' }}>{formatINR(item.rate ?? 0)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                          {formatINR(item.total ?? ((item.qty || 1) * (item.rate || 0)))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
 

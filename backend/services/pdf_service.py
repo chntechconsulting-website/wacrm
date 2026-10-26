@@ -543,8 +543,19 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
 
     for idx, item in enumerate(line_items, 1):
         desc = item.get("description", "Item")
-        # Split multiline descriptions nicely
-        desc_parts = [p.strip() for p in str(desc).split("\n") if p.strip()]
+        # Split multiline descriptions nicely, supporting linebreaks or delimiter patterns
+        raw_str = str(desc).strip()
+        raw_lines = [l.strip() for l in raw_str.split("\n") if l.strip()]
+        desc_parts = []
+        delimiter_regex = re.compile(r'(?=(?:WaPayroll|Duration\s*:?|No\s*Of\s*onboardings\s*:?|No\s*of\s*onboarding\s*:?|Onboardings?\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))', re.I)
+        for line_seg in raw_lines:
+            parts = [p.strip() for p in delimiter_regex.split(line_seg) if p.strip()]
+            if len(parts) > 1:
+                desc_parts.extend(parts)
+            else:
+                desc_parts.append(line_seg)
+        if not desc_parts:
+            desc_parts = ["Item"]
         desc_flowable = [Paragraph(f"<b>{desc_parts[0]}</b>", style_td)]
         for sub in desc_parts[1:]:
             desc_flowable.append(Paragraph(sub, style_td_desc))

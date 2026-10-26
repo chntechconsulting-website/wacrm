@@ -56,7 +56,7 @@ export function splitDescriptionIntoLines(rawDescription) {
   const rawLines = rawStr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   
   const finalLines = [];
-  const delimiterPattern = /(?=(?:WaPayroll|Duration\s*:?|No\s*Of\s*onboardings\s*:?|Unit\s*Price\s*:?|SIM\s*Card|FACE\+FINGER))/i;
+  const delimiterPattern = /(?=(?:WaPayroll|Duration\s*:?|No\s*Of\s*onboardings\s*:?|No\s*of\s*onboarding\s*:?|Onboardings?\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))/i;
   
   for (const line of rawLines) {
     const normalized = line.replace(/\s+/g, ' ');
