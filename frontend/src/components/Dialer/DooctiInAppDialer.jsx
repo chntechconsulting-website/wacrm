@@ -464,8 +464,16 @@ const DooctiInAppDialer = () => {
           if (isLatestSameTarget) {
             const st = (latest.call_status || '').toUpperCase();
             if (st === 'RINGING' && activeCall.callStatus === 'CONNECTING') {
+              if (connectingTimeoutRef.current) {
+                clearTimeout(connectingTimeoutRef.current);
+                connectingTimeoutRef.current = null;
+              }
               setActiveCall(prev => prev ? ({ ...prev, callStatus: 'RINGING' }) : null);
             } else if (['ANSWERED', 'CONNECTED'].includes(st) && activeCall.callStatus !== 'CONNECTED') {
+              if (connectingTimeoutRef.current) {
+                clearTimeout(connectingTimeoutRef.current);
+                connectingTimeoutRef.current = null;
+              }
               const ansTime = latest.answered_at ? new Date(latest.answered_at).getTime() : Date.now();
               if (session) {
                 session.answeredAt = ansTime;
@@ -477,6 +485,10 @@ const DooctiInAppDialer = () => {
                 answeredAt: ansTime
               }) : null);
             } else if (['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED', 'MISSED'].includes(st)) {
+              if (connectingTimeoutRef.current) {
+                clearTimeout(connectingTimeoutRef.current);
+                connectingTimeoutRef.current = null;
+              }
               // Server detected terminal state
               const diffMs = latest.ended_at ? (Date.now() - new Date(latest.ended_at).getTime()) : 0;
               if (diffMs < 30000) {
@@ -587,14 +599,18 @@ const DooctiInAppDialer = () => {
     setCallDuration(0);
     toggleMinimize(false);
 
-    // Timeout safety: if Doocti does not initiate ringing or connection within 15 seconds,
-    // clear the stuck CONNECTING state and notify the agent with clear instructions
+    // Timeout safety: only if Doocti never sends any telephony signal and call remains strictly in CONNECTING
+    // Clear connecting timeout on any new dial attempt
     if (connectingTimeoutRef.current) {
       clearTimeout(connectingTimeoutRef.current);
     }
     connectingTimeoutRef.current = setTimeout(() => {
       setActiveCall(prev => {
-        if (prev && prev.callStatus === 'CONNECTING') {
+        // ONLY warn if the call is still strictly in CONNECTING state and no answer or progress occurred
+        const session = activeSessionRef.current;
+        const wasAnswered = Boolean(session?.answeredAt || prev?.answeredAt || session?.status === 'ANSWERED');
+        if (prev && prev.callStatus === 'CONNECTING' && !wasAnswered) {
+          console.warn('[Doocti] 30s timeout elapsed with no telephony progress signal for call:', session?.callId);
           setDialerNotice({
             type: 'warning',
             title: 'Call Not Placed',
@@ -604,7 +620,7 @@ const DooctiInAppDialer = () => {
         }
         return prev;
       });
-    }, 15000);
+    }, 30000);
 
     // Dispatch postMessage using wildcard target origin to ensure iframe receipt
     if (iframeRef.current && iframeRef.current.contentWindow) {
@@ -722,21 +738,36 @@ const DooctiInAppDialer = () => {
     const cleanPhone = String(targetPhone || '').replace(/[^0-9]/g, '');
     const userExt = String(config.userNumber || '').replace(/[^0-9]/g, '');
 
-    const wasAnswered = Boolean(currentCall?.answeredAt || session?.answeredAt || currentCall?.callStatus === 'CONNECTED' || currentCall?.callStatus === 'ANSWERED');
-    const answerTime = currentCall?.answeredAt || session?.answeredAt;
+    const wasAnswered = Boolean(
+      currentCall?.answeredAt || 
+      session?.answeredAt || 
+      currentCall?.callStatus === 'CONNECTED' || 
+      currentCall?.callStatus === 'ANSWERED' ||
+      session?.status === 'ANSWERED' ||
+      callDuration > 0
+    );
+    const answerTime = currentCall?.answeredAt || session?.answeredAt || (callDuration > 0 ? (Date.now() - callDuration * 1000) : null);
     const endTime = Date.now();
 
-    // Actual talk duration is strictly calculated using ended_at - answered_at:
+    // Actual talk duration is strictly calculated using ended_at - answered_at or running timer:
     let talkDuration = 0;
-    if (wasAnswered && answerTime) {
-      talkDuration = Math.max(1, Math.round((endTime - answerTime) / 1000));
+    if (wasAnswered) {
+      if (answerTime) {
+        talkDuration = Math.max(1, Math.round((endTime - answerTime) / 1000));
+      } else if (callDuration > 0) {
+        talkDuration = callDuration;
+      }
     }
 
-    // Determine final status accurately (an unanswered incoming call is MISSED, never FAILED)
+    // Determine final status accurately:
+    // If the call was answered or had talk duration, it is ALWAYS COMPLETED and NEVER NO_ANSWER!
     let finalStatus = 'COMPLETED';
     const isDirectionInbound = session?.direction === 'INBOUND' || wasRinging;
-    if (outcomeOverride) {
+    if (wasAnswered || talkDuration > 0) {
+      finalStatus = 'COMPLETED';
+    } else if (outcomeOverride && ['BUSY', 'FAILED', 'MISSED', 'NO_ANSWER'].includes(outcomeOverride)) {
       finalStatus = outcomeOverride;
+      talkDuration = 0;
     } else if (wasRinging && !wasAnswered) {
       finalStatus = 'MISSED';
       talkDuration = 0;
@@ -887,11 +918,17 @@ const DooctiInAppDialer = () => {
         try { msg = JSON.parse(msg); } catch (e) {}
       }
 
-      const eventType = String(msg.type || msg.action || msg.event || msg.status || msg.calltype || msg.event_type || '').toLowerCase();
-      const callState = String(msg.state || msg.call_state || msg.disposition || '').toLowerCase();
+      const eventType = String(
+        msg.type || msg.action || msg.event || msg.status || msg.calltype || msg.event_type || 
+        msg.event_name || msg.method || (msg.data && (msg.data.type || msg.data.action || msg.data.event || msg.data.status)) || ''
+      ).toLowerCase();
+      const callState = String(
+        msg.state || msg.call_state || msg.disposition || msg.callstatus || msg.callStatus || 
+        (msg.data && (msg.data.state || msg.data.call_state || msg.data.disposition)) || ''
+      ).toLowerCase();
 
       // Clear connecting timeout on any received telephony progress event
-      if (['ringing', 'ring', 'inbound', 'incoming', 'answered', 'connected', 'in-progress', 'inprogress', 'busy', 'failed', 'hangup', 'disconnected', 'ended'].some(k => eventType.includes(k) || callState.includes(k))) {
+      if (['ringing', 'ring', 'inbound', 'incoming', 'answered', 'connected', 'in-progress', 'inprogress', 'talking', 'busy', 'failed', 'hangup', 'disconnected', 'ended'].some(k => eventType.includes(k) || callState.includes(k))) {
         if (connectingTimeoutRef.current) {
           clearTimeout(connectingTimeoutRef.current);
           connectingTimeoutRef.current = null;
@@ -1054,7 +1091,11 @@ const DooctiInAppDialer = () => {
       }
 
       // Call Answered / Connected
-      if (['answered', 'connected', 'in-progress', 'inprogress', 'call_connected', 'call_answered', 'media_connected'].some(k => eventType.includes(k) || callState.includes(k))) {
+      if (['answered', 'connected', 'in-progress', 'inprogress', 'talking', 'call_connected', 'call_answered', 'media_connected'].some(k => eventType.includes(k) || callState.includes(k))) {
+        if (connectingTimeoutRef.current) {
+          clearTimeout(connectingTimeoutRef.current);
+          connectingTimeoutRef.current = null;
+        }
         setIsRinging(false);
         const ansTime = Date.now();
         if (activeSessionRef.current) {

@@ -768,6 +768,12 @@ async def push_doocti_call_log(
         ""
     ).strip() or None
 
+    # 8b. Answered / Connected verification:
+    # A call is definitively answered if it has positive duration, a valid recording, or answered_at
+    has_positive_duration = dur_sec > 0 or bool(existing_log and existing_log.duration_seconds and existing_log.duration_seconds > 0)
+    has_recording = bool(rec_url or (existing_log and existing_log.recording_url))
+    was_previously_answered = bool(existing_log and (existing_log.answered_at or (existing_log.call_status or '').upper() in ["ANSWERED", "CONNECTED", "COMPLETED"]))
+
     # 9. Call Status normalization
     has_explicit_status = any(raw_data.get(k) for k in ["status", "call_status", "disposition", "call_state"])
     if not has_explicit_status and existing_log:
@@ -794,25 +800,39 @@ async def push_doocti_call_log(
         answered_at = None
         ended_at = None
     elif any(k in raw_upper for k in ["NO ANSWER", "NO_ANSWER", "NOT ANSWER", "NOT ANSWERED", "NOANSWER"]):
-        status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
-        dur_sec = 0
-        answered_at = None
-    elif any(k in raw_upper for k in ["MISSED", "UNANSWERED", "DECLINED", "REJECTED"]):
-        status_str = "MISSED"
-        dur_sec = 0
-        answered_at = None
-    elif any(k in raw_upper for k in ["BUSY", "ENGAGED"]):
-        status_str = "BUSY"
-        dur_sec = 0
-        answered_at = None
-    elif any(k in raw_upper for k in ["FAIL", "ERROR"]):
-        # An incoming call that was not answered or got disconnected is a MISSED call, not FAILED!
-        if call_dir == "INBOUND" and dur_sec == 0 and not answered_at:
-            status_str = "MISSED"
+        # Protection: If the call has audio recording, positive talk duration, or was confirmed answered,
+        # it CANNOT be classified as NO_ANSWER!
+        if has_positive_duration or has_recording or was_previously_answered:
+            status_str = "COMPLETED"
         else:
-            status_str = "FAILED"
-        dur_sec = 0
-        answered_at = None
+            status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
+            dur_sec = 0
+            answered_at = None
+    elif any(k in raw_upper for k in ["MISSED", "UNANSWERED", "DECLINED", "REJECTED"]):
+        if has_positive_duration or has_recording or was_previously_answered:
+            status_str = "COMPLETED"
+        else:
+            status_str = "MISSED"
+            dur_sec = 0
+            answered_at = None
+    elif any(k in raw_upper for k in ["BUSY", "ENGAGED"]):
+        if has_positive_duration or has_recording or was_previously_answered:
+            status_str = "COMPLETED"
+        else:
+            status_str = "BUSY"
+            dur_sec = 0
+            answered_at = None
+    elif any(k in raw_upper for k in ["FAIL", "ERROR"]):
+        if has_positive_duration or has_recording or was_previously_answered:
+            status_str = "COMPLETED"
+        else:
+            # An incoming call that was not answered or got disconnected is a MISSED call, not FAILED!
+            if call_dir == "INBOUND" and dur_sec == 0 and not answered_at:
+                status_str = "MISSED"
+            else:
+                status_str = "FAILED"
+            dur_sec = 0
+            answered_at = None
     elif any(k in raw_upper for k in ["SUCCESS", "ANSWERED", "CONNECTED"]):
         status_str = "ANSWERED"
         if not answered_at:
@@ -825,7 +845,10 @@ async def push_doocti_call_log(
             pass  # Explicit duration given in payload takes precedence
         elif answered_at and ended_at and ended_at >= answered_at:
             dur_sec = max(0, int((ended_at - answered_at).total_seconds()))
-        elif dur_sec > 0:
+        elif dur_sec > 0 or has_positive_duration:
+            pass
+        elif has_recording or was_previously_answered:
+            # Call had recording or was answered, preserve COMPLETED status
             pass
         else:
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
@@ -992,13 +1015,25 @@ async def push_doocti_call_log(
         curr_status = (existing_log.call_status or "").upper()
         # State machine protection:
         # 1. If payload didn't explicitly specify status, preserve existing status
-        # 2. Do not revert an ANSWERED/CONNECTED call to RINGING/CONNECTING
-        # 3. Do not revert a COMPLETED call to prior/transient states
+        # 2. Do not revert an ANSWERED/CONNECTED/COMPLETED call to RINGING/CONNECTING
+        # 3. Do not revert a call that was answered, has positive duration, or has a recording to NO_ANSWER/MISSED/BUSY/FAILED
+        # 4. Do not revert a COMPLETED call to prior/transient states
+        has_prior_answer = (
+            curr_status in ["ANSWERED", "CONNECTED", "COMPLETED"] or 
+            bool(existing_log.answered_at) or 
+            bool(existing_log.duration_seconds and existing_log.duration_seconds > 0) or
+            bool(existing_log.recording_url)
+        )
+
         if not has_explicit_status:
             logger.info(f"Preserving existing status '{curr_status}' (no explicit status in payload) for CallLog ID={existing_log.id}")
         elif curr_status in ["ANSWERED", "CONNECTED"] and status_str in ["RINGING", "CONNECTING"]:
             logger.info(f"Preserving active status '{curr_status}', ignoring stale '{status_str}' for CallLog ID={existing_log.id}")
-        elif curr_status == "COMPLETED" and status_str in ["RINGING", "CONNECTING", "ANSWERED", "MISSED", "FAILED"]:
+        elif has_prior_answer and status_str in ["NO_ANSWER", "NO ANSWER", "MISSED", "BUSY", "FAILED"]:
+            logger.info(f"🛡️ Preserving answered/completed state for CallLog ID={existing_log.id} (status='{curr_status}', dur={existing_log.duration_seconds}s), ignoring late '{status_str}'")
+            if curr_status in ["ANSWERED", "CONNECTED"]:
+                existing_log.call_status = "COMPLETED"
+        elif curr_status == "COMPLETED" and status_str in ["RINGING", "CONNECTING", "ANSWERED", "MISSED", "FAILED", "NO_ANSWER", "NO ANSWER"]:
             logger.info(f"Preserving COMPLETED status, ignoring subsequent '{status_str}' for CallLog ID={existing_log.id}")
         else:
             existing_log.call_status = status_str
@@ -1024,11 +1059,11 @@ async def push_doocti_call_log(
             existing_log.answered_at = answered_at
         elif has_explicit_status and status_str in ["ANSWERED", "CONNECTED"] and not existing_log.answered_at:
             existing_log.answered_at = now_ist
-        elif has_explicit_status and status_str in ["NO_ANSWER", "MISSED", "BUSY", "FAILED"] and not existing_log.answered_at:
+        elif has_explicit_status and status_str in ["NO_ANSWER", "MISSED", "BUSY", "FAILED"] and not existing_log.answered_at and not has_prior_answer:
             existing_log.answered_at = None
             existing_log.duration_seconds = 0
 
-        if has_explicit_status and status_str in ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"]:
+        if has_explicit_status and (status_str in ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"] or has_prior_answer):
             existing_log.ended_at = ended_at or now_ist
 
         if combined_notes and combined_notes not in (existing_log.notes or ""):
@@ -1177,7 +1212,16 @@ def disconnect_doocti_call(
         raise HTTPException(status_code=404, detail="Call record not found.")
 
     is_ringing = (call.call_status or "").upper() in ["RINGING", "CONNECTING", "DIALING"]
-    if is_ringing or action == "reject":
+    has_prior_answer = (
+        bool(call.answered_at) or 
+        bool(call.duration_seconds and call.duration_seconds > 0) or 
+        (call.call_status or "").upper() in ["ANSWERED", "CONNECTED", "COMPLETED"] or
+        bool(call.recording_url)
+    )
+
+    if action == "reject" and not has_prior_answer:
+        new_status = "MISSED" if (call.call_direction or "").upper() == "INBOUND" else "NO_ANSWER"
+    elif is_ringing and not has_prior_answer:
         new_status = "MISSED" if (call.call_direction or "").upper() == "INBOUND" else "NO_ANSWER"
     else:
         new_status = "COMPLETED"

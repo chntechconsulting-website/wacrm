@@ -322,5 +322,55 @@ class TestDooctiIntegration(unittest.TestCase):
         }
         self.client.put("/api/doocti/config", json={"extension_mapping": test_mapping})
 
+    def test_answered_call_not_overwritten_by_late_no_answer(self):
+        # Verify that an answered outbound call with duration > 0 is NOT overwritten by a late NO ANSWER webhook
+        call_id = "test_doocti_answered_protect_001"
+        res1 = self.client.post("/api/doocti/call-log", json={
+            "uniqueid": call_id,
+            "phone_number": "9876543211",
+            "station": "1282",
+            "status": "ANSWERED",
+            "duration": 54,
+            "recording_path": "https://storage.oracle.com/doocti/rec_54s.mp3"
+        })
+        self.assertEqual(res1.status_code, 200)
+
+        # Subsequent delayed/duplicate Asterisk event arrives with NO ANSWER
+        res2 = self.client.post("/api/doocti/call-log", json={
+            "uniqueid": call_id,
+            "phone_number": "9876543211",
+            "station": "1282",
+            "status": "NO ANSWER",
+            "duration": 0
+        })
+        self.assertEqual(res2.status_code, 200)
+
+        # Database record must preserve COMPLETED/ANSWERED and duration 54s
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertIn(log.call_status, ["ANSWERED", "COMPLETED"])
+        self.assertNotEqual(log.call_status, "NO_ANSWER")
+        self.assertNotEqual(log.call_status, "NO ANSWER")
+        self.assertEqual(log.duration_seconds, 54)
+        self.assertIsNotNone(log.recording_url)
+
+    def test_call_with_recording_is_never_classified_as_no_answer(self):
+        # A call payload having recording_url or duration > 0 must not be classified as NO_ANSWER even if status string says NO ANSWER
+        call_id = "test_doocti_rec_protect_002"
+        res = self.client.post("/api/doocti/call-log", json={
+            "uniqueid": call_id,
+            "phone_number": "9876543212",
+            "station": "1282",
+            "status": "NO ANSWER",
+            "duration": 22,
+            "recording_path": "https://storage.oracle.com/doocti/rec_22s.mp3"
+        })
+        self.assertEqual(res.status_code, 200)
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.call_status, "COMPLETED")
+        self.assertEqual(log.duration_seconds, 22)
+
 if __name__ == "__main__":
     unittest.main()

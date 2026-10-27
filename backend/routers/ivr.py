@@ -338,7 +338,16 @@ def disconnect_call_endpoint(
             )
 
     is_ringing = (call.call_status or "").upper() in ["RINGING", "CONNECTING", "DIALING"]
-    if is_ringing or action == "reject":
+    has_prior_answer = (
+        bool(call.answered_at) or 
+        bool(call.duration_seconds and call.duration_seconds > 0) or 
+        (call.call_status or "").upper() in ["ANSWERED", "CONNECTED", "COMPLETED"] or
+        bool(call.recording_url)
+    )
+
+    if action == "reject" and not has_prior_answer:
+        new_status = "MISSED" if (call.call_direction or "").upper() == "INBOUND" else "NO_ANSWER"
+    elif is_ringing and not has_prior_answer:
         new_status = "MISSED" if (call.call_direction or "").upper() == "INBOUND" else "NO_ANSWER"
     else:
         new_status = "COMPLETED"
