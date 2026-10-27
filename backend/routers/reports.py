@@ -87,12 +87,20 @@ def dashboard_stats(
         emp_followups = db.query(Followup).filter(Followup.assigned_to == emp.id).count()
         emp_converted = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["CONVERTED", "WON"])).count()
         
-        # Calculate real revenue from prepared quotes or assigned leads
-        emp_quotes = db.query(Quotation).filter(or_(
-            Quotation.prepared_by.ilike(f"%{emp.name}%"),
-            Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == emp.id))
-        )).all()
-        emp_revenue = sum(q.grand_total or 0.0 for q in emp_quotes)
+        # Calculate actual revenue strictly from confirmed eligible invoices attributed to this employee
+        emp_invoices = db.query(Quotation).filter(
+            Quotation.doc_type == "invoice",
+            Quotation.status.in_(["issued", "paid"]),
+            Quotation.payment_status.in_(["paid", "partial"]),
+            Quotation.status != "cancelled",
+            or_(
+                Quotation.assigned_to == emp.id,
+                Quotation.created_by == emp.id,
+                Quotation.prepared_by.ilike(f"%{emp.name}%"),
+                Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == emp.id))
+            )
+        ).all()
+        emp_revenue = sum(float(inv.grand_total or 0.0) for inv in emp_invoices)
         
         team_performance.append({
             "id": emp.id,
@@ -457,11 +465,19 @@ def sales_overview_report(
         emp_qual = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["QUALIFIED", "WON", "CONVERTED"])).count()
         emp_contacted = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["ASSIGNED", "CONTACTED", "QUALIFIED", "WON", "CONVERTED"])).count()
         
-        emp_quotes = db.query(Quotation).filter(or_(
-            Quotation.prepared_by.ilike(f"%{emp.name}%"),
-            Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == emp.id))
-        )).all()
-        emp_rev = sum(q.grand_total or 0.0 for q in emp_quotes)
+        emp_invoices = db.query(Quotation).filter(
+            Quotation.doc_type == "invoice",
+            Quotation.status.in_(["issued", "paid"]),
+            Quotation.payment_status.in_(["paid", "partial"]),
+            Quotation.status != "cancelled",
+            or_(
+                Quotation.assigned_to == emp.id,
+                Quotation.created_by == emp.id,
+                Quotation.prepared_by.ilike(f"%{emp.name}%"),
+                Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == emp.id))
+            )
+        ).all()
+        emp_rev = sum(float(inv.grand_total or 0.0) for inv in emp_invoices)
 
         rate = f"{round((emp_won / emp_leads * 100), 1)}%" if emp_leads > 0 else "0.0%"
         rev_str = f"₹{int(emp_rev):,}" if emp_rev < 100000 else f"₹{round(emp_rev/100000.0, 2)} L"
@@ -595,12 +611,14 @@ def sales_revenue_report(
     if scope == "none":
         scope = get_user_view_scope(current_user, "leads", db)
 
-    # Base queries
+    # Base queries - Confirmed billing/invoice revenue
     quote_query = db.query(Quotation)
     lead_query = db.query(Lead)
 
     if scope == "own" and current_emp:
         quote_query = quote_query.filter(or_(
+            Quotation.assigned_to == current_emp.id,
+            Quotation.created_by == current_emp.id,
             Quotation.prepared_by.ilike(f"%{current_emp.name}%"),
             Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == current_emp.id))
         ))
@@ -610,6 +628,8 @@ def sales_revenue_report(
         team_ids = get_team_employee_ids_from_user(current_user, db)
         team_names = [e.name for e in active_emps if e.id in team_ids]
         quote_query = quote_query.filter(or_(
+            Quotation.assigned_to.in_(team_ids),
+            Quotation.created_by.in_(team_ids),
             Quotation.prepared_by.in_(team_names),
             Quotation.lead_id.in_(db.query(Lead.id).filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None)))
         ))
@@ -620,6 +640,8 @@ def sales_revenue_report(
         target_emp = db.query(Employee).filter(Employee.id == salesperson_id).first()
         if target_emp:
             quote_query = quote_query.filter(or_(
+                Quotation.assigned_to == target_emp.id,
+                Quotation.created_by == target_emp.id,
                 Quotation.prepared_by.ilike(f"%{target_emp.name}%"),
                 Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == target_emp.id))
             ))
@@ -632,27 +654,55 @@ def sales_revenue_report(
         try:
             s_dt = datetime.strptime(start_date, "%Y-%m-%d")
             e_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-            quote_query = quote_query.filter(Quotation.created_at >= s_dt, Quotation.created_at < e_dt)
+            quote_query = quote_query.filter(
+                func.coalesce(Quotation.issue_date, Quotation.created_at) >= s_dt,
+                func.coalesce(Quotation.issue_date, Quotation.created_at) < e_dt
+            )
             lead_query = lead_query.filter(Lead.created_at >= s_dt, Lead.created_at < e_dt)
             date_label = f"{s_dt.strftime('%b %d, %Y')} - {e_dt.strftime('%b %d, %Y')}"
         except Exception:
             pass
 
-    all_quotes = quote_query.all()
+    all_docs = quote_query.all()
     all_leads = lead_query.all()
 
-    # 1. Calculate Real Totals
-    total_rev_val = sum(q.grand_total or 0.0 for q in all_quotes if q.status in ['issued', 'approved', 'paid'])
-    paid_rev_val = sum(q.amount_paid or 0.0 for q in all_quotes if q.payment_status == 'paid')
-    
-    # Target: sum of active employees' monthly target, or realistic company target
-    active_targets = [e.monthly_target for e in active_emps if getattr(e, 'monthly_target', None)]
-    team_target = sum(active_targets) if active_targets else 150000.0
+    # CRITICAL: Separate confirmed actual invoices from quotations and proformas
+    # Count only invoices with confirmed billing status ('issued', 'paid') and payment ('paid', 'partial')
+    # Exclude draft, unapproved quotations, pipeline, and cancelled invoices
+    confirmed_invoices = [
+        q for q in all_docs
+        if q.doc_type == "invoice"
+        and q.status in ["issued", "paid"]
+        and q.payment_status in ["paid", "partial"]
+        and q.status != "cancelled"
+    ]
 
-    # Pipeline: sum of quotations in draft/issued unpaid
-    pipeline_val = sum(q.grand_total or 0.0 for q in all_quotes if q.payment_status != 'paid')
-    if pipeline_val == 0:
-        pipeline_val = total_rev_val
+    # Quotations and Proformas for pipeline and proposal tracking ONLY
+    pipeline_quotes = [
+        q for q in all_docs
+        if q.doc_type in ["quotation", "proforma"]
+        and q.status != "cancelled"
+    ]
+
+    # 1. Calculate Real Totals strictly from confirmed invoices
+    total_rev_val = sum(float(inv.grand_total or 0.0) for inv in confirmed_invoices)
+    paid_rev_val = sum(float(inv.amount_paid or 0.0) for inv in confirmed_invoices)
+
+    # Fetch active target from sales_targets table for current month/year, fallback to employee sum
+    from models.sales_target import SalesTarget
+    curr_target_records = db.query(SalesTarget).filter(
+        SalesTarget.period_type == "monthly",
+        SalesTarget.period_month == now.month,
+        SalesTarget.period_year == now.year
+    ).all()
+    if curr_target_records:
+        team_target = sum(float(t.target_amount or 0.0) for t in curr_target_records)
+    else:
+        active_targets = [e.monthly_target for e in active_emps if getattr(e, 'monthly_target', None)]
+        team_target = sum(active_targets) if active_targets else 150000.0
+
+    # Pipeline: sum of quotations / proformas in pipeline - strictly separate from actual revenue
+    pipeline_val = sum(float(q.grand_total or 0.0) for q in pipeline_quotes)
 
     achieved_pct = round((total_rev_val / team_target) * 100, 1) if team_target > 0 else 0.0
 
@@ -667,8 +717,10 @@ def sales_revenue_report(
         "total_revenue": {
             "value": format_inr(total_rev_val),
             "change": "+14.8%",
-            "vs_label": "total confirmed billing",
-            "raw_val": round(total_rev_val / 100000.0, 2)
+            "vs_label": f"collected: {format_inr(paid_rev_val)}",
+            "raw_val": round(total_rev_val / 100000.0, 2),
+            "collected_revenue": format_inr(paid_rev_val),
+            "collected_raw": round(paid_rev_val / 100000.0, 2)
         },
         "target": {
             "value": format_inr(team_target),
@@ -679,7 +731,7 @@ def sales_revenue_report(
         "pipeline_value": {
             "value": format_inr(pipeline_val),
             "change": "+10.2%",
-            "vs_label": "in active pipeline & proposals",
+            "vs_label": "in active pipeline & proposals (separate)",
             "raw_val": round(pipeline_val / 100000.0, 2)
         },
         "achievement": {
@@ -690,7 +742,7 @@ def sales_revenue_report(
         }
     }
 
-    # 2. Monthly Trend (Past 6 Months)
+    # 2. Monthly Trend (Past 6 Months) from Confirmed Invoices
     trend_months = []
     trend_rev = []
     trend_tgt = []
@@ -699,12 +751,25 @@ def sales_revenue_report(
         m_label = m_date.strftime("%b %Y")
         trend_months.append(m_label)
         
-        m_quotes = [q for q in all_quotes if q.created_at and q.created_at.strftime("%b %Y") == m_label]
-        m_sum = sum(q.grand_total or 0.0 for q in m_quotes)
+        m_invs = [
+            inv for inv in confirmed_invoices
+            if (inv.issue_date or inv.created_at)
+            and (inv.issue_date or inv.created_at).strftime("%b %Y") == m_label
+        ]
+        m_sum = sum(float(inv.grand_total or 0.0) for inv in m_invs)
         trend_rev.append(round(m_sum / 100000.0, 2))
         
-        m_tgt = round((team_target / 100000.0) * (0.85 + 0.03 * (5 - i)), 2)
-        trend_tgt.append(m_tgt)
+        # Look up historical target in sales_targets or estimate
+        t_hist = db.query(SalesTarget).filter(
+            SalesTarget.period_type == "monthly",
+            SalesTarget.period_month == m_date.month,
+            SalesTarget.period_year == m_date.year
+        ).all()
+        if t_hist:
+            m_tgt_val = sum(float(t.target_amount or 0.0) for t in t_hist)
+        else:
+            m_tgt_val = team_target * (0.85 + 0.03 * (5 - i))
+        trend_tgt.append(round(m_tgt_val / 100000.0, 2))
 
     monthly_trend = {
         "months": trend_months,
@@ -712,30 +777,38 @@ def sales_revenue_report(
         "target": trend_tgt
     }
 
-    # 3. Revenue by Salesperson (Real active employees)
+    # 3. Revenue by Salesperson (Calculated strictly from confirmed invoices attributed to that salesperson)
     colors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#6366f1"]
     revenue_by_salesperson = []
     
-    emp_map = {e.id: {"emp": e, "revenue": 0.0, "quotes_count": 0} for e in active_emps}
-    for q in all_quotes:
+    emp_map = {e.id: {"emp": e, "revenue": 0.0, "invoices_count": 0} for e in active_emps}
+    for inv in confirmed_invoices:
         assigned = False
-        if q.prepared_by:
+        if inv.assigned_to and inv.assigned_to in emp_map:
+            emp_map[inv.assigned_to]["revenue"] += float(inv.grand_total or 0.0)
+            emp_map[inv.assigned_to]["invoices_count"] += 1
+            assigned = True
+        elif inv.created_by and inv.created_by in emp_map:
+            emp_map[inv.created_by]["revenue"] += float(inv.grand_total or 0.0)
+            emp_map[inv.created_by]["invoices_count"] += 1
+            assigned = True
+        elif inv.prepared_by:
             for e in active_emps:
-                if e.name and (e.name.lower() in q.prepared_by.lower() or q.prepared_by.lower() in e.name.lower()):
-                    emp_map[e.id]["revenue"] += (q.grand_total or 0.0)
-                    emp_map[e.id]["quotes_count"] += 1
+                if e.name and (e.name.lower() in inv.prepared_by.lower() or inv.prepared_by.lower() in e.name.lower()):
+                    emp_map[e.id]["revenue"] += float(inv.grand_total or 0.0)
+                    emp_map[e.id]["invoices_count"] += 1
                     assigned = True
                     break
-        if not assigned and q.lead_id:
-            lead_match = next((l for l in all_leads if l.id == q.lead_id), None)
+        if not assigned and inv.lead_id:
+            lead_match = next((l for l in all_leads if l.id == inv.lead_id), None)
             if lead_match and lead_match.assigned_to in emp_map:
-                emp_map[lead_match.assigned_to]["revenue"] += (q.grand_total or 0.0)
-                emp_map[lead_match.assigned_to]["quotes_count"] += 1
+                emp_map[lead_match.assigned_to]["revenue"] += float(inv.grand_total or 0.0)
+                emp_map[lead_match.assigned_to]["invoices_count"] += 1
                 assigned = True
-        if not assigned:
+        if not assigned and active_emps:
             first_id = active_emps[0].id
-            emp_map[first_id]["revenue"] += (q.grand_total or 0.0)
-            emp_map[first_id]["quotes_count"] += 1
+            emp_map[first_id]["revenue"] += float(inv.grand_total or 0.0)
+            emp_map[first_id]["invoices_count"] += 1
 
     sorted_emps = sorted(emp_map.values(), key=lambda x: x["revenue"], reverse=True)
     for idx, item in enumerate(sorted_emps):
@@ -744,7 +817,6 @@ def sales_revenue_report(
         rev_lakhs = round(rev_amt / 100000.0, 2)
         color = colors[idx % len(colors)]
         
-        # Calculate clean short name for charts
         raw_name = (e.name or "").strip()
         if raw_name.lower() in ["system administrator", "admin user", "administrator"]:
             short_name = "Admin"
@@ -765,7 +837,7 @@ def sales_revenue_report(
             "color": color
         })
 
-    # 4. Revenue by Lead Source
+    # 4. Revenue by Lead Source (strictly from confirmed invoices linked to leads)
     source_stats = {}
     for l in all_leads:
         src = (l.source or "Direct").strip()
@@ -788,10 +860,10 @@ def sales_revenue_report(
         if l.status in ["WON", "CONVERTED"]:
             source_stats[src]["won"] += 1
 
-    for q in all_quotes:
+    for inv in confirmed_invoices:
         src = "Direct"
-        if q.lead_id:
-            l = next((x for x in all_leads if x.id == q.lead_id), None)
+        if inv.lead_id:
+            l = next((x for x in all_leads if x.id == inv.lead_id), None)
             if l and l.source:
                 s_raw = l.source.lower()
                 if "website" in s_raw:
@@ -804,7 +876,7 @@ def sales_revenue_report(
                     src = "Excel"
         if src not in source_stats:
             source_stats[src] = {"leads": 0, "won": 0, "revenue": 0.0}
-        source_stats[src]["revenue"] += (q.grand_total or 0.0)
+        source_stats[src]["revenue"] += float(inv.grand_total or 0.0)
 
     revenue_by_source = []
     source_colors = {
@@ -828,27 +900,48 @@ def sales_revenue_report(
         })
 
     # 5. Deal Status by Revenue
-    won_sum = sum(q.grand_total or 0.0 for q in all_quotes if q.payment_status == 'paid')
-    if won_sum == 0 and total_rev_val > 0:
-        won_sum = total_rev_val
-
-    proposal_sum = sum(q.grand_total or 0.0 for q in all_quotes if q.doc_type == 'quotation')
-    negotiation_sum = sum(q.grand_total or 0.0 for q in all_quotes if q.doc_type == 'proforma')
-    qualified_sum = round(total_rev_val * 0.25, 2)
-    demo_sum = round(total_rev_val * 0.15, 2)
+    won_sum = total_rev_val
+    proposal_sum = sum(float(q.grand_total or 0.0) for q in pipeline_quotes if q.doc_type == 'quotation')
+    negotiation_sum = sum(float(q.grand_total or 0.0) for q in pipeline_quotes if q.doc_type == 'proforma')
+    qualified_sum = round(pipeline_val * 0.25, 2)
+    demo_sum = round(pipeline_val * 0.15, 2)
 
     deal_status_by_revenue = [
-        {"stage": "Won", "amount": format_inr(won_sum), "val": round(won_sum / 100000.0, 2), "color": "#10b981"},
+        {"stage": "Won (Billed)", "amount": format_inr(won_sum), "val": round(won_sum / 100000.0, 2), "color": "#10b981"},
         {"stage": "Proposal Sent", "amount": format_inr(proposal_sum), "val": round(proposal_sum / 100000.0, 2), "color": "#3b82f6"},
         {"stage": "Negotiation", "amount": format_inr(negotiation_sum), "val": round(negotiation_sum / 100000.0, 2), "color": "#f59e0b"},
         {"stage": "Demo", "amount": format_inr(demo_sum), "val": round(demo_sum / 100000.0, 2), "color": "#8b5cf6"},
         {"stage": "Qualification", "amount": format_inr(qualified_sum), "val": round(qualified_sum / 100000.0, 2), "color": "#06b6d4"}
     ]
 
-    # 6. Deal / Revenue Details Table (Real DB Records)
+    # 6. Deal / Revenue Details Table (Confirmed Invoices First)
     deals_details = []
-    for q in sorted(all_quotes, key=lambda x: x.created_at or datetime.min, reverse=True):
-        st = "Won" if q.payment_status == "paid" else ("Proposal Sent" if q.doc_type == "quotation" else "Negotiation")
+    # Invoices first
+    for inv in sorted(confirmed_invoices, key=lambda x: x.issue_date or x.created_at or datetime.min, reverse=True):
+        c_name = inv.company_name or inv.customer_name or "Valued Customer"
+        sp_name = inv.prepared_by
+        if not sp_name and inv.assigned_to in emp_map:
+            sp_name = emp_map[inv.assigned_to]["emp"].name
+        if not sp_name:
+            sp_name = active_emps[0].name if active_emps else "Finance / Sales"
+
+        b_date = (inv.issue_date or inv.created_at).strftime("%b %d, %Y") if (inv.issue_date or inv.created_at) else "-"
+
+        deals_details.append({
+            "id": inv.id,
+            "customer": c_name,
+            "deal_name": f"{inv.doc_number or 'Invoice'} (Tax Invoice)",
+            "salesperson": sp_name,
+            "amount": f"₹{int(inv.grand_total or 0):,}",
+            "status": "Won",
+            "expected_close": b_date,
+            "won_date": b_date,
+            "doc_type": "invoice"
+        })
+
+    # Quotations / Proformas under negotiation/proposals
+    for q in sorted(pipeline_quotes, key=lambda x: x.created_at or datetime.min, reverse=True):
+        st = "Proposal Sent" if q.doc_type == "quotation" else "Negotiation"
         c_name = q.customer_name or q.company_name or "Valued Customer"
         sp_name = q.prepared_by or (active_emps[0].name if active_emps else "Sales Rep")
         
@@ -862,7 +955,6 @@ def sales_revenue_report(
         exp_date = q.valid_till.strftime("%b %d, %Y") if q.valid_till else (
             (q.created_at + timedelta(days=15)).strftime("%b %d, %Y") if q.created_at else "-"
         )
-        won_dt = q.created_at.strftime("%b %d, %Y") if (st == "Won" and q.created_at) else "-"
 
         deals_details.append({
             "id": q.id,
@@ -872,27 +964,8 @@ def sales_revenue_report(
             "amount": f"₹{int(q.grand_total or 0):,}",
             "status": st,
             "expected_close": exp_date,
-            "won_date": won_dt
-        })
-
-    # Append won leads if fewer than 10 deals
-    won_leads = [l for l in all_leads if l.status in ["WON", "CONVERTED"]]
-    for idx, wl in enumerate(won_leads):
-        if len(deals_details) >= 10:
-            break
-        emp_obj = next((e for e in active_emps if e.id == wl.assigned_to), None)
-        sp_name = emp_obj.name if emp_obj else "Sales Rep"
-        created_dt = wl.created_at.strftime("%b %d, %Y") if wl.created_at else "Sep 29, 2026"
-
-        deals_details.append({
-            "id": 100 + wl.id,
-            "customer": wl.company or wl.name or "Corporate Client",
-            "deal_name": f"{wl.requirement_notes or 'Enterprise Solution Deal'}",
-            "salesperson": sp_name,
-            "amount": "₹35,000",
-            "status": "Won",
-            "expected_close": created_dt,
-            "won_date": created_dt
+            "won_date": "-",
+            "doc_type": q.doc_type
         })
 
     salespersons_list = [{"id": 0, "name": "All Salespersons"}]

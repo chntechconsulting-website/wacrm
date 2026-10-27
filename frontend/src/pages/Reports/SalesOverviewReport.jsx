@@ -383,6 +383,10 @@ const SalesOverviewReport = () => {
           <TrendingUp size={15} />
           <span>Sales Revenue</span>
         </Link>
+        <Link to="/reports?tab=targets" className="report-tab-btn">
+          <Target size={15} />
+          <span>Target Management</span>
+        </Link>
       </div>
 
       {/* 1. Header & Filters Bar */}

@@ -2,6 +2,7 @@ import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import SalesOverviewReport from './SalesOverviewReport';
 import SalesRevenueReport from './SalesRevenueReport';
+import SalesTargetsPage from './SalesTargetsPage';
 import DataExportPage from './DataExportPage';
 import Reports from './index';
 
@@ -15,6 +16,10 @@ const ReportsPage = () => {
 
   if (tab === 'revenue' || tab === 'sales-revenue') {
     return <SalesRevenueReport />;
+  }
+
+  if (tab === 'targets' || tab === 'sales-targets') {
+    return <SalesTargetsPage />;
   }
 
   if (tab === 'sales-overview' || !tab) {

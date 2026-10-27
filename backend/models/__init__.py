@@ -16,6 +16,7 @@ from models.meta_page import MetaPage
 from models.quotation import Quotation
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.role import Role, RolePermission
+from models.sales_target import SalesTarget
 
 __all__ = [
     "Base",
@@ -46,5 +47,6 @@ __all__ = [
     "Quotation",
     "FinanceHandoff",
     "SupportHandoff",
-    "WorkflowTimelineEvent"
+    "WorkflowTimelineEvent",
+    "SalesTarget"
 ]

@@ -39,7 +39,8 @@ import {
   Clock,
   Award,
   XCircle,
-  Database
+  Database,
+  Target
 } from 'lucide-react';
 
 // Lite tone color presets for testing
@@ -744,6 +745,14 @@ const Sidebar = ({
                 exactMatch={true}
                 icon={TrendingUp}
                 label="Sales Revenue"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/reports?tab=targets"
+                exactMatch={true}
+                icon={Target}
+                label="Sales Targets"
                 isCollapsed={isCollapsed}
                 onClick={handleItemClick}
               />

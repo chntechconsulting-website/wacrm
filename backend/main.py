@@ -36,7 +36,8 @@ from routers import (
     roles,
     doocti,
     field_visits,
-    export
+    export,
+    sales_targets
 )
 
 # Ensure upload directory exists
@@ -109,6 +110,7 @@ app.include_router(waquote_router, prefix=settings.API_V1_STR)
 app.include_router(proforma_integration_router, prefix=settings.API_V1_STR)
 app.include_router(workflow.router, prefix=settings.API_V1_STR)
 app.include_router(roles.router, prefix=settings.API_V1_STR)
+app.include_router(sales_targets.router, prefix=settings.API_V1_STR)
 app.include_router(doocti.router, prefix=settings.API_V1_STR)
 app.include_router(doocti.router, prefix="/api") # Allow /api/doocti/... paths
 app.include_router(doocti.router, prefix="/api/v1") # Allow /api/v1/doocti/... paths
