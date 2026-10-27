@@ -618,7 +618,6 @@ const CallLogsPage = () => {
             >
               <option value="">All Statuses</option>
               <option value="Completed">Completed</option>
-              <option value="Answered">Answered</option>
               <option value="No_Answer">No Answer</option>
               <option value="Missed">Missed</option>
               <option value="Busy">Busy</option>

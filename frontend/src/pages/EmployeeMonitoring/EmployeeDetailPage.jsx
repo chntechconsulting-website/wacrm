@@ -398,7 +398,7 @@ const EmployeeDetailPage = () => {
                       <td style={{ padding: '10px' }}>{c.call_direction}</td>
                       <td style={{ padding: '10px' }}>
                         <span style={{ padding: '3px 8px', borderRadius: '8px', fontSize: '0.72rem', fontWeight: '700', backgroundColor: isConnected ? '#d1fae5' : '#fee2e2', color: isConnected ? '#047857' : '#dc2626' }}>
-                          {c.call_status}
+                          {isConnected ? 'COMPLETED' : c.call_status}
                         </span>
                       </td>
                       <td style={{ padding: '10px', fontWeight: '700' }}>{formatDuration(c.duration_seconds)}</td>

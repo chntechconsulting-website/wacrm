@@ -35,10 +35,9 @@ const LEAD_STATUS_OPTIONS = [
 
 const CALL_STATUS_OPTIONS = [
   'ALL',
-  'ANSWERED',
   'COMPLETED',
-  'MISSED',
   'NO_ANSWER',
+  'MISSED',
   'BUSY',
   'FAILED',
   'INITIATED'

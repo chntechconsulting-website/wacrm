@@ -134,6 +134,13 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     else:
         rec_status = "RECORDING_UNAVAILABLE"
 
+    # UI Status Normalization:
+    # If a call has ended or was answered/connected, map to COMPLETED for final UI display.
+    # Never show 'Answered' as a separate final status in the UI.
+    display_status = call.call_status
+    if status_upper in ["ANSWERED", "CONNECTED"] and (call.ended_at or (call.duration_seconds and call.duration_seconds > 0)):
+        display_status = "COMPLETED"
+
     return CallLogResponse(
         id=call.id,
         lead_id=call.lead_id,
@@ -144,7 +151,7 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         to_number=call.to_number,
         customer_phone=cust_phone,
         employee_phone=emp_phone,
-        call_status=call.call_status,
+        call_status=display_status,
         call_direction=call.call_direction or "INBOUND",
         duration_seconds=call.duration_seconds,
         recording_url=resolved_rec,
@@ -572,7 +579,35 @@ def list_call_logs(
         query = query.filter(CallLog.lead_id == lead_id)
 
     if call_status:
-        query = query.filter(CallLog.call_status.ilike(f"%{call_status}%"))
+        cs_clean = call_status.strip().upper()
+        if cs_clean in ["COMPLETED", "COMPLETE"]:
+            # Match COMPLETED as well as legacy/active ANSWERED & CONNECTED records
+            query = query.filter(
+                or_(
+                    CallLog.call_status.ilike("%COMPLETED%"),
+                    CallLog.call_status.ilike("%COMPLETE%"),
+                    CallLog.call_status.ilike("%ANSWERED%"),
+                    CallLog.call_status.ilike("%CONNECTED%")
+                )
+            )
+        elif cs_clean in ["NO_ANSWER", "NO ANSWER"]:
+            query = query.filter(
+                or_(
+                    CallLog.call_status.ilike("%NO_ANSWER%"),
+                    CallLog.call_status.ilike("%NO ANSWER%")
+                )
+            )
+        elif cs_clean in ["INITIATING", "RINGING"]:
+            query = query.filter(
+                or_(
+                    CallLog.call_status.ilike("%RINGING%"),
+                    CallLog.call_status.ilike("%INITIATING%"),
+                    CallLog.call_status.ilike("%INITIATED%"),
+                    CallLog.call_status.ilike("%CONNECTING%")
+                )
+            )
+        else:
+            query = query.filter(CallLog.call_status.ilike(f"%{call_status}%"))
     if provider:
         query = query.filter(CallLog.provider.ilike(f"%{provider}%"))
 

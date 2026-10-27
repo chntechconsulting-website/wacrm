@@ -504,7 +504,7 @@ def get_lead_statuses(module: Optional[str] = None):
 @router.get("/crm/disposition")
 def get_call_statuses(module: Optional[str] = None):
     dispos = [
-        {"label": "Answered", "value": "ANSWERED", "code": "ANSWERED", "name": "Answered"},
+        {"label": "Completed", "value": "COMPLETED", "code": "COMPLETED", "name": "Completed"},
         {"label": "Missed", "value": "MISSED", "code": "MISSED", "name": "Missed"},
         {"label": "Interested", "value": "INTERESTED", "code": "INTERESTED", "name": "Interested"},
         {"label": "Follow Up", "value": "FOLLOW_UP", "code": "FOLLOW_UP", "name": "Follow Up"},
@@ -834,11 +834,15 @@ async def push_doocti_call_log(
             dur_sec = 0
             answered_at = None
     elif any(k in raw_upper for k in ["SUCCESS", "ANSWERED", "CONNECTED"]):
-        status_str = "ANSWERED"
         if not answered_at:
             answered_at = started_at or now_ist
         if ended_at and answered_at and ended_at >= answered_at:
             dur_sec = max(0, int((ended_at - answered_at).total_seconds()))
+        # If the call has already ended or has duration, save final status as COMPLETED
+        if ended_at or dur_sec > 0 or has_explicit_duration or rec_url:
+            status_str = "COMPLETED"
+        else:
+            status_str = "ANSWERED"  # Internal active in-call state while talking
     elif any(k in raw_upper for k in ["COMPLETED", "COMPLETE", "HANGUP", "DISCONNECTED", "ENDED"]):
         status_str = "COMPLETED"
         if has_explicit_duration and dur_sec > 0:

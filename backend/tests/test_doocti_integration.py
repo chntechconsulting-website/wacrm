@@ -62,7 +62,8 @@ class TestDooctiIntegration(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "success")
         status_codes = [s["code"] for s in data["statuses"]]
-        self.assertIn("ANSWERED", status_codes)
+        self.assertIn("COMPLETED", status_codes)
+        self.assertNotIn("ANSWERED", status_codes)
         self.assertIn("MISSED", status_codes)
         self.assertIn("BUSY", status_codes)
 
@@ -93,14 +94,14 @@ class TestDooctiIntegration(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["uniqueid"], call_id)
-        self.assertEqual(data["call_status"], "ANSWERED")
+        self.assertEqual(data["call_status"], "COMPLETED")
         self.assertEqual(data["duration"], 120)
 
         # Verify DB
         log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
         self.assertIsNotNone(log)
         self.assertEqual(log.duration_seconds, 120)
-        self.assertEqual(log.call_status, "ANSWERED")
+        self.assertEqual(log.call_status, "COMPLETED")
 
     def test_call_log_form_post(self):
         call_id = "test_doocti_form_002"
@@ -152,7 +153,7 @@ class TestDooctiIntegration(unittest.TestCase):
         # Verify DB preserved duration and status while updating recording URL
         log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
         self.assertIsNotNone(log)
-        self.assertEqual(log.call_status, "ANSWERED")
+        self.assertEqual(log.call_status, "COMPLETED")
         self.assertEqual(log.duration_seconds, 95)
         self.assertEqual(log.recording_url, rec_url)
 

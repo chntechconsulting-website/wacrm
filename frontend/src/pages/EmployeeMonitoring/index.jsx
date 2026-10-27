@@ -549,8 +549,10 @@ const EmployeeMonitoring = () => {
                   style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
                 >
                   <option value="">All Call Statuses</option>
-                  <option value="ANSWERED">Answered / Connected</option>
+                  <option value="COMPLETED">Completed</option>
                   <option value="MISSED">Missed / Unanswered</option>
+                  <option value="BUSY">Busy</option>
+                  <option value="FAILED">Failed</option>
                 </select>
               </div>
             </div>
@@ -581,10 +583,10 @@ const EmployeeMonitoring = () => {
                       }
                       if (callStatusFilter) {
                         const statusUpper = (c.call_status || '').toUpperCase();
-                        if (callStatusFilter === 'ANSWERED') {
+                        if (callStatusFilter === 'COMPLETED' || callStatusFilter === 'ANSWERED') {
                           if (!['ANSWERED', 'CONNECTED', 'COMPLETED'].includes(statusUpper)) return false;
                         } else if (callStatusFilter === 'MISSED') {
-                          if (!['MISSED', 'NOANSWER', 'BUSY', 'FAILED', 'CANCEL'].includes(statusUpper)) return false;
+                          if (!['MISSED', 'NOANSWER', 'NO_ANSWER', 'BUSY', 'FAILED', 'CANCEL'].includes(statusUpper)) return false;
                         } else if (statusUpper !== callStatusFilter.toUpperCase()) {
                           return false;
                         }
@@ -626,7 +628,7 @@ const EmployeeMonitoring = () => {
                                 backgroundColor: isConnected ? '#d1fae5' : '#fee2e2',
                                 color: isConnected ? '#047857' : '#dc2626'
                               }}>
-                                {log.call_status}
+                                {isConnected ? 'COMPLETED' : log.call_status}
                               </span>
                             </div>
                           </td>
