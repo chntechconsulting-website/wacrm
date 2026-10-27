@@ -38,6 +38,19 @@ class EmployeeAchievementRow(BaseModel):
     achievement_percentage: float
     confirmed_invoices_count: int
 
+class EmployeeMyTargetSummary(BaseModel):
+    has_target: bool
+    employee_id: int
+    employee_name: str
+    period_type: str
+    period_month: Optional[int] = None
+    period_year: int
+    assigned_target: float
+    actual_revenue: float
+    remaining_target: float
+    achievement_percentage: float
+    confirmed_invoices_count: int
+
 class CompanyRevenueItem(BaseModel):
     invoice_id: int
     invoice_number: str

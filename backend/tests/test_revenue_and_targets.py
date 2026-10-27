@@ -98,5 +98,73 @@ class TestRevenueAndTargetLogic(unittest.TestCase):
         self.assertEqual(target.period_year, 2026)
         self.assertEqual(target.target_amount, 175000.0)
 
+    def test_employee_my_target_isolation(self):
+        """
+        Verify employee target retrieval and user isolation:
+        - Employee A sees their own target
+        - Employee B does not see Employee A's target
+        """
+        from routers.sales_targets import get_my_target
+        emps = self.db.query(Employee).filter(Employee.status == "ACTIVE").limit(2).all()
+        if len(emps) >= 2:
+            emp_a = emps[0]
+            emp_b = emps[1]
+
+            # Assign target to emp_a
+            tgt_a = self.db.query(SalesTarget).filter(
+                SalesTarget.employee_id == emp_a.id,
+                SalesTarget.period_type == "monthly",
+                SalesTarget.period_month == 10,
+                SalesTarget.period_year == 2026
+            ).first()
+            if not tgt_a:
+                tgt_a = SalesTarget(
+                    employee_id=emp_a.id,
+                    target_amount=250000.0,
+                    period_type="monthly",
+                    period_month=10,
+                    period_year=2026
+                )
+                self.db.add(tgt_a)
+                self.db.commit()
+
+            # Mock current user as emp_a user
+            user_a = self.db.query(User).filter(User.id == emp_a.user_id).first()
+            if not user_a:
+                user_a = User(username=emp_a.username, email=emp_a.email, role="EMPLOYEE")
+
+            summary_a = get_my_target(
+                period_year=2026,
+                period_month=10,
+                period_type="monthly",
+                db=self.db,
+                current_user=user_a
+            )
+            self.assertTrue(summary_a.has_target)
+            self.assertEqual(summary_a.employee_id, emp_a.id)
+            self.assertEqual(summary_a.assigned_target, 250000.0)
+
+            # Mock current user as emp_b user
+            user_b = self.db.query(User).filter(User.id == emp_b.user_id).first()
+            if not user_b:
+                user_b = User(username=emp_b.username, email=emp_b.email, role="EMPLOYEE")
+
+            summary_b = get_my_target(
+                period_year=2026,
+                period_month=10,
+                period_type="monthly",
+                db=self.db,
+                current_user=user_b
+            )
+            # Employee B should not have Employee A's target
+            if not self.db.query(SalesTarget).filter(
+                SalesTarget.employee_id == emp_b.id,
+                SalesTarget.period_type == "monthly",
+                SalesTarget.period_month == 10,
+                SalesTarget.period_year == 2026
+            ).first():
+                self.assertFalse(summary_b.has_target)
+                self.assertEqual(summary_b.assigned_target, 0.0)
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,9 @@ import {
   Filter,
   Check,
   Award,
-  ChevronDown
+  ChevronDown,
+  Target,
+  DollarSign
 } from 'lucide-react';
 import { formatDateDDMMYYYY, formatTime12Hour, formatLocalDateTime } from '../../utils/dateUtils';
 import PingoMascot from '../../components/Common/PingoMascot';
@@ -37,6 +39,36 @@ const Dashboard = () => {
   const [sourceFilter, setSourceFilter] = useState('This Month');
   const [funnelFilter, setFunnelFilter] = useState('All Leads');
   const [teamFilter, setTeamFilter] = useState('This Month');
+
+  // Employee Target State
+  const now = new Date();
+  const [targetYear, setTargetYear] = useState(now.getFullYear());
+  const [targetMonth, setTargetMonth] = useState(now.getMonth() + 1);
+  const [employeeTarget, setEmployeeTarget] = useState(null);
+  const [loadingTarget, setLoadingTarget] = useState(true);
+  const [targetError, setTargetError] = useState(null);
+
+  const fetchEmployeeTarget = async () => {
+    try {
+      setLoadingTarget(true);
+      setTargetError(null);
+      const res = await API.get('/sales-targets/my-target', {
+        params: {
+          period_year: targetYear,
+          period_month: targetMonth,
+          period_type: 'monthly'
+        }
+      });
+      if (res.data) {
+        setEmployeeTarget(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to load employee target', err);
+      setTargetError('Unable to load assigned sales target.');
+    } finally {
+      setLoadingTarget(false);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -58,6 +90,10 @@ const Dashboard = () => {
   useEffect(() => {
     fetchDashboardData();
   }, []);
+
+  useEffect(() => {
+    fetchEmployeeTarget();
+  }, [targetYear, targetMonth]);
 
   const userName = user?.employee_name || user?.name || user?.username || 'Chandra Mohan';
 
@@ -243,6 +279,158 @@ const Dashboard = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 1.5. EMPLOYEE SALES TARGET MANAGEMENT SECTION */}
+      <div className="content-card" style={{ borderRadius: '18px', padding: '20px 24px', marginBottom: '24px', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: '#eff6ff', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Target size={22} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.15rem', fontWeight: '800', color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>Sales Target & Achievement</span>
+                {employeeTarget?.has_target && (
+                  <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '9999px', background: '#dcfce7', color: '#15803d', fontWeight: '700' }}>
+                    Active Target
+                  </span>
+                )}
+              </h2>
+              <p style={{ margin: '3px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                Assigned monthly sales quota and actual confirmed billing revenue.
+              </p>
+            </div>
+          </div>
+
+          {/* Month & Year Selectors */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <select
+              value={targetMonth}
+              onChange={(e) => setTargetMonth(Number(e.target.value))}
+              style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.82rem', fontWeight: '600', backgroundColor: '#ffffff', color: '#0f172a', cursor: 'pointer' }}
+            >
+              {[
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+              ].map((mName, idx) => (
+                <option key={idx + 1} value={idx + 1}>{mName}</option>
+              ))}
+            </select>
+
+            <select
+              value={targetYear}
+              onChange={(e) => setTargetYear(Number(e.target.value))}
+              style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.82rem', fontWeight: '600', backgroundColor: '#ffffff', color: '#0f172a', cursor: 'pointer' }}
+            >
+              {[2024, 2025, 2026, 2027].map(yr => (
+                <option key={yr} value={yr}>{yr}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Target States: Loading, Error, No-Target, or Active Cards */}
+        {loadingTarget ? (
+          <div style={{ textAlign: 'center', padding: '24px', color: '#64748b', fontSize: '0.85rem' }}>
+            Loading your assigned sales target...
+          </div>
+        ) : targetError ? (
+          <div style={{ textAlign: 'center', padding: '20px', background: '#fef2f2', color: '#991b1b', borderRadius: '10px', fontSize: '0.84rem' }}>
+            {targetError}
+          </div>
+        ) : !employeeTarget?.has_target ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px', padding: '16px 20px', background: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '38px', height: '38px', borderRadius: '50%', background: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+                <Clock size={18} />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.88rem', fontWeight: '700', color: '#334155' }}>
+                  No target assigned for this period
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                  Your manager or administrator has not set a monthly target for {targetMonth}/{targetYear} yet.
+                </div>
+              </div>
+            </div>
+            <Link
+              to="/reports?tab=revenue"
+              style={{ fontSize: '0.8rem', fontWeight: '700', color: '#2563eb', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              <span>View Revenue Report</span>
+              <ArrowUpRight size={14} />
+            </Link>
+          </div>
+        ) : (
+          <div>
+            {/* 4 Cards Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '18px' }}>
+              {/* Monthly Target */}
+              <div style={{ padding: '14px 18px', background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Monthly Target</div>
+                <div style={{ fontSize: '1.45rem', fontWeight: '800', color: '#2563eb', marginTop: '4px' }}>
+                  ₹{Math.round(employeeTarget.assigned_target || 0).toLocaleString('en-IN')}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>Target assigned by Admin</div>
+              </div>
+
+              {/* Achieved Revenue */}
+              <div style={{ padding: '14px 18px', background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Achieved Revenue</div>
+                <div style={{ fontSize: '1.45rem', fontWeight: '800', color: '#16a34a', marginTop: '4px' }}>
+                  ₹{Math.round(employeeTarget.actual_revenue || 0).toLocaleString('en-IN')}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#16a34a', fontWeight: '600', marginTop: '2px' }}>
+                  {employeeTarget.confirmed_invoices_count} confirmed invoices
+                </div>
+              </div>
+
+              {/* Remaining Target */}
+              <div style={{ padding: '14px 18px', background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Remaining Target</div>
+                <div style={{ fontSize: '1.45rem', fontWeight: '800', color: employeeTarget.remaining_target > 0 ? '#ea580c' : '#16a34a', marginTop: '4px' }}>
+                  ₹{Math.round(employeeTarget.remaining_target || 0).toLocaleString('en-IN')}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>
+                  {employeeTarget.remaining_target === 0 ? 'Target Achieved! 🎉' : 'Remaining to reach quota'}
+                </div>
+              </div>
+
+              {/* Achievement Percentage */}
+              <div style={{ padding: '14px 18px', background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Achievement %</div>
+                <div style={{ fontSize: '1.45rem', fontWeight: '800', color: employeeTarget.achievement_percentage >= 100 ? '#16a34a' : (employeeTarget.achievement_percentage >= 50 ? '#2563eb' : '#ea580c'), marginTop: '4px' }}>
+                  {employeeTarget.achievement_percentage}%
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>
+                  Quota completion rate
+                </div>
+              </div>
+            </div>
+
+            {/* Monthly Progress Bar */}
+            <div style={{ background: '#ffffff', padding: '12px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', fontSize: '0.76rem', fontWeight: '700' }}>
+                <span style={{ color: '#475569' }}>Monthly Target Progress</span>
+                <span style={{ color: employeeTarget.achievement_percentage >= 100 ? '#16a34a' : '#2563eb' }}>
+                  {employeeTarget.achievement_percentage}% ({Math.round(employeeTarget.actual_revenue).toLocaleString('en-IN')} / {Math.round(employeeTarget.assigned_target).toLocaleString('en-IN')})
+                </span>
+              </div>
+              <div style={{ width: '100%', height: '8px', background: '#e2e8f0', borderRadius: '9999px', overflow: 'hidden' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.min(100, employeeTarget.achievement_percentage)}%`,
+                    background: employeeTarget.achievement_percentage >= 100 ? '#16a34a' : (employeeTarget.achievement_percentage >= 50 ? 'linear-gradient(90deg, #2563eb, #3b82f6)' : '#ea580c'),
+                    borderRadius: '9999px',
+                    transition: 'width 0.5s ease'
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 2. TOP METRIC CARDS GRID (6 KPI CARDS) */}

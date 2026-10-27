@@ -15,6 +15,7 @@ from schemas.sales_target import (
     SalesTargetUpdate,
     SalesTargetOut,
     EmployeeAchievementRow,
+    EmployeeMyTargetSummary,
     CompanyRevenueSummary,
     CompanyRevenueItem
 )
@@ -283,6 +284,113 @@ def get_employee_achievements(
     # Sort by actual revenue desc, achievement_percentage desc
     rows.sort(key=lambda r: (r.actual_revenue, r.achievement_percentage), reverse=True)
     return rows
+
+@router.get("/my-target", response_model=EmployeeMyTargetSummary)
+def get_my_target(
+    period_year: Optional[int] = None,
+    period_month: Optional[int] = None,
+    period_type: str = "monthly",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Authenticated endpoint for the logged-in employee to retrieve their own assigned sales target,
+    actual confirmed revenue, remaining target, and achievement percentage.
+    Resolves the authenticated employee from user.id.
+    """
+    emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    if not emp:
+        # Check by email or username if user_id was not linked
+        emp = db.query(Employee).filter(
+            or_(
+                Employee.email == current_user.email,
+                Employee.username == current_user.username
+            )
+        ).first()
+
+    now = datetime.now()
+    year = period_year or now.year
+    month = period_month if period_month is not None else now.month
+    p_type = period_type.lower()
+
+    if not emp:
+        # If user has no employee record (e.g. root admin without employee profile)
+        return EmployeeMyTargetSummary(
+            has_target=False,
+            employee_id=0,
+            employee_name=current_user.full_name or current_user.username,
+            period_type=p_type,
+            period_month=month,
+            period_year=year,
+            assigned_target=0.0,
+            actual_revenue=0.0,
+            remaining_target=0.0,
+            achievement_percentage=0.0,
+            confirmed_invoices_count=0
+        )
+
+    # Find target in database
+    target_q = db.query(SalesTarget).filter(
+        SalesTarget.employee_id == emp.id,
+        SalesTarget.period_type == p_type,
+        SalesTarget.period_year == year
+    )
+    if p_type in ["monthly", "quarterly"] and month is not None:
+        target_q = target_q.filter(SalesTarget.period_month == month)
+
+    target_obj = target_q.first()
+    target_amt = float(target_obj.target_amount) if target_obj else 0.0
+
+    # Calculate actual revenue strictly from confirmed eligible invoices
+    invoice_q = db.query(Quotation).filter(
+        Quotation.doc_type == "invoice",
+        Quotation.status.in_(["issued", "paid"]),
+        Quotation.payment_status.in_(["paid", "partial"]),
+        Quotation.status != "cancelled",
+        or_(
+            Quotation.assigned_to == emp.id,
+            Quotation.created_by == emp.id,
+            Quotation.prepared_by.ilike(f"%{emp.name}%"),
+            Quotation.lead_id.in_(db.query(Quotation.lead_id).filter(Quotation.assigned_to == emp.id))
+        )
+    )
+
+    date_col = func.coalesce(Quotation.issue_date, Quotation.created_at)
+    if p_type == "monthly" and month is not None:
+        invoice_q = invoice_q.filter(
+            func.extract('year', date_col) == year,
+            func.extract('month', date_col) == month
+        )
+    elif p_type == "quarterly" and month is not None:
+        if month in [1, 2, 3, 4]:
+            q_months = [(month - 1) * 3 + 1, (month - 1) * 3 + 2, (month - 1) * 3 + 3]
+        else:
+            q_months = [month]
+        invoice_q = invoice_q.filter(
+            func.extract('year', date_col) == year,
+            func.extract('month', date_col).in_(q_months)
+        )
+    elif p_type == "yearly":
+        invoice_q = invoice_q.filter(func.extract('year', date_col) == year)
+
+    my_invoices = invoice_q.all()
+    actual_rev = sum(float(inv.grand_total or 0.0) for inv in my_invoices)
+    remaining = max(0.0, target_amt - actual_rev)
+    ach_pct = round((actual_rev / target_amt * 100), 1) if target_amt > 0 else 0.0
+
+    return EmployeeMyTargetSummary(
+        has_target=bool(target_obj and target_amt > 0),
+        employee_id=emp.id,
+        employee_name=emp.name,
+        period_type=p_type,
+        period_month=month if p_type != "yearly" else None,
+        period_year=year,
+        assigned_target=target_amt,
+        actual_revenue=actual_rev,
+        remaining_target=remaining,
+        achievement_percentage=ach_pct,
+        confirmed_invoices_count=len(my_invoices)
+    )
 
 @router.get("/companies-revenue", response_model=List[CompanyRevenueSummary])
 def get_companies_revenue(
