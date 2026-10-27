@@ -58,42 +58,22 @@ class ReInquiryService:
 
         # 1. Primary Match: Phone number
         if clean_phone and len(clean_phone) >= 7:
-            # Query candidate leads by exact match or suffix match (immune to formatting/spaces)
-            suffix = clean_phone[-6:] if len(clean_phone) >= 6 else clean_phone
-            candidates = db.query(Lead).filter(
-                or_(
-                    Lead.phone.ilike(f"%{clean_phone}%"),
-                    Lead.phone.ilike(f"%{suffix}%"),
-                    Lead.whatsapp_number.ilike(f"%{clean_phone}%"),
-                    Lead.whatsapp_number.ilike(f"%{suffix}%")
-                )
-            ).order_by(Lead.id.desc()).all()
-
-            for lead in candidates:
-                p_lead = ReInquiryService.normalize_phone(lead.phone)
-                wa_lead = ReInquiryService.normalize_phone(lead.whatsapp_number)
-                if (p_lead and p_lead == clean_phone) or (wa_lead and wa_lead == clean_phone):
-                    logger.info(f"Re-Inquiry match by PHONE: incoming '{phone}' matched Lead #{lead.id} ('{lead.phone}').")
-                    return lead
+            from utils.phone import find_existing_lead_by_phone, find_existing_customer_by_phone
+            matched = find_existing_lead_by_phone(db, phone)
+            if matched:
+                logger.info(f"Re-Inquiry match by PHONE: incoming '{phone}' matched Lead #{matched.id} ('{matched.phone}').")
+                return matched
 
             # Also check Customers table (converted customers who submit new inquiries)
-            cust_candidates = db.query(Customer).filter(
-                or_(
-                    Customer.phone.ilike(f"%{clean_phone}%"),
-                    Customer.phone.ilike(f"%{suffix}%")
-                )
-            ).all()
-
-            for cust in cust_candidates:
-                cust_p = ReInquiryService.normalize_phone(cust.phone)
-                if cust_p and cust_p == clean_phone:
-                    if cust.converted_from_lead:
-                        lead = db.query(Lead).filter(Lead.id == cust.converted_from_lead).first()
-                        if lead:
-                            logger.info(f"Re-Inquiry match by CUSTOMER PHONE: Customer #{cust.id} linked to Lead #{lead.id}.")
-                            return lead
-                    elif cust.lead:
-                        return cust.lead
+            matched_cust = find_existing_customer_by_phone(db, phone)
+            if matched_cust:
+                if matched_cust.converted_from_lead:
+                    lead = db.query(Lead).filter(Lead.id == matched_cust.converted_from_lead).first()
+                    if lead:
+                        logger.info(f"Re-Inquiry match by CUSTOMER PHONE: Customer #{matched_cust.id} linked to Lead #{lead.id}.")
+                        return lead
+                elif matched_cust.lead:
+                    return matched_cust.lead
 
         # 2. Secondary Match: Email address
         if clean_email and "@" in clean_email:

@@ -7,8 +7,10 @@ from sqlalchemy import or_
 
 from models.call_log import CallLog
 from models.lead import Lead
+from models.customer import Customer
 from models.employee import Employee
 from models.activity import LeadActivity
+from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
 from .service import (
     IVRService, 
     CALL_STATUS_COMPLETED, 
@@ -248,33 +250,43 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
     # -------------------------------------------------------------
     lead_id = None
     emp_id = None
-    
-    if len(cust_digits) >= 10:
-        target_lead = db.query(Lead).filter(
-            or_(
-                Lead.phone.ilike(f"%{cust_digits[-10:]}%"),
-                Lead.whatsapp_number.ilike(f"%{cust_digits[-10:]}%")
-            )
-        ).first()
+    target_lead = None
 
-        if target_lead:
-            lead_id = target_lead.id
-            logger.info(f"[IVR STAGE 3 - DB MATCH] Matched existing Lead ID={lead_id} ({target_lead.name})")
+    # Check if existing_call already has lead_id
+    if existing_call and existing_call.lead_id:
+        lead_id = existing_call.lead_id
+        target_lead = db.query(Lead).filter(Lead.id == lead_id).first()
+
+    if not lead_id and customer_phone_raw:
+        matched_lead = find_existing_lead_by_phone(db, customer_phone_raw)
+        if matched_lead:
+            lead_id = matched_lead.id
+            target_lead = matched_lead
+            logger.info(f"[IVR STAGE 3 - DB MATCH] Matched existing Lead ID={lead_id} ({target_lead.name}) via normalized phone {cust_digits[-10:] if len(cust_digits) >= 10 else cust_digits}")
         else:
-            # Auto-create new Lead for unassigned incoming prospect
-            formatted_phone = f"+91{cust_digits[-10:]}"
-            new_lead = Lead(
-                name=f"Inbound Caller ({cust_digits[-10:]})",
-                phone=formatted_phone,
-                source="IVR",
-                status="NEW",
-                requirement_notes=f"Auto-created from {detected_provider} IVR Call (Pilot Number: {pilot_phone}, Circle: {payload.get('billing_circle') or payload.get('circle', 'India')})"
-            )
-            db.add(new_lead)
-            db.flush()
-            lead_id = new_lead.id
-            target_lead = new_lead
-            logger.info(f"[IVR STAGE 3 - DB CREATED LEAD] Created new Lead ID={lead_id} for {formatted_phone}")
+            # Check customer table
+            matched_cust = find_existing_customer_by_phone(db, customer_phone_raw)
+            if matched_cust and matched_cust.converted_from_lead:
+                lead_id = matched_cust.converted_from_lead
+                target_lead = db.query(Lead).filter(Lead.id == lead_id).first()
+            elif call_direction == "OUTBOUND":
+                # OUTBOUND CALL SAFEGUARD: Outbound calls must NEVER auto-create leads
+                logger.info(f"[IVR STAGE 3 - DB MATCH] Outbound call to {customer_phone_raw} did not match an existing lead. Skipping auto-creation.")
+            elif len(cust_digits) >= 10:
+                # INBOUND CALL ONLY: Auto-create new Lead for unassigned incoming prospect
+                formatted_phone = f"+91{cust_digits[-10:]}"
+                new_lead = Lead(
+                    name=f"Inbound Caller ({cust_digits[-10:]})",
+                    phone=formatted_phone,
+                    source="IVR",
+                    status="NEW",
+                    requirement_notes=f"Auto-created from {detected_provider} IVR Call (Pilot Number: {pilot_phone}, Circle: {payload.get('billing_circle') or payload.get('circle', 'India')})"
+                )
+                db.add(new_lead)
+                db.flush()
+                lead_id = new_lead.id
+                target_lead = new_lead
+                logger.info(f"[IVR STAGE 3 - DB CREATED LEAD] Created new Lead ID={lead_id} for {formatted_phone}")
 
     # Agent matching & Employee linking:
     # - Outgoing: Initiating employee (preserved on existing_call)
@@ -314,26 +326,48 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
         action_taken = "UPDATED"
     else:
         # Create new CallLog record
-        new_call = CallLog(
-            provider=detected_provider,
-            provider_call_id=provider_call_id,
-            from_number=from_str,
-            to_number=to_str,
-            call_status=call_status,
-            call_direction=call_direction,
-            duration_seconds=duration_sec,
-            recording_url=recording_url,
-            started_at=datetime.datetime.utcnow(),
-            ended_at=datetime.datetime.utcnow() if call_status in [CALL_STATUS_COMPLETED, CALL_STATUS_FAILED, CALL_STATUS_BUSY, CALL_STATUS_MISSED] else None,
-            lead_id=lead_id,
-            employee_id=emp_id,
-            notes=f"{detected_provider} IVR ({call_direction}) | Agent: {agent_name} | Circle: {payload.get('billing_circle') or payload.get('circle', 'N/A')} | Operator: {payload.get('operator', 'N/A')}"
-        )
-        db.add(new_call)
-        db.commit()
-        db.refresh(new_call)
-        call_record_id = new_call.id
-        action_taken = "CREATED"
+        try:
+            new_call = CallLog(
+                provider=detected_provider,
+                provider_call_id=provider_call_id,
+                from_number=from_str,
+                to_number=to_str,
+                call_status=call_status,
+                call_direction=call_direction,
+                duration_seconds=duration_sec,
+                recording_url=recording_url,
+                started_at=datetime.datetime.utcnow(),
+                ended_at=datetime.datetime.utcnow() if call_status in [CALL_STATUS_COMPLETED, CALL_STATUS_FAILED, CALL_STATUS_BUSY, CALL_STATUS_MISSED] else None,
+                lead_id=lead_id,
+                employee_id=emp_id,
+                notes=f"{detected_provider} IVR ({call_direction}) | Agent: {agent_name} | Circle: {payload.get('billing_circle') or payload.get('circle', 'N/A')} | Operator: {payload.get('operator', 'N/A')}"
+            )
+            db.add(new_call)
+            db.commit()
+            db.refresh(new_call)
+            call_record_id = new_call.id
+            action_taken = "CREATED"
+        except Exception as insert_err:
+            db.rollback()
+            existing_call = db.query(CallLog).filter(CallLog.provider_call_id == provider_call_id).first()
+            if existing_call:
+                logger.info(f"[IVR DEDUP] Handled race condition: updated CallLog ID={existing_call.id} for provider_call_id={provider_call_id}")
+                existing_call.call_status = call_status
+                if duration_sec:
+                    existing_call.duration_seconds = duration_sec
+                if recording_url and not existing_call.recording_url:
+                    existing_call.recording_url = recording_url
+                if lead_id and not existing_call.lead_id:
+                    existing_call.lead_id = lead_id
+                if emp_id and not existing_call.employee_id:
+                    existing_call.employee_id = emp_id
+                db.commit()
+                db.refresh(existing_call)
+                call_record_id = existing_call.id
+                action_taken = "UPDATED"
+            else:
+                logger.error(f"[IVR ERROR] Failed to create CallLog: {insert_err}")
+                raise insert_err
 
     # Add Lead Activity entry
     if lead_id:
@@ -362,6 +396,7 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
 
     return {
         "status": "success",
+        "action": action_taken,
         "request_id": req_id,
         "message": f"Call log {action_taken.lower()} successfully",
         "call_id": call_record_id,

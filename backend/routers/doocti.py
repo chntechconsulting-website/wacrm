@@ -11,10 +11,12 @@ from sqlalchemy import desc, asc, or_
 
 from database import get_db
 from models import Lead, LeadActivity, Customer, Employee, CallLog
+from models.lead import LeadAssignment
 from models.user import User
 from models.integration import IntegrationConfig
 from services.auth import get_current_user
 from utils.timezone import get_ist_now, IST_TIMEZONE
+from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
 
 logger = logging.getLogger(__name__)
 
@@ -69,16 +71,7 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
 
 def clean_phone(phone: Optional[Any]) -> str:
     """Normalize phone string extracting standard 10-digit number."""
-    if not phone:
-        return ""
-    cleaned = "".join(filter(str.isdigit, str(phone)))
-    if len(cleaned) == 12 and cleaned.startswith("91"):
-        cleaned = cleaned[2:]
-    elif len(cleaned) == 11 and cleaned.startswith("0"):
-        cleaned = cleaned[1:]
-    elif len(cleaned) > 10:
-        cleaned = cleaned[-10:]
-    return cleaned
+    return normalize_phone(phone)
 
 def is_did_number(number: Optional[Any], did_list: Optional[List[str]] = None) -> bool:
     """Check if given number matches any configured DID."""
@@ -294,19 +287,6 @@ class DooctiLeadUpdatePayload(BaseModel):
     lead_stage: Optional[str] = None
     agent_email: Optional[str] = None
 
-# Helper to normalize phone numbers for matching
-def clean_phone(phone: Optional[str]) -> str:
-    if not phone:
-        return ""
-    # Strip spaces, hyphens, parentheses, and leading plus
-    cleaned = "".join(filter(str.isdigit, str(phone)))
-    # If starts with country code 91 and has 12 digits, extract last 10 digits
-    if len(cleaned) == 12 and cleaned.startswith("91"):
-        cleaned = cleaned[2:]
-    elif len(cleaned) > 10:
-        cleaned = cleaned[-10:]
-    return cleaned
-
 # -------------------------------------------------------------
 # 1. Lead Retrieval by Phone Number (PDF Page 4 & 6)
 # Checks Leads -> Contacts -> Auto-creates Lead if absent
@@ -319,17 +299,13 @@ def get_lead_by_number(
     auto_create: bool = Query(False, description="Auto-create lead if not found (defaults to False)"),
     db: Session = Depends(get_db)
 ):
-    target_num = clean_phone(number or phone)
+    raw_input_phone = number or phone
+    target_num = clean_phone(raw_input_phone)
     if not target_num:
         raise HTTPException(status_code=400, detail="Phone number is required.")
 
-    # 1. Search in Leads table (ordered descending by ID/creation date)
-    matched_lead = db.query(Lead).filter(
-        or_(
-            Lead.phone.like(f"%{target_num}%"),
-            Lead.whatsapp_number.like(f"%{target_num}%")
-        )
-    ).order_by(desc(Lead.id)).first()
+    # 1. Search in Leads table using robust normalized phone search
+    matched_lead = find_existing_lead_by_phone(db, raw_input_phone)
 
     if matched_lead:
         lead_owner_name = "Unassigned"
@@ -364,10 +340,8 @@ def get_lead_by_number(
             "data": lead_data
         }
 
-    # 2. Search in Contacts / Customers table
-    matched_customer = db.query(Customer).filter(
-        Customer.phone.like(f"%{target_num}%")
-    ).order_by(desc(Customer.id)).first()
+    # 2. Search in Contacts / Customers table using robust normalized phone search
+    matched_customer = find_existing_customer_by_phone(db, raw_input_phone)
 
     if matched_customer:
         contact_data = {
@@ -398,7 +372,7 @@ def get_lead_by_number(
 
     # 3. Not found: If auto_create is True AND the number is a full valid phone (>= 10 digits)
     if auto_create and len(target_num) >= 10:
-        raw_display_num = number or phone or target_num
+        raw_display_num = raw_input_phone or target_num
         new_lead = Lead(
             name=f"Inbound Caller ({raw_display_num})",
             phone=raw_display_num,
@@ -436,6 +410,16 @@ def get_lead_by_number(
             "company": "",
             "entity_type": "Lead",
             "created_at": datetime.datetime.utcnow().isoformat()
+        }
+
+        return {
+            "status": "success",
+            "success": True,
+            "exists": False,
+            "auto_created": True,
+            "entity_type": "Lead",
+            "lead": lead_data,
+            "data": lead_data
         }
 
         return {
@@ -719,7 +703,9 @@ async def push_doocti_call_log(
         customer_phone = extract_string_val(
             raw_data.get("phone_number") or 
             raw_data.get("customer_number") or 
+            raw_data.get("destination") or 
             raw_data.get("to_number") or 
+            raw_data.get("callee") or 
             raw_data.get("phone") or 
             raw_data.get("number") or 
             (existing_log.to_number if existing_log else "")
@@ -834,11 +820,13 @@ async def push_doocti_call_log(
         if ended_at and answered_at and ended_at >= answered_at:
             dur_sec = max(0, int((ended_at - answered_at).total_seconds()))
     elif any(k in raw_upper for k in ["COMPLETED", "HANGUP", "DISCONNECTED", "ENDED"]):
-        if answered_at and ended_at and ended_at >= answered_at:
+        status_str = "COMPLETED"
+        if has_explicit_duration and dur_sec > 0:
+            pass  # Explicit duration given in payload takes precedence
+        elif answered_at and ended_at and ended_at >= answered_at:
             dur_sec = max(0, int((ended_at - answered_at).total_seconds()))
-            status_str = "COMPLETED"
         elif dur_sec > 0:
-            status_str = "COMPLETED"
+            pass
         else:
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
             dur_sec = 0
@@ -846,42 +834,7 @@ async def push_doocti_call_log(
     else:
         status_str = raw_upper or ("RINGING" if call_dir == "INBOUND" and dur_sec == 0 else "COMPLETED")
 
-    # 9. Resolve or Auto-create Lead
-    resolved_lead_id = None
-    entity_id_val = raw_data.get("entity_id") or raw_data.get("lead_id")
-    if entity_id_val and str(entity_id_val).isdigit():
-        resolved_lead_id = int(entity_id_val)
-    elif clean_target:
-        matched = db.query(Lead).filter(
-            or_(
-                Lead.phone.like(f"%{clean_target}%"),
-                Lead.whatsapp_number.like(f"%{clean_target}%")
-            )
-        ).order_by(desc(Lead.id)).first()
-        if matched:
-            resolved_lead_id = matched.id
-        else:
-            # Check Customer table
-            matched_cust = db.query(Customer).filter(
-                Customer.phone.like(f"%{clean_target}%")
-            ).first()
-
-            # Auto-create lead so caller is tracked in CRM
-            raw_display = customer_phone or clean_target
-            new_lead = Lead(
-                name=f"Call Lead ({raw_display})",
-                phone=raw_display,
-                source="DOOCTI",
-                status="CONTACTED" if status_str in ["ANSWERED", "COMPLETED"] else "NEW",
-                priority="MEDIUM",
-                requirement_notes=f"Auto-created from DooCTI Call. Station: {station_str or 'Unassigned'}, Agent: {agent_name or 'DooCTI'}"
-            )
-            db.add(new_lead)
-            db.commit()
-            db.refresh(new_lead)
-            resolved_lead_id = new_lead.id
-
-    # 10. Resolve Employee (Agent) - Essential for Employee Call Logs Permissions!
+    # 9. Resolve Employee (Agent) - Determine calling/answering agent early
     explicit_emp_id = raw_data.get("employee_id")
     resolved_emp_id = resolve_employee_for_call(
         db=db,
@@ -892,17 +845,96 @@ async def push_doocti_call_log(
         extension_map=ext_mapping
     )
 
-    # If still not resolved, check if lead is assigned to an employee
+    # 10. Resolve or Auto-create Lead
+    resolved_lead_id = None
+    entity_id_val = raw_data.get("entity_id") or raw_data.get("lead_id")
+    if entity_id_val and str(entity_id_val).isdigit() and int(entity_id_val) > 0:
+        # Verify entity_id actually exists in Lead table
+        lead_candidate = db.query(Lead).filter(Lead.id == int(entity_id_val)).first()
+        if lead_candidate:
+            resolved_lead_id = lead_candidate.id
+
+    # If not resolved by explicit entity_id, search by normalized phone number
+    if not resolved_lead_id and clean_target:
+        matched = find_existing_lead_by_phone(db, customer_phone or clean_target)
+        if matched:
+            resolved_lead_id = matched.id
+        else:
+            # Check Customer table
+            matched_cust = find_existing_customer_by_phone(db, customer_phone or clean_target)
+            if matched_cust and matched_cust.converted_from_lead:
+                resolved_lead_id = matched_cust.converted_from_lead
+            elif len(clean_target) >= 10:
+                raw_display = customer_phone or clean_target
+                if call_dir == "OUTBOUND":
+                    # OUTBOUND CALL AUTO-CREATION:
+                    # When an agent dials a new phone number that doesn't exist in CRM,
+                    # automatically create a new lead and assign to the logged-in/calling agent.
+                    calling_agent_str = agent_name or station_str or f"Agent #{resolved_emp_id}" if resolved_emp_id else "Agent"
+                    new_lead = Lead(
+                        name=f"Call Lead ({raw_display})",
+                        phone=raw_display,
+                        source="DOOCTI",
+                        status="NEW LEAD",
+                        priority="MEDIUM",
+                        assigned_to=resolved_emp_id,
+                        assigned_by=resolved_emp_id,
+                        assigned_at=now_ist if resolved_emp_id else None,
+                        requirement_notes=f"Auto-created from outbound DooCTI call by {calling_agent_str}."
+                    )
+                    db.add(new_lead)
+                    db.commit()
+                    db.refresh(new_lead)
+                    resolved_lead_id = new_lead.id
+
+                    # Record LeadAssignment audit log
+                    if resolved_emp_id:
+                        assignment_record = LeadAssignment(
+                            lead_id=new_lead.id,
+                            assigned_to=resolved_emp_id,
+                            assigned_by=resolved_emp_id,
+                            assigned_at=now_ist,
+                            assignment_method="OUTBOUND_CALL",
+                            notes=f"Auto-assigned to calling agent ({calling_agent_str}) on outbound call"
+                        )
+                        db.add(assignment_record)
+                        db.commit()
+
+                    logger.info(
+                        f"✨ [DOOCTI CDR] Auto-created new Lead ID={resolved_lead_id} for outbound call to {raw_display}. "
+                        f"Assigned to Employee ID={resolved_emp_id}."
+                    )
+                else:
+                    # INBOUND CALL: Auto-create lead so caller is tracked in CRM
+                    new_lead = Lead(
+                        name=f"Call Lead ({raw_display})",
+                        phone=raw_display,
+                        source="DOOCTI",
+                        status="CONTACTED" if status_str in ["ANSWERED", "COMPLETED"] else "NEW LEAD",
+                        priority="MEDIUM",
+                        assigned_to=resolved_emp_id,
+                        assigned_by=resolved_emp_id if resolved_emp_id else None,
+                        assigned_at=now_ist if resolved_emp_id else None,
+                        requirement_notes=f"Auto-created from DooCTI Inbound Call. Station: {station_str or 'Unassigned'}, Agent: {agent_name or 'DooCTI'}"
+                    )
+                    db.add(new_lead)
+                    db.commit()
+                    db.refresh(new_lead)
+                    resolved_lead_id = new_lead.id
+                    logger.info(f"✨ [DOOCTI CDR] Auto-created new Lead ID={resolved_lead_id} for incoming caller: {raw_display}")
+
+    # If employee still not resolved, check if lead is assigned to an employee
     if not resolved_emp_id and resolved_lead_id:
         target_lead = db.query(Lead).filter(Lead.id == resolved_lead_id).first()
         if target_lead and target_lead.assigned_to:
             resolved_emp_id = target_lead.assigned_to
 
-    # Fallback to first active employee so record is never orphaned
     if not resolved_emp_id:
-        default_emp = db.query(Employee).filter(Employee.status == "ACTIVE").first()
-        if default_emp:
-            resolved_emp_id = default_emp.id
+        logger.warning(
+            f"⚠️ [DOOCTI CDR] Agent identity could not be resolved from payload "
+            f"(station='{station_str}', agent='{agent_name}', email='{agent_email}', explicit_emp_id='{explicit_emp_id}'). "
+            f"Leaving unassigned instead of assigning to Admin."
+        )
 
     # 11. Compile Notes
     notes_parts = []
@@ -1017,26 +1049,49 @@ async def push_doocti_call_log(
             from_num = matched_did or station_str or (configured_dids[0] if configured_dids else "")
             to_num = customer_phone or clean_target
 
-        call_entry = CallLog(
-            lead_id=resolved_lead_id,
-            employee_id=resolved_emp_id,
-            provider="DOOCTI",
-            provider_call_id=call_id,
-            from_number=from_num,
-            to_number=to_num,
-            call_status=status_str,
-            call_direction=call_dir,
-            duration_seconds=dur_sec,
-            recording_url=rec_url,
-            started_at=started_at,
-            answered_at=answered_at,
-            ended_at=ended_at,
-            notes=combined_notes
-        )
-        db.add(call_entry)
-        db.commit()
-        db.refresh(call_entry)
-        logger.info(f"✅ [DOOCTI CDR] Created CallLog ID={call_entry.id} uniqueid='{call_id}' Status='{status_str}' Duration={dur_sec}s EmpID={resolved_emp_id}")
+        try:
+            call_entry = CallLog(
+                lead_id=resolved_lead_id,
+                employee_id=resolved_emp_id,
+                provider="DOOCTI",
+                provider_call_id=call_id,
+                from_number=from_num,
+                to_number=to_num,
+                call_status=status_str,
+                call_direction=call_dir,
+                duration_seconds=dur_sec,
+                recording_url=rec_url,
+                started_at=started_at,
+                answered_at=answered_at,
+                ended_at=ended_at,
+                notes=combined_notes
+            )
+            db.add(call_entry)
+            db.commit()
+            db.refresh(call_entry)
+            logger.info(f"✅ [DOOCTI CDR] Created CallLog ID={call_entry.id} uniqueid='{call_id}' Status='{status_str}' Duration={dur_sec}s EmpID={resolved_emp_id}")
+        except Exception as insert_err:
+            db.rollback()
+            # Handle race condition where provider_call_id was concurrently inserted
+            existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+            if existing_log:
+                logger.info(f"🔁 [DOOCTI CDR] Handled concurrent insertion race condition for CallLog uniqueid='{call_id}'. Updating ID={existing_log.id}.")
+                if has_explicit_status:
+                    existing_log.call_status = status_str
+                if dur_sec > 0:
+                    existing_log.duration_seconds = dur_sec
+                if rec_url and not existing_log.recording_url:
+                    existing_log.recording_url = rec_url
+                if resolved_lead_id and not existing_log.lead_id:
+                    existing_log.lead_id = resolved_lead_id
+                if resolved_emp_id and not existing_log.employee_id:
+                    existing_log.employee_id = resolved_emp_id
+                db.commit()
+                db.refresh(existing_log)
+                call_entry = existing_log
+            else:
+                logger.error(f"❌ [DOOCTI CDR] Failed to insert CallLog for uniqueid='{call_id}': {insert_err}")
+                raise insert_err
 
     # 13. Append activity to lead history
     if resolved_lead_id:

@@ -525,7 +525,12 @@ const DooctiInAppDialer = () => {
       cleanNumber = cleanNumber.slice(-10);
     }
 
-    const leadName = contactData.name || contactData.contact_name || contactData.lead_name || matchedLead?.name || 'Customer';
+    // Always ensure contactData contains matchedLead if not already provided
+    const resolvedContactData = (contactData && (contactData.id || contactData.lead_id))
+      ? contactData
+      : (matchedLead || contactData || {});
+
+    const leadName = resolvedContactData.name || resolvedContactData.contact_name || resolvedContactData.lead_name || matchedLead?.name || 'Customer';
     const userExt = String(config.userNumber || '').trim();
     if (!userExt) {
       setDialerNotice({
@@ -542,10 +547,10 @@ const DooctiInAppDialer = () => {
     // IMPORTANT: Do NOT include customer_number to ensure Doocti's listener executes branch C,
     // which extracts cli_number and passes it into An(phone, station, id, name, cli_number, unique_id)
     const payload = {
-      entity_id: String(contactData.id || contactData.lead_id || matchedLead?.id || '0'),
+      entity_id: String(resolvedContactData.id || resolvedContactData.lead_id || matchedLead?.id || '0'),
       entity_name: leadName,
       entity_number: cleanNumber,
-      entity_type: contactData.entity_type || (contactData.company ? 'Contact' : 'Leads'),
+      entity_type: resolvedContactData.entity_type || (resolvedContactData.company ? 'Contact' : 'Leads'),
       cli_number: outboundCli,
       crm_unique_id: uniqueSessionId,
       station: userExt,
@@ -558,7 +563,7 @@ const DooctiInAppDialer = () => {
     activeSessionRef.current = {
       callId: uniqueSessionId,
       customerPhone: cleanNumber,
-      contactData: contactData,
+      contactData: resolvedContactData,
       startTime: Date.now(),
       answeredAt: null,
       employeeId: user?.employee_id || user?.id,
@@ -748,17 +753,18 @@ const DooctiInAppDialer = () => {
 
     // 2. Log CDR to CRM backend if phone has digits
     if (cleanPhone && cleanPhone.length >= 6 && cleanPhone !== userExt) {
+      const resolvedEntityId = session?.contactData?.id || session?.contactData?.lead_id || matchedLead?.id || null;
       const pushPayload = {
         uniqueid: session?.callId || `doocti_${userExt}_${cleanPhone}_${Date.now()}`,
         phone_number: cleanPhone,
         station: userExt,
         agent: user?.name || config.userEmail,
         agent_email: user?.email || config.userEmail,
-        employee_id: user?.employee_id || user?.id || 1,
+        employee_id: user?.employee_id || user?.id || null,
         status: finalStatus,
         duration: talkDuration,
         call_direction: session?.direction || (isDirectionInbound ? 'INBOUND' : 'OUTBOUND'),
-        entity_id: session?.contactData?.id || matchedLead?.id || null,
+        entity_id: resolvedEntityId,
         entity_type: 'Lead',
         start_time: session?.startTime ? new Date(session.startTime).toISOString() : new Date().toISOString(),
         answer_time: (wasAnswered && answerTime) ? new Date(answerTime).toISOString() : null,
@@ -925,25 +931,7 @@ const DooctiInAppDialer = () => {
             isHeld: false
           });
 
-          // 1. Immediately register call in CRM DB as RINGING so the whole system knows a call is active
-          API.post('/doocti/call-log', {
-            uniqueid: realCallId,
-            phone_number: inNum || rawNum,
-            station: config.userNumber || '',
-            agent: user?.name || config.userEmail,
-            agent_email: user?.email || config.userEmail,
-            employee_id: user?.employee_id || user?.id,
-            status: 'RINGING',
-            call_direction: 'INBOUND',
-            duration: 0,
-            start_time: new Date().toISOString()
-          }).then(res => {
-            if (res.data?.call_log_id && activeSessionRef.current) {
-              activeSessionRef.current.dbCallId = res.data.call_log_id;
-            }
-          }).catch(() => {});
-
-          // 2. Fetch CRM lead details for caller ID in real time
+          // 1. Fetch CRM lead details for caller ID in real time BEFORE logging RINGING
           if (inNum && inNum.length >= 6) {
             API.get(`/doocti/lead-by-number?number=${inNum}&auto_create=false`)
               .then(res => {
@@ -957,6 +945,25 @@ const DooctiInAppDialer = () => {
                   name: leadName,
                   contactData: lead
                 }) : null);
+
+                // Register call in CRM DB as RINGING with resolved entity_id to eliminate duplicate leads
+                API.post('/doocti/call-log', {
+                  uniqueid: realCallId,
+                  phone_number: inNum || rawNum,
+                  station: config.userNumber || '',
+                  agent: user?.name || config.userEmail,
+                  agent_email: user?.email || config.userEmail,
+                  employee_id: user?.employee_id || user?.id,
+                  entity_id: lead?.id || null,
+                  status: 'RINGING',
+                  call_direction: 'INBOUND',
+                  duration: 0,
+                  start_time: new Date().toISOString()
+                }).then(logRes => {
+                  if (logRes.data?.call_log_id && activeSessionRef.current) {
+                    activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+                  }
+                }).catch(() => {});
 
                 // Dispatch global real-time event for Layout.jsx & other CRM components
                 window.dispatchEvent(new CustomEvent('crm-incoming-call', {
@@ -976,6 +983,23 @@ const DooctiInAppDialer = () => {
                 }));
               })
               .catch(() => {
+                API.post('/doocti/call-log', {
+                  uniqueid: realCallId,
+                  phone_number: inNum || rawNum,
+                  station: config.userNumber || '',
+                  agent: user?.name || config.userEmail,
+                  agent_email: user?.email || config.userEmail,
+                  employee_id: user?.employee_id || user?.id,
+                  status: 'RINGING',
+                  call_direction: 'INBOUND',
+                  duration: 0,
+                  start_time: new Date().toISOString()
+                }).then(logRes => {
+                  if (logRes.data?.call_log_id && activeSessionRef.current) {
+                    activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+                  }
+                }).catch(() => {});
+
                 window.dispatchEvent(new CustomEvent('crm-incoming-call', {
                   detail: {
                     id: null,
@@ -993,6 +1017,23 @@ const DooctiInAppDialer = () => {
                 }));
               });
           } else {
+            API.post('/doocti/call-log', {
+              uniqueid: realCallId,
+              phone_number: inNum || rawNum,
+              station: config.userNumber || '',
+              agent: user?.name || config.userEmail,
+              agent_email: user?.email || config.userEmail,
+              employee_id: user?.employee_id || user?.id,
+              status: 'RINGING',
+              call_direction: 'INBOUND',
+              duration: 0,
+              start_time: new Date().toISOString()
+            }).then(logRes => {
+              if (logRes.data?.call_log_id && activeSessionRef.current) {
+                activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+              }
+            }).catch(() => {});
+
             window.dispatchEvent(new CustomEvent('crm-incoming-call', {
               detail: {
                 id: null,
