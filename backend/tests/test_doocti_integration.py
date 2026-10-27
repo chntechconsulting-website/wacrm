@@ -372,5 +372,22 @@ class TestDooctiIntegration(unittest.TestCase):
         self.assertEqual(log.call_status, "COMPLETED")
         self.assertEqual(log.duration_seconds, 22)
 
+    def test_doocti_status_complete_maps_to_completed(self):
+        # DooCTI CDR portal sends status as "COMPLETE" (without trailing D)
+        call_id = "test_doocti_complete_status_003"
+        res = self.client.post("/api/doocti/call-log", json={
+            "uniqueid": call_id,
+            "phone_number": "9876543213",
+            "station": "1283",
+            "status": "COMPLETE",
+            "agent_email": "itsales@chnindia.com",
+            "did": "7969671856"
+        })
+        self.assertEqual(res.status_code, 200)
+
+        log = self.db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.call_status, "COMPLETED")
+
 if __name__ == "__main__":
     unittest.main()

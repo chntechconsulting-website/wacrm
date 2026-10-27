@@ -839,7 +839,7 @@ async def push_doocti_call_log(
             answered_at = started_at or now_ist
         if ended_at and answered_at and ended_at >= answered_at:
             dur_sec = max(0, int((ended_at - answered_at).total_seconds()))
-    elif any(k in raw_upper for k in ["COMPLETED", "HANGUP", "DISCONNECTED", "ENDED"]):
+    elif any(k in raw_upper for k in ["COMPLETED", "COMPLETE", "HANGUP", "DISCONNECTED", "ENDED"]):
         status_str = "COMPLETED"
         if has_explicit_duration and dur_sec > 0:
             pass  # Explicit duration given in payload takes precedence
@@ -850,6 +850,9 @@ async def push_doocti_call_log(
         elif has_recording or was_previously_answered:
             # Call had recording or was answered, preserve COMPLETED status
             pass
+        elif raw_upper in ["COMPLETE", "COMPLETED"]:
+            # Provider explicitly reported COMPLETE / COMPLETED - honor provider's disposition
+            status_str = "COMPLETED"
         else:
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
             dur_sec = 0
