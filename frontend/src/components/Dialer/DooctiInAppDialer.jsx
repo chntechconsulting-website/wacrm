@@ -1773,6 +1773,7 @@ const DooctiInAppDialer = () => {
               className={`bottom-nav-btn ${activeTab === 'home' ? 'active' : ''}`}
               onClick={() => {
                 setActiveTab('home');
+                window.focus();
                 fetchRecentCalls();
               }}
             >
@@ -1783,7 +1784,11 @@ const DooctiInAppDialer = () => {
             <button
               type="button"
               className={`bottom-nav-btn ${activeTab === 'dialpad' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dialpad')}
+              onClick={() => {
+                setActiveTab('dialpad');
+                window.focus();
+                setTimeout(() => dialpadInputRef.current?.focus(), 30);
+              }}
             >
               <Grid size={19} />
               <span>Dialpad</span>
@@ -1794,6 +1799,7 @@ const DooctiInAppDialer = () => {
               className={`bottom-nav-btn ${activeTab === 'leads' ? 'active' : ''}`}
               onClick={() => {
                 setActiveTab('leads');
+                window.focus();
                 fetchLeads(leadSearchQuery);
               }}
             >
