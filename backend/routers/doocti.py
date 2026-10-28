@@ -303,6 +303,9 @@ def get_lead_by_number(
     number: Optional[str] = Query(None),
     phone: Optional[str] = Query(None),
     auto_create: bool = Query(False, description="Auto-create lead if not found (defaults to False)"),
+    uniqueid: Optional[str] = Query(None, description="Optional incoming PBX call unique ID"),
+    call_id: Optional[str] = Query(None),
+    station: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     raw_input_phone = number or phone
@@ -313,7 +316,74 @@ def get_lead_by_number(
     # 1. Search in Leads table using robust normalized phone search
     matched_lead = find_existing_lead_by_phone(db, raw_input_phone)
 
+    # Helper to ensure an incoming RINGING call record is immediately logged
+    def record_incoming_ringing_call(lead_id: Optional[int], caller_phone_str: str):
+        try:
+            cid = uniqueid or call_id
+            now_ist = get_ist_now()
+            # If uniqueid provided, check if CallLog already exists
+            existing_c = None
+            if cid:
+                existing_c = db.query(CallLog).filter(CallLog.provider_call_id == cid).first()
+            if not existing_c:
+                # Check 2-min window for same caller to avoid duplicate ringing entries
+                window_start = now_ist - datetime.timedelta(minutes=2)
+                existing_c = (
+                    db.query(CallLog)
+                    .filter(
+                        CallLog.from_number.like(f"%{target_num[-10:] if len(target_num)>=10 else target_num}%"),
+                        CallLog.call_direction == "INBOUND",
+                        CallLog.created_at >= window_start
+                    )
+                    .order_by(desc(CallLog.id))
+                    .first()
+                )
+
+            if not existing_c:
+                doocti_cfg = get_doocti_config(db)
+                dids = doocti_cfg.get("did_numbers") or DOOCTI_DIDS
+                to_trunk = dids[0] if dids else "07969671855"
+
+                # Check if lead is already assigned to an employee
+                emp_id = None
+                if lead_id:
+                    ld = db.query(Lead).filter(Lead.id == lead_id).first()
+                    if ld and ld.assigned_to:
+                        emp_id = ld.assigned_to
+
+                lead_cat = None
+                if lead_id:
+                    ld = db.query(Lead).filter(Lead.id == lead_id).first()
+                    if ld:
+                        lead_cat = ld.product_category
+
+                generated_call_id = cid or f"doocti_in_{target_num}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+                ringing_entry = CallLog(
+                    lead_id=lead_id,
+                    employee_id=emp_id,
+                    provider="DOOCTI",
+                    provider_call_id=generated_call_id,
+                    from_number=caller_phone_str,
+                    to_number=to_trunk,
+                    call_status="RINGING",
+                    call_direction="INBOUND",
+                    duration_seconds=0,
+                    started_at=now_ist,
+                    notes=f"Inbound call ringing from {caller_phone_str}",
+                    product_category=lead_cat or "UNCLASSIFIED"
+                )
+                db.add(ringing_entry)
+                db.commit()
+                logger.info(f"🔔 [DOOCTI INBOUND] Created initial RINGING CallLog ID={ringing_entry.id} for caller {caller_phone_str}")
+        except Exception as e:
+            logger.warning(f"Failed to record initial ringing call in get_lead_by_number: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
     if matched_lead:
+        record_incoming_ringing_call(matched_lead.id, matched_lead.phone or raw_input_phone)
         lead_owner_name = "Unassigned"
         if matched_lead.assigned_to:
             emp = db.query(Employee).filter(Employee.id == matched_lead.assigned_to).first()
@@ -356,6 +426,7 @@ def get_lead_by_number(
     matched_customer = find_existing_customer_by_phone(db, raw_input_phone)
 
     if matched_customer:
+        record_incoming_ringing_call(matched_customer.converted_from_lead, matched_customer.phone or raw_input_phone)
         contact_data = {
             "id": matched_customer.id,
             "customer_id": matched_customer.id,
@@ -407,6 +478,9 @@ def get_lead_by_number(
         db.add(activity)
         db.commit()
 
+        # Immediate record of incoming ringing call
+        record_incoming_ringing_call(new_lead.id, raw_display_num)
+
         lead_data = {
             "id": new_lead.id,
             "customer_id": new_lead.id,
@@ -437,15 +511,9 @@ def get_lead_by_number(
             "data": lead_data
         }
 
-        return {
-            "status": "success",
-            "success": True,
-            "exists": False,
-            "auto_created": True,
-            "entity_type": "Lead",
-            "lead": lead_data,
-            "data": lead_data
-        }
+    # Even if auto_create is False, record the inbound ringing call if it has a valid phone number
+    if len(target_num) >= 6:
+        record_incoming_ringing_call(None, raw_input_phone)
 
     return {
         "status": "not_found",
@@ -786,9 +854,10 @@ async def push_doocti_call_log(
 
     # 8b. Answered / Connected verification:
     # A call is definitively answered if it has positive duration, a valid recording, or answered_at
+    # Note: Dummy recording URLs with duration 0 on failed/missed calls do NOT count as answered!
     has_positive_duration = dur_sec > 0 or bool(existing_log and existing_log.duration_seconds and existing_log.duration_seconds > 0)
-    has_recording = bool(rec_url or (existing_log and existing_log.recording_url))
-    was_previously_answered = bool(existing_log and (existing_log.answered_at or (existing_log.call_status or '').upper() in ["ANSWERED", "CONNECTED", "COMPLETED"]))
+    has_recording = bool((rec_url and dur_sec > 0) or (existing_log and existing_log.recording_url and existing_log.duration_seconds and existing_log.duration_seconds > 0))
+    was_previously_answered = bool(existing_log and (existing_log.answered_at or ((existing_log.call_status or '').upper() in ["ANSWERED", "CONNECTED"] and existing_log.duration_seconds and existing_log.duration_seconds > 0)))
 
     # 9. Call Status normalization
     has_explicit_status = any(raw_data.get(k) for k in ["status", "call_status", "disposition", "call_state"])
@@ -816,30 +885,30 @@ async def push_doocti_call_log(
         answered_at = None
         ended_at = None
     elif any(k in raw_upper for k in ["NO ANSWER", "NO_ANSWER", "NOT ANSWER", "NOT ANSWERED", "NOANSWER"]):
-        # Protection: If the call has audio recording, positive talk duration, or was confirmed answered,
+        # Protection: If the call has real audio recording, positive talk duration, or was confirmed answered,
         # it CANNOT be classified as NO_ANSWER!
-        if has_positive_duration or has_recording or was_previously_answered:
+        if has_positive_duration or was_previously_answered:
             status_str = "COMPLETED"
         else:
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
             dur_sec = 0
             answered_at = None
     elif any(k in raw_upper for k in ["MISSED", "UNANSWERED", "DECLINED", "REJECTED"]):
-        if has_positive_duration or has_recording or was_previously_answered:
+        if has_positive_duration or was_previously_answered:
             status_str = "COMPLETED"
         else:
             status_str = "MISSED"
             dur_sec = 0
             answered_at = None
     elif any(k in raw_upper for k in ["BUSY", "ENGAGED"]):
-        if has_positive_duration or has_recording or was_previously_answered:
+        if has_positive_duration or was_previously_answered:
             status_str = "COMPLETED"
         else:
             status_str = "BUSY"
             dur_sec = 0
             answered_at = None
     elif any(k in raw_upper for k in ["FAIL", "ERROR"]):
-        if has_positive_duration or has_recording or was_previously_answered:
+        if has_positive_duration or was_previously_answered:
             status_str = "COMPLETED"
         else:
             # An incoming call that was not answered or got disconnected is a MISSED call, not FAILED!
@@ -860,18 +929,20 @@ async def push_doocti_call_log(
         else:
             status_str = "ANSWERED"  # Internal active in-call state while talking
     elif any(k in raw_upper for k in ["COMPLETED", "COMPLETE", "HANGUP", "DISCONNECTED", "ENDED"]):
-        status_str = "COMPLETED"
-        if has_explicit_duration and dur_sec > 0:
-            pass  # Explicit duration given in payload takes precedence
+        # Disconnect / Complete event:
+        # If inbound call has 0 duration and was not answered, it is a MISSED call!
+        if call_dir == "INBOUND" and dur_sec == 0 and not answered_at and not was_previously_answered:
+            status_str = "MISSED"
+            dur_sec = 0
+            answered_at = None
+        elif dur_sec > 0 or has_positive_duration:
+            status_str = "COMPLETED"
         elif answered_at and ended_at and ended_at >= answered_at:
             dur_sec = max(0, int((ended_at - answered_at).total_seconds()))
-        elif dur_sec > 0 or has_positive_duration:
-            pass
-        elif has_recording or was_previously_answered:
-            # Call had recording or was answered, preserve COMPLETED status
-            pass
-        elif raw_upper in ["COMPLETE", "COMPLETED"]:
-            # Provider explicitly reported COMPLETE / COMPLETED - honor provider's disposition
+            status_str = "COMPLETED" if dur_sec > 0 else ("MISSED" if call_dir == "INBOUND" else "NO_ANSWER")
+        elif was_previously_answered:
+            status_str = "COMPLETED"
+        elif raw_upper in ["COMPLETE", "COMPLETED"] and dur_sec > 0:
             status_str = "COMPLETED"
         else:
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
@@ -1048,12 +1119,11 @@ async def push_doocti_call_log(
         # 1. If payload didn't explicitly specify status, preserve existing status
         # 2. Do not revert an ANSWERED/CONNECTED/COMPLETED call to RINGING/CONNECTING
         # 3. Do not revert a call that was answered, has positive duration, or has a recording to NO_ANSWER/MISSED/BUSY/FAILED
-        # 4. Do not revert a COMPLETED call to prior/transient states
+        # 4. If an incoming call was RINGING and ends without answer / duration 0, mark as MISSED
         has_prior_answer = (
-            curr_status in ["ANSWERED", "CONNECTED", "COMPLETED"] or 
+            (curr_status in ["ANSWERED", "CONNECTED", "COMPLETED"] and bool(existing_log.duration_seconds and existing_log.duration_seconds > 0)) or 
             bool(existing_log.answered_at) or 
-            bool(existing_log.duration_seconds and existing_log.duration_seconds > 0) or
-            bool(existing_log.recording_url)
+            bool(existing_log.duration_seconds and existing_log.duration_seconds > 0)
         )
 
         if not has_explicit_status:
@@ -1064,8 +1134,14 @@ async def push_doocti_call_log(
             logger.info(f"🛡️ Preserving answered/completed state for CallLog ID={existing_log.id} (status='{curr_status}', dur={existing_log.duration_seconds}s), ignoring late '{status_str}'")
             if curr_status in ["ANSWERED", "CONNECTED"]:
                 existing_log.call_status = "COMPLETED"
-        elif curr_status == "COMPLETED" and status_str in ["RINGING", "CONNECTING", "ANSWERED", "MISSED", "FAILED", "NO_ANSWER", "NO ANSWER"]:
+        elif curr_status == "COMPLETED" and status_str in ["RINGING", "CONNECTING", "ANSWERED"]:
             logger.info(f"Preserving COMPLETED status, ignoring subsequent '{status_str}' for CallLog ID={existing_log.id}")
+        elif curr_status == "RINGING" and status_str in ["FAILED", "NO_ANSWER", "MISSED", "COMPLETED", "HANGUP", "DISCONNECTED", "ENDED"]:
+            # Ringing inbound call that terminated without answer
+            if not has_prior_answer and dur_sec == 0:
+                existing_log.call_status = "MISSED" if (existing_log.call_direction or call_dir) == "INBOUND" else "NO_ANSWER"
+            else:
+                existing_log.call_status = status_str
         else:
             existing_log.call_status = status_str
 

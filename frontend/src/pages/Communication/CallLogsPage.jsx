@@ -275,6 +275,7 @@ const CallLogsPage = () => {
   // Filters & Pagination
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(initialStatusFromUrl);
+  const [directionFilter, setDirectionFilter] = useState('');
   const [employeeFilter, setEmployeeFilter] = useState(initialEmployeeFromUrl);
   const [providerFilter, setProviderFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -324,6 +325,7 @@ const CallLogsPage = () => {
         _t: Date.now()
       };
       if (statusFilter) params.call_status = statusFilter;
+      if (directionFilter) params.direction = directionFilter;
       if (employeeFilter) params.employee_id = employeeFilter;
       if (providerFilter) params.provider = providerFilter;
       if (search) params.search = search;
@@ -413,7 +415,7 @@ const CallLogsPage = () => {
       if (fastPollTimerRef.current) clearInterval(fastPollTimerRef.current);
       clearInterval(timer);
     };
-  }, [statusFilter, employeeFilter, providerFilter, search, currentPage, pageSize]);
+  }, [statusFilter, directionFilter, employeeFilter, providerFilter, search, currentPage, pageSize]);
 
   const handleInitiateNewCall = () => {
     if (window.expandDoocti) {
@@ -553,7 +555,12 @@ const CallLogsPage = () => {
         </div>
 
         {/* Card 3: Missed / No Answer */}
-        <div className="call-kpi-card kpi-amber">
+        <div 
+          className={`call-kpi-card kpi-amber ${statusFilter === 'Missed' ? 'active-filter-card' : ''}`}
+          onClick={() => setStatusFilter(prev => prev === 'Missed' ? '' : 'Missed')}
+          style={{ cursor: 'pointer' }}
+          title="Click to filter by Missed calls"
+        >
           <div className="call-kpi-top">
             <span className="call-kpi-label">Missed / No Answer</span>
             <div className="call-kpi-icon-badge">
@@ -609,6 +616,19 @@ const CallLogsPage = () => {
         </div>
 
         <div className="call-filters-group">
+          {/* Direction Filter */}
+          <div className="select-wrapper">
+            <select 
+              value={directionFilter} 
+              onChange={(e) => setDirectionFilter(e.target.value)}
+              className="call-select"
+            >
+              <option value="">All Directions</option>
+              <option value="INBOUND">Inbound Calls</option>
+              <option value="OUTBOUND">Outbound Calls</option>
+            </select>
+          </div>
+
           {/* Status Filter */}
           <div className="select-wrapper">
             <select 
@@ -659,12 +679,13 @@ const CallLogsPage = () => {
           </div>
 
           {/* Clear Filters */}
-          {(search || statusFilter || employeeFilter || providerFilter) && (
+          {(search || statusFilter || directionFilter || employeeFilter || providerFilter) && (
             <button
               type="button"
               onClick={() => {
                 setSearch('');
                 setStatusFilter('');
+                setDirectionFilter('');
                 setEmployeeFilter('');
                 setProviderFilter('');
               }}

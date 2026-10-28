@@ -4,7 +4,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_, func, case
+from sqlalchemy import desc, or_, and_, func, case
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
@@ -513,6 +513,8 @@ def list_call_logs(
     lead_id: Optional[int] = None,
     employee_id: Optional[int] = None,
     call_status: Optional[str] = None,
+    direction: Optional[str] = None,
+    call_direction: Optional[str] = None,
     provider: Optional[str] = None,
     search: Optional[str] = None,
     page: int = 1,
@@ -522,8 +524,8 @@ def list_call_logs(
 ):
     """
     Lists call logs with strict identity-based access control:
-    - Employee: Sees ONLY calls where employee_id == current_user.employee_id.
-    - Manager: Sees calls where employee_id IN (manager's authorized team).
+    - Employee: Sees calls where employee_id == current_user.employee_id, plus unassigned inbound calls.
+    - Manager: Sees calls where employee_id IN (manager's authorized team), plus unassigned inbound calls.
     - Admin: Sees company-wide calls.
     Never trusts unverified employee_id sent from frontend.
     """
@@ -555,13 +557,30 @@ def list_call_logs(
             query = query.filter(CallLog.employee_id == employee_id)
         else:
             if len(authorized_emp_ids) == 1:
-                query = query.filter(CallLog.employee_id == authorized_emp_ids[0])
+                query = query.filter(
+                    or_(
+                        CallLog.employee_id == authorized_emp_ids[0],
+                        and_(CallLog.call_direction == "INBOUND", CallLog.employee_id.is_(None))
+                    )
+                )
             else:
-                query = query.filter(CallLog.employee_id.in_(authorized_emp_ids))
+                query = query.filter(
+                    or_(
+                        CallLog.employee_id.in_(authorized_emp_ids),
+                        and_(CallLog.call_direction == "INBOUND", CallLog.employee_id.is_(None))
+                    )
+                )
     else:
         # Admin / Company-wide access: can filter by employee_id if specified
         if employee_id is not None:
             query = query.filter(CallLog.employee_id == employee_id)
+
+    # Direction filter (INBOUND / OUTBOUND)
+    target_dir = direction or call_direction
+    if target_dir:
+        td_clean = target_dir.strip().upper()
+        if td_clean in ["INBOUND", "OUTBOUND"]:
+            query = query.filter(CallLog.call_direction == td_clean)
 
     # 2. Filter by lead_id (e.g. Lead Details -> Call History)
     if lead_id:
@@ -591,11 +610,18 @@ def list_call_logs(
                     CallLog.call_status.ilike("%CONNECTED%")
                 )
             )
-        elif cs_clean in ["NO_ANSWER", "NO ANSWER"]:
+        elif cs_clean in ["MISSED", "NO_ANSWER", "NO ANSWER", "UNANSWERED"]:
             query = query.filter(
                 or_(
+                    CallLog.call_status.ilike("%MISSED%"),
                     CallLog.call_status.ilike("%NO_ANSWER%"),
-                    CallLog.call_status.ilike("%NO ANSWER%")
+                    CallLog.call_status.ilike("%NO ANSWER%"),
+                    CallLog.call_status.ilike("%UNANSWERED%"),
+                    and_(
+                        CallLog.call_direction == "INBOUND",
+                        CallLog.call_status.in_(["FAILED", "REJECTED", "BUSY", "CANCELLED"]),
+                        or_(CallLog.duration_seconds.is_(None), CallLog.duration_seconds == 0)
+                    )
                 )
             )
         elif cs_clean in ["INITIATING", "RINGING"]:
