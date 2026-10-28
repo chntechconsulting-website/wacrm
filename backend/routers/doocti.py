@@ -25,7 +25,7 @@ router = APIRouter(prefix="/doocti", tags=["Doocti IVR Connector"])
 # -------------------------------------------------------------
 # Telephony Configuration Dynamic Defaults (Loaded from IntegrationConfig)
 # -------------------------------------------------------------
-DOOCTI_DIDS: List[str] = []
+DOOCTI_DIDS: List[str] = ["07969659985", "7969659985", "07969671855", "07969671856", "07969671857"]
 ADMIN_EXTENSION = ""
 AGENT_EXTENSIONS: List[str] = []
 ALL_EXTENSIONS: List[str] = []
@@ -80,7 +80,11 @@ def is_did_number(number: Optional[Any], did_list: Optional[List[str]] = None) -
     clean_target = clean_phone(number)
     if not clean_target:
         return False
-    dids = did_list or DOOCTI_DIDS
+    dids = list(did_list or DOOCTI_DIDS)
+    # Ensure all company DIDs from Doocti portal are recognized
+    for extra_did in ["7969659985", "07969659985", "7969671855", "07969671855", "7969671856", "07969671856", "7969671857", "07969671857"]:
+        if extra_did not in dids:
+            dids.append(extra_did)
     for did in dids:
         clean_d = clean_phone(did)
         if clean_d and (clean_target == clean_d or clean_target.endswith(clean_d) or clean_d.endswith(clean_target)):
@@ -893,7 +897,7 @@ async def push_doocti_call_log(
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
             dur_sec = 0
             answered_at = None
-    elif any(k in raw_upper for k in ["MISSED", "UNANSWERED", "DECLINED", "REJECTED"]):
+    elif any(k in raw_upper for k in ["MISSED", "UNANSWERED", "DECLINED", "REJECTED", "ABANDON", "ABANDONED", "NOANSWER"]):
         if has_positive_duration or was_previously_answered:
             status_str = "COMPLETED"
         else:

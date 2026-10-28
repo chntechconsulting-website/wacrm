@@ -244,12 +244,14 @@ const getStatusBadge = (status) => {
         </span>
       );
     case 'MISSED':
+    case 'ABANDON':
+    case 'ABANDONED':
     case 'BUSY':
     case 'FAILED':
       return (
         <span className="status-pill failed">
           <span className="status-dot-indicator" />
-          {st}
+          {st === 'ABANDON' || st === 'ABANDONED' ? 'MISSED' : st}
         </span>
       );
     default:
