@@ -108,6 +108,20 @@ const Followups = () => {
   useEffect(() => {
     fetchFollowups();
     fetchDropdownData();
+
+    const handleAutoRefresh = () => {
+      fetchFollowups();
+    };
+
+    window.addEventListener('followupReminderRefresh', handleAutoRefresh);
+    window.addEventListener('call-disposition-saved', handleAutoRefresh);
+    window.addEventListener('leadStatsUpdated', handleAutoRefresh);
+
+    return () => {
+      window.removeEventListener('followupReminderRefresh', handleAutoRefresh);
+      window.removeEventListener('call-disposition-saved', handleAutoRefresh);
+      window.removeEventListener('leadStatsUpdated', handleAutoRefresh);
+    };
   }, [statusFilter, priorityFilter, currentUser?.id, currentUser?.employee_id]);
 
   const handleOpenScheduleModal = () => {

@@ -239,6 +239,43 @@ class PingoPopupService {
       theme
     });
   }
+
+  /**
+   * Helper: Show standard notification or toast via PingoPopup
+   */
+  static showNotification({
+    title = 'Success',
+    message = '',
+    subtitle = '',
+    type = 'success',
+    badge = null,
+    duration = 3800
+  } = {}) {
+    let theme = 'default';
+    let pose = PINGO_POSES.SALUTE;
+    let badgeText = badge || (type === 'error' ? 'ERROR' : type === 'warning' ? 'ALERT' : 'SUCCESS');
+
+    if (type === 'success') {
+      theme = 'success';
+      pose = PINGO_POSES.VICTORY;
+    } else if (type === 'celebrate') {
+      theme = 'celebrate';
+      pose = PINGO_POSES.CELEBRATE;
+    } else if (type === 'error') {
+      theme = 'default';
+      pose = PINGO_POSES.INSPECT;
+    }
+
+    this.trigger({
+      type: 'status',
+      pose,
+      title,
+      subtitle: message || subtitle,
+      badge: badgeText,
+      theme,
+      duration
+    });
+  }
 }
 
 export default PingoPopupService;

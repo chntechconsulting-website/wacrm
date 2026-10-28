@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc, or_
 
 from database import get_db
-from models import Lead, LeadActivity, Customer, Employee, CallLog
+from models import Lead, LeadActivity, Customer, Employee, CallLog, Followup
 from models.lead import LeadAssignment
 from models.user import User
 from models.integration import IntegrationConfig
@@ -286,8 +286,12 @@ class DooctiLeadUpdatePayload(BaseModel):
     call_purpose: Optional[str] = None
     lead_stage: Optional[str] = None
     agent_email: Optional[str] = None
+    employee_id: Optional[int] = None
     product_category: Optional[str] = None
     call_id: Optional[str] = None
+    followup_date: Optional[date] = None
+    followup_time: Optional[str] = None
+    followup_priority: Optional[str] = "MEDIUM"
 
 # -------------------------------------------------------------
 # 1. Lead Retrieval by Phone Number (PDF Page 4 & 6)
@@ -1208,13 +1212,32 @@ def update_lead_from_doocti(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found.")
 
+    # 1. Resolve employee ID
+    resolved_emp_id = None
+    if payload.employee_id and str(payload.employee_id).isdigit():
+        emp = db.query(Employee).filter(Employee.id == int(payload.employee_id)).first()
+        if emp:
+            resolved_emp_id = emp.id
+    if not resolved_emp_id and payload.agent_email:
+        clean_email = payload.agent_email.strip().lower()
+        emp = db.query(Employee).filter(Employee.email.ilike(clean_email)).first()
+        if emp:
+            resolved_emp_id = emp.id
+    if not resolved_emp_id and lead.assigned_to:
+        resolved_emp_id = lead.assigned_to
+
+    norm_status = (payload.status or "").strip().upper().replace(" ", "_")
+    
+    # 2. Update Lead status
     if payload.status:
         lead.status = payload.status.upper()
     
+    # 3. Update requirement notes
     if payload.call_notes:
         existing = lead.requirement_notes or ""
         lead.requirement_notes = f"{existing}\n[Doocti Call Notes]: {payload.call_notes}".strip()
 
+    # 4. Save product category
     if payload.product_category:
         from services.product_categorization_service import ProductCategorizationService
         ProductCategorizationService.save_lead_category(
@@ -1225,24 +1248,118 @@ def update_lead_from_doocti(
             call_id=payload.call_id
         )
 
-    db.commit()
+    # 5. Update or link CallLog
+    call_log = None
+    if payload.call_id:
+        c_id = str(payload.call_id).strip()
+        call_log = db.query(CallLog).filter(
+            or_(CallLog.provider_call_id == c_id, CallLog.id == int(c_id) if c_id.isdigit() else False)
+        ).first()
 
-    # Log activity
+    if not call_log:
+        # Check for the latest call log belonging to this lead
+        call_log = db.query(CallLog).filter(CallLog.lead_id == lead.id).order_by(desc(CallLog.id)).first()
+
+    if call_log:
+        if payload.call_notes:
+            call_log.notes = payload.call_notes
+        if payload.product_category:
+            call_log.product_category = payload.product_category
+        if resolved_emp_id and not call_log.employee_id:
+            call_log.employee_id = resolved_emp_id
+        if not call_log.lead_id:
+            call_log.lead_id = lead.id
+        if norm_status in ["COMPLETED", "CONTACTED", "INTERESTED", "FOLLOW_UP", "FOLLOW-UP", "RNR", "NOT_INTERESTED", "JUNK"]:
+            call_log.call_status = "COMPLETED"
+    elif payload.call_notes or payload.call_id:
+        # Create a CallLog so it appears in Lead call history
+        new_call_id = payload.call_id or f"manual-disp-{int(datetime.utcnow().timestamp())}"
+        call_log = CallLog(
+            lead_id=lead.id,
+            employee_id=resolved_emp_id,
+            provider="DOOCTI",
+            provider_call_id=new_call_id,
+            from_number="TELEPHONY",
+            to_number=lead.phone or "UNKNOWN",
+            call_status="COMPLETED",
+            call_direction="OUTBOUND",
+            duration_seconds=0,
+            notes=payload.call_notes,
+            product_category=payload.product_category or getattr(lead, 'product_category', None) or "UNCLASSIFIED",
+            created_at=get_ist_now()
+        )
+        db.add(call_log)
+
+    # 6. Follow-up handling
+    is_followup_status = norm_status in ["FOLLOW_UP", "FOLLOW-UP", "FOLLOWUP", "CALL_BACK"]
+    if is_followup_status:
+        # Target followup date (payload or fallback to tomorrow)
+        f_date = payload.followup_date or (datetime.utcnow() + datetime.timedelta(days=1)).date()
+        f_time = payload.followup_time or "10:00 AM"
+        f_priority = (payload.followup_priority or "MEDIUM").upper()
+
+        lead.followup_date = f_date
+        lead.followup_time = f_time
+
+        target_emp = resolved_emp_id or lead.assigned_to
+
+        # Look for existing pending followup for this lead to avoid duplicates
+        existing_fu = db.query(Followup).filter(
+            Followup.lead_id == lead.id,
+            Followup.status == "Pending"
+        ).order_by(desc(Followup.id)).first()
+
+        if existing_fu:
+            existing_fu.followup_date = f_date
+            existing_fu.followup_time = f_time
+            existing_fu.priority = f_priority
+            if payload.call_notes:
+                existing_fu.notes = payload.call_notes
+            if target_emp:
+                existing_fu.assigned_to = target_emp
+        else:
+            if not target_emp:
+                # Default to first available employee if none assigned
+                first_emp = db.query(Employee).first()
+                target_emp = first_emp.id if first_emp else None
+
+            if target_emp:
+                new_fu = Followup(
+                    lead_id=lead.id,
+                    assigned_to=target_emp,
+                    followup_date=f_date,
+                    followup_time=f_time,
+                    notes=payload.call_notes or f"Follow-up scheduled via call disposition: {lead.status}",
+                    priority=f_priority,
+                    status="Pending",
+                    created_by=resolved_emp_id or target_emp
+                )
+                db.add(new_fu)
+
+    # 7. Log LeadActivity
     cat_str = f" | Product Category: {lead.product_category}" if getattr(lead, 'product_category', None) else ""
+    act_type = "FOLLOW_UP_CREATED" if is_followup_status else "CALL"
     activity = LeadActivity(
         lead_id=lead.id,
-        activity_type="LEAD_UPDATED",
-        description=f"Lead updated via Doocti Call Disposition. Status: {lead.status}{cat_str}. Notes: {payload.call_notes or 'None'}"
+        employee_id=resolved_emp_id,
+        performed_by=resolved_emp_id,
+        activity_type=act_type,
+        related_entity_type="CALL",
+        related_entity_id=call_log.id if call_log else None,
+        description=f"Call disposition recorded: {lead.status}{cat_str}. Notes: {payload.call_notes or 'None'}"
     )
     db.add(activity)
+
     db.commit()
 
     return {
         "status": "success",
-        "message": "Lead updated successfully",
+        "message": "Lead disposition updated successfully",
         "lead_id": lead.id,
         "current_status": lead.status,
-        "product_category": lead.product_category
+        "product_category": lead.product_category,
+        "call_log_id": call_log.id if call_log else None,
+        "followup_scheduled": is_followup_status
     }
 
 # -------------------------------------------------------------

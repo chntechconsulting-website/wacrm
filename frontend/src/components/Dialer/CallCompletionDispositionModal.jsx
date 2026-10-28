@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import API from '../../services/api';
 import PingoPopupService from '../../services/pingoPopupService';
+import { useAuth } from '../../context/AuthContext';
 import {
   PhoneCall,
   User,
@@ -13,7 +14,8 @@ import {
   RefreshCw,
   Cpu,
   Layers,
-  HelpCircle
+  HelpCircle,
+  Calendar
 } from 'lucide-react';
 
 /**
@@ -28,6 +30,7 @@ const CallCompletionDispositionModal = ({
   onClose,
   onSaved
 }) => {
+  const { currentUser } = useAuth();
   const [leadName, setLeadName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [callStatus, setCallStatus] = useState('COMPLETED');
@@ -39,6 +42,16 @@ const CallCompletionDispositionModal = ({
   const [suggestedCategory, setSuggestedCategory] = useState('UNCLASSIFIED');
   const [callNotes, setCallNotes] = useState('');
   const [dispositionStatus, setDispositionStatus] = useState('CONTACTED');
+
+  // Follow-up specific fields
+  const getTomorrowDate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  };
+  const [followupDate, setFollowupDate] = useState(getTomorrowDate());
+  const [followupTime, setFollowupTime] = useState('10:00 AM');
+  const [followupPriority, setFollowupPriority] = useState('MEDIUM');
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -65,6 +78,10 @@ const CallCompletionDispositionModal = ({
     } else {
       setDispositionStatus('CONTACTED');
     }
+
+    setFollowupDate(getTomorrowDate());
+    setFollowupTime('10:00 AM');
+    setFollowupPriority('MEDIUM');
 
     const initialNotes = callData.notes || '';
     setCallNotes(initialNotes);
@@ -147,55 +164,77 @@ const CallCompletionDispositionModal = ({
   const handleSave = async (e) => {
     e.preventDefault();
     setSaveError('');
+
+    // Validation for Follow-up status
+    const isFollowup = dispositionStatus === 'FOLLOW-UP';
+    if (isFollowup && !followupDate) {
+      setSaveError('Please select a valid Follow-up Date.');
+      return;
+    }
+
     setSaving(true);
 
     try {
       const callUniqueId = callData?.uniqueid || callData?.callId || callData?.provider_call_id || null;
+      const currentEmpId = currentUser?.employee_id || currentUser?.id || null;
+
+      const payload = {
+        status: dispositionStatus,
+        call_notes: callNotes,
+        product_category: selectedCategory,
+        call_id: callUniqueId,
+        employee_id: currentEmpId,
+        agent_email: currentUser?.email || null,
+        followup_date: isFollowup ? followupDate : null,
+        followup_time: isFollowup ? (followupTime || '10:00 AM') : null,
+        followup_priority: isFollowup ? followupPriority : 'MEDIUM'
+      };
+
+      let savedLeadId = leadId;
 
       // 1. If leadId is present, update Lead through backend API
       if (leadId) {
         await API.post('/doocti/lead/update', {
-          lead_id: leadId,
-          status: dispositionStatus,
-          call_notes: callNotes,
-          product_category: selectedCategory,
-          call_id: callUniqueId
+          ...payload,
+          lead_id: leadId
         });
       } else if (phoneNumber) {
         // Find or auto-create lead so disposition is not lost
         const findRes = await API.get(`/doocti/lead-by-number?number=${phoneNumber}&auto_create=true`);
         if (findRes.data?.lead?.id) {
-          const newLeadId = findRes.data.lead.id;
-          setLeadId(newLeadId);
+          savedLeadId = findRes.data.lead.id;
+          setLeadId(savedLeadId);
           await API.post('/doocti/lead/update', {
-            lead_id: newLeadId,
-            status: dispositionStatus,
-            call_notes: callNotes,
-            product_category: selectedCategory,
-            call_id: callUniqueId
+            ...payload,
+            lead_id: savedLeadId
           });
         }
       }
 
       setSaveSuccess(true);
       window.dispatchEvent(new Event('leadStatsUpdated'));
+      window.dispatchEvent(new Event('followupReminderRefresh'));
       window.dispatchEvent(new CustomEvent('call-disposition-saved', {
         detail: {
-          leadId,
+          leadId: savedLeadId,
           product_category: selectedCategory,
           status: dispositionStatus,
-          notes: callNotes
+          notes: callNotes,
+          followup_date: isFollowup ? followupDate : null,
+          followup_time: isFollowup ? followupTime : null
         }
       }));
 
       PingoPopupService.showNotification({
         title: 'Call Disposition Saved',
-        message: `Product category: ${selectedCategory}. Notes and status updated successfully.`,
+        message: isFollowup 
+          ? `Follow-up scheduled for ${followupDate}. Category: ${selectedCategory}.` 
+          : `Category: ${selectedCategory}. Notes and status updated successfully.`,
         type: 'success'
       });
 
       setTimeout(() => {
-        if (onSaved) onSaved({ leadId, product_category: selectedCategory });
+        if (onSaved) onSaved({ leadId: savedLeadId, product_category: selectedCategory });
         if (onClose) onClose();
       }, 700);
     } catch (err) {
@@ -482,6 +521,103 @@ const CallCompletionDispositionModal = ({
               <option value="JUNK">Junk / Invalid Lead</option>
             </select>
           </div>
+
+          {/* Conditional Follow-up Scheduling Section */}
+          {dispositionStatus === 'FOLLOW-UP' && (
+            <div style={{
+              marginBottom: '16px',
+              padding: '12px 14px',
+              backgroundColor: '#eff6ff',
+              borderRadius: '10px',
+              border: '1px solid #bfdbfe'
+            }}>
+              <div style={{
+                fontSize: '0.8rem',
+                fontWeight: 800,
+                color: '#1e40af',
+                marginBottom: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}>
+                <Calendar size={15} color="#2563eb" />
+                Schedule Next Follow-up *
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '8px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Follow-up Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={followupDate}
+                    onChange={(e) => setFollowupDate(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '7px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.82rem',
+                      color: '#0f172a',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Follow-up Time
+                  </label>
+                  <input
+                    type="text"
+                    value={followupTime}
+                    placeholder="e.g. 10:30 AM"
+                    onChange={(e) => setFollowupTime(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '7px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '0.82rem',
+                      color: '#0f172a',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Priority
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {['LOW', 'MEDIUM', 'HIGH'].map(p => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setFollowupPriority(p)}
+                      style={{
+                        flex: 1,
+                        padding: '5px 8px',
+                        fontSize: '0.74rem',
+                        fontWeight: followupPriority === p ? 800 : 500,
+                        borderRadius: '6px',
+                        border: followupPriority === p ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
+                        backgroundColor: followupPriority === p ? '#dbeafe' : '#ffffff',
+                        color: followupPriority === p ? '#1d4ed8' : '#64748b',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* 3. Call Notes */}
           <div style={{ marginBottom: '18px' }}>

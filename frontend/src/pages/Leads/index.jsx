@@ -560,11 +560,39 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         handleOpenDetailDrawer({ id: e.detail.leadId });
       }
     };
+    const handleDispositionSaved = (e) => {
+      fetchLeads(true);
+      fetchSourceCounts();
+      const updatedLeadId = e.detail?.leadId;
+      if (selectedLead && (!updatedLeadId || selectedLead.id === Number(updatedLeadId))) {
+        fetchLeadCallLogs(selectedLead.id);
+        API.get(`/leads/${selectedLead.id}`).then(res => {
+          if (res.data) {
+            setSelectedLead(prev => ({ ...prev, ...res.data }));
+          }
+        }).catch(() => {});
+        API.get(`/activities?lead_id=${selectedLead.id}`).then(res => {
+          if (res.data) {
+            setSelectedLead(prev => prev ? ({ ...prev, activities: res.data }) : null);
+          }
+        }).catch(() => {});
+      }
+    };
+
+    const handleStatsUpdated = () => {
+      fetchLeads(true);
+      fetchSourceCounts();
+    };
+
     window.addEventListener('openLeadDrawer', handleCustomOpenDrawer);
+    window.addEventListener('call-disposition-saved', handleDispositionSaved);
+    window.addEventListener('leadStatsUpdated', handleStatsUpdated);
     return () => {
       window.removeEventListener('openLeadDrawer', handleCustomOpenDrawer);
+      window.removeEventListener('call-disposition-saved', handleDispositionSaved);
+      window.removeEventListener('leadStatsUpdated', handleStatsUpdated);
     };
-  }, [location.search]);
+  }, [location.search, selectedLead]);
 
   const handleCreateLead = async (e) => {
     e.preventDefault();
@@ -2421,8 +2449,18 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
                             <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '6px' }}>
                               Agent: <strong>{call.employee_name || 'Agent #' + (call.employee_id || '')}</strong> ({call.from_number}) • Duration: <strong>{call.duration_seconds || 0}s</strong>
+                              {call.product_category && call.product_category !== 'UNCLASSIFIED' && (
+                                <span style={{ marginLeft: '8px', padding: '2px 6px', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 700, backgroundColor: call.product_category === 'BIOMETRIC' ? '#eff6ff' : '#f0fdf4', color: call.product_category === 'BIOMETRIC' ? '#1d4ed8' : '#15803d' }}>
+                                  {call.product_category}
+                                </span>
+                              )}
                             </div>
 
+                            {call.notes && (
+                              <div style={{ marginTop: '6px', marginBottom: '6px', padding: '8px 10px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.8rem', color: '#334155' }}>
+                                <strong style={{ color: '#0f172a' }}>Discussion / Notes:</strong> {call.notes}
+                              </div>
+                            )}
                             {call.recording_url && (
                               <div style={{ marginTop: '8px' }}>
                                 <audio controls src={call.recording_url} style={{ width: '100%', height: '32px' }} />
