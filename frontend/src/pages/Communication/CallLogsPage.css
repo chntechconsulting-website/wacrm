@@ -127,6 +127,17 @@
   transform: scale(0.97);
 }
 
+.btn-get-all {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.btn-get-all:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
 .btn-primary-dial {
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   color: #ffffff;

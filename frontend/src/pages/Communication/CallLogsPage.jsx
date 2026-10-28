@@ -21,7 +21,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Play,
-  Pause
+  Pause,
+  Database,
+  UploadCloud
 } from 'lucide-react';
 import { formatLocalDateTime } from '../../utils/dateUtils';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
@@ -270,7 +272,10 @@ const CallLogsPage = () => {
   const [callLogs, setCallLogs] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNotice, setSyncNotice] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
+  const fileInputRef = useRef(null);
   
   // Filters & Pagination
   const [search, setSearch] = useState('');
@@ -344,6 +349,111 @@ const CallLogsPage = () => {
     } finally {
       if (!silent) setLoading(false);
     }
+  };
+
+  // Refresh & Fetch All Data without filters
+  const handleFetchAllData = async () => {
+    setLoading(true);
+    setSearch('');
+    setStatusFilter('');
+    setDirectionFilter('');
+    setEmployeeFilter('');
+    setProviderFilter('');
+    setCurrentPage(1);
+    try {
+      const res = await API.get('/ivr/calls', {
+        params: {
+          page: 1,
+          limit: pageSize,
+          _t: Date.now()
+        }
+      });
+      const items = res.data?.items || [];
+      setCallLogs(items);
+      setTotalRecords(res.data?.total ?? items.length);
+      if (res.data?.metrics) setMetrics(res.data.metrics);
+      setSyncNotice({ type: 'success', message: `Refreshed all call records (${res.data?.total || items.length} total).` });
+      setTimeout(() => setSyncNotice(null), 4000);
+    } catch (err) {
+      console.error('Failed to fetch all calls:', err);
+      setSyncNotice({ type: 'error', message: 'Failed to retrieve call logs from server.' });
+      setTimeout(() => setSyncNotice(null), 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Import / Synchronize CDR dump data
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        setSyncing(true);
+        const text = evt.target.result;
+        let records = [];
+
+        if (file.name.endsWith('.json')) {
+          const parsed = JSON.parse(text);
+          records = Array.isArray(parsed) ? parsed : (parsed.calls || parsed.data || [parsed]);
+        } else {
+          // Parse CSV / TSV text
+          const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+          if (lines.length > 1) {
+            const headers = lines[0].split(/[\t,]/).map(h => h.trim().toLowerCase().replace(/[^a-z0-9_]/g, ''));
+            for (let i = 1; i < lines.length; i++) {
+              const parts = lines[i].split(/[\t,]/).map(p => p.trim().replace(/^["']|["']$/g, ''));
+              const obj = {};
+              headers.forEach((h, idx) => {
+                obj[h] = parts[idx] || '';
+              });
+              // Normalize common CDR column names
+              const mapped = {
+                uniqueid: obj.uniqueid || obj.callid || obj.id || `cdr_import_${Date.now()}_${i}`,
+                phone_number: obj.phone_number || obj.number || obj.customer_number || obj.destination || obj.caller || obj.callee || '',
+                caller: obj.caller || obj.from || '',
+                callee: obj.callee || obj.to || '',
+                station: obj.station || obj.extension || obj.agent_extension || '',
+                agent: obj.agent || obj.employee || obj.agent_name || '',
+                status: obj.status || obj.call_status || obj.disposition || 'COMPLETED',
+                direction: (obj.direction || obj.call_direction || '').toUpperCase() || 'INBOUND',
+                duration: parseInt(obj.duration || obj.billsec || obj.talk_time || 0, 10),
+                start_time: obj.start_time || obj.started_at || obj.datetime || '',
+                recording_url: obj.recording_url || obj.recording || ''
+              };
+              if (mapped.phone_number || mapped.caller || mapped.callee) {
+                records.push(mapped);
+              }
+            }
+          }
+        }
+
+        if (records.length === 0) {
+          setSyncNotice({ type: 'error', message: 'No valid CDR records found in uploaded file.' });
+          setTimeout(() => setSyncNotice(null), 4000);
+          return;
+        }
+
+        // Post to /ivr/sync-cdr
+        const res = await API.post('/ivr/sync-cdr', { calls: records });
+        setSyncNotice({
+          type: 'success',
+          message: `Successfully synchronized ${res.data?.synced_count || records.length} CDR records!`
+        });
+        setTimeout(() => setSyncNotice(null), 5000);
+        fetchCallLogs(false);
+      } catch (err) {
+        console.error('Failed to import CDR dump:', err);
+        setSyncNotice({ type: 'error', message: `Import error: ${err.response?.data?.detail || err.message}` });
+        setTimeout(() => setSyncNotice(null), 5000);
+      } finally {
+        setSyncing(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   const startFastPolling = () => {
@@ -499,11 +609,40 @@ const CallLogsPage = () => {
         </div>
 
         <div className="call-logs-actions">
+          {/* Hidden file input for CDR Dump sync */}
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileUpload} 
+            accept=".csv,.json,.txt,.tsv" 
+            style={{ display: 'none' }} 
+          />
+
+          <button 
+            onClick={handleFetchAllData} 
+            className="btn-refresh-logs btn-get-all" 
+            title="Reset filters and fetch all telephony call data"
+            disabled={loading || syncing}
+          >
+            <Database size={15} />
+            <span>Get All Data</span>
+          </button>
+
+          <button 
+            onClick={() => fileInputRef.current && fileInputRef.current.click()} 
+            className="btn-refresh-logs" 
+            title="Upload raw CDR dump file (CSV/JSON/TSV) to sync missing call logs"
+            disabled={syncing}
+          >
+            <UploadCloud size={15} className={syncing ? 'spin' : ''} />
+            <span>{syncing ? 'Syncing...' : 'Sync CDR Dump'}</span>
+          </button>
+
           <button 
             onClick={() => fetchCallLogs(false)} 
             className="btn-refresh-logs" 
             title="Refresh Call Logs from Server"
-            disabled={loading}
+            disabled={loading || syncing}
           >
             <RefreshCw size={15} className={loading ? 'spin' : ''} />
             <span>Refresh</span>
@@ -519,6 +658,25 @@ const CallLogsPage = () => {
           </button>
         </div>
       </div>
+
+      {syncNotice && (
+        <div style={{
+          marginBottom: '20px',
+          padding: '12px 18px',
+          borderRadius: '9px',
+          background: syncNotice.type === 'success' ? '#f0fdf4' : '#fef2f2',
+          border: `1px solid ${syncNotice.type === 'success' ? '#bbf7d0' : '#fecaca'}`,
+          color: syncNotice.type === 'success' ? '#166534' : '#991b1b',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          fontSize: '0.88rem',
+          fontWeight: 600
+        }}>
+          {syncNotice.type === 'success' ? <CheckCircle2 size={18} color="#16a34a" /> : <AlertCircle size={18} color="#dc2626" />}
+          <span>{syncNotice.message}</span>
+        </div>
+      )}
 
       {/* -------------------------------------------------------------
           Executive KPI Cards

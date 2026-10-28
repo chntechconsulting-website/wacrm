@@ -507,6 +507,94 @@ def generate_call_ai_summary(
     return build_call_log_response(call, db)
 
 
+
+
+class CDRDumpItem(BaseModel):
+    uniqueid: Optional[str] = None
+    call_id: Optional[str] = None
+    phone_number: Optional[str] = None
+    caller: Optional[str] = None
+    callee: Optional[str] = None
+    station: Optional[str] = None
+    agent: Optional[str] = None
+    agent_email: Optional[str] = None
+    status: Optional[str] = None
+    call_status: Optional[str] = None
+    disposition: Optional[str] = None
+    direction: Optional[str] = None
+    call_direction: Optional[str] = None
+    duration: Optional[int] = 0
+    duration_seconds: Optional[int] = 0
+    start_time: Optional[str] = None
+    started_at: Optional[str] = None
+    answer_time: Optional[str] = None
+    answered_at: Optional[str] = None
+    end_time: Optional[str] = None
+    ended_at: Optional[str] = None
+    recording_url: Optional[str] = None
+    recording_path: Optional[str] = None
+    notes: Optional[str] = None
+
+class CDRDumpRequest(BaseModel):
+    calls: Optional[List[CDRDumpItem]] = None
+
+@router.post("/sync-cdr")
+@router.post("/sync-cdr/")
+async def sync_telephony_cdr_dump(
+    request: Request,
+    payload: Optional[CDRDumpRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Syncs & dumps raw telephony CDR records from DooCTI PBX / Asterisk into WA! CRM.
+    Accepts an array of call records or attempts to pull missing CDRs.
+    Auto-creates missing leads, normalizes direction & statuses, prevents duplicates,
+    and updates metrics.
+    """
+    # Authorization: Only authenticated users can trigger sync
+    from routers.doocti import push_doocti_call_log
+
+    body_json = {}
+    try:
+        body_json = await request.json()
+    except Exception:
+        pass
+
+    calls_data = []
+    if payload and payload.calls:
+        calls_data = [item.dict(exclude_unset=True) for item in payload.calls]
+    elif isinstance(body_json, list):
+        calls_data = body_json
+    elif isinstance(body_json, dict) and "calls" in body_json and isinstance(body_json["calls"], list):
+        calls_data = body_json["calls"]
+    elif isinstance(body_json, dict) and "data" in body_json and isinstance(body_json["data"], list):
+        calls_data = body_json["data"]
+
+    synced_count = 0
+    errors = []
+
+    for call_item in calls_data:
+        try:
+            # Re-use authoritative Doocti push handler for each record
+            res = await push_doocti_call_log(
+                request=request,
+                db=db,
+                payload=call_item
+            )
+            if res and res.get("status") in ["success", "updated", "created", "ignored"]:
+                synced_count += 1
+        except Exception as e:
+            errors.append(str(e))
+
+    return {
+        "status": "success",
+        "message": f"Synchronized {synced_count} telephony call records.",
+        "synced_count": synced_count,
+        "total_submitted": len(calls_data),
+        "errors_count": len(errors)
+    }
+
 @router.get("/calls", response_model=CallLogListResponse)
 def list_call_logs(
     response: Response,
