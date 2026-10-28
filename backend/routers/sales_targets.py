@@ -179,20 +179,41 @@ def get_employee_achievements(
     """
     Calculate:
     - Assigned Target
-    - Actual Revenue: Confirmed eligible invoice revenue attributed to that salesperson
+    - Actual Revenue: Confirmed Won Sales Revenue attributed to that salesperson (Deduplicated)
     - Remaining Target: MAX(Assigned Target - Actual Revenue, 0)
     - Achievement %: (Actual Revenue / Assigned Target) * 100
+    - Role Scoping: Non-admin users see only their own row. Admin sees all.
     """
     now = datetime.now()
     year = period_year or now.year
     month = period_month if period_month is not None else now.month
     p_type = period_type.lower()
 
-    # Active employees
+    # Determine user role and employee link
+    user_role = (current_user.role or "").upper()
+    is_admin = user_role in ["ADMIN", "SUPERADMIN"]
+
+    current_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    if not current_emp:
+        current_emp = db.query(Employee).filter(
+            or_(
+                Employee.email == current_user.email,
+                Employee.username == current_user.username
+            )
+        ).first()
+
+    # Active employees query
     emp_query = db.query(Employee).filter(Employee.status == "ACTIVE")
     if department and department.strip() and department.lower() != "all":
         emp_query = emp_query.filter(Employee.department.ilike(f"%{department.strip()}%"))
-    if employee_id:
+
+    # RBAC: If non-admin, restrict strictly to their own employee ID
+    if not is_admin:
+        if current_emp:
+            emp_query = emp_query.filter(Employee.id == current_emp.id)
+        else:
+            return []
+    elif employee_id:
         emp_query = emp_query.filter(Employee.id == employee_id)
 
     active_emps = emp_query.all()
@@ -209,59 +230,23 @@ def get_employee_achievements(
 
     targets_map = {t.employee_id: t.target_amount for t in target_q.all()}
 
-    # Query confirmed invoices for period
-    invoice_q = db.query(Quotation).filter(
-        Quotation.doc_type == "invoice",
-        Quotation.status.in_(["issued", "paid"]),
-        Quotation.payment_status.in_(["paid", "partial"]),
-        Quotation.status != "cancelled"
+    # Use Unified RevenueService to compute won sales transactions
+    from services.revenue_service import RevenueService
+    won_transactions = RevenueService.get_won_sales_transactions(
+        db=db,
+        period_year=year,
+        period_month=month,
+        period_type=p_type,
+        employee_ids_filter=emp_ids
     )
 
-    # Date filter on confirmed billing date (issue_date or created_at)
-    date_col = func.coalesce(Quotation.issue_date, Quotation.created_at)
-    if p_type == "monthly" and month is not None:
-        invoice_q = invoice_q.filter(
-            func.extract('year', date_col) == year,
-            func.extract('month', date_col) == month
-        )
-    elif p_type == "quarterly" and month is not None:
-        # month is treated as quarter start or 1-4
-        if month in [1, 2, 3, 4]:
-            q_months = [(month - 1) * 3 + 1, (month - 1) * 3 + 2, (month - 1) * 3 + 3]
-        else:
-            q_months = [month]
-        invoice_q = invoice_q.filter(
-            func.extract('year', date_col) == year,
-            func.extract('month', date_col).in_(q_months)
-        )
-    elif p_type == "yearly":
-        invoice_q = invoice_q.filter(func.extract('year', date_col) == year)
-
-    invoices = invoice_q.all()
-
-    # Attribute each invoice to an employee
+    # Attribute revenue per employee
     emp_revenue = {e.id: {"revenue": 0.0, "count": 0} for e in active_emps}
-
-    for inv in invoices:
-        matched_emp_id = None
-        if inv.assigned_to and inv.assigned_to in emp_revenue:
-            matched_emp_id = inv.assigned_to
-        elif inv.created_by and inv.created_by in emp_revenue:
-            matched_emp_id = inv.created_by
-        elif inv.prepared_by:
-            for e in active_emps:
-                if e.name and (e.name.lower() in inv.prepared_by.lower() or inv.prepared_by.lower() in e.name.lower()):
-                    matched_emp_id = e.id
-                    break
-
-        # Fallback to first salesperson if unassigned or admin
-        if not matched_emp_id and active_emps:
-            matched_emp_id = active_emps[0].id
-
-        if matched_emp_id and matched_emp_id in emp_revenue:
-            amt = float(inv.grand_total or inv.amount_paid or 0.0)
-            emp_revenue[matched_emp_id]["revenue"] += amt
-            emp_revenue[matched_emp_id]["count"] += 1
+    for t in won_transactions:
+        eid = t.get("salesperson_id")
+        if eid and eid in emp_revenue:
+            emp_revenue[eid]["revenue"] += t["amount"]
+            emp_revenue[eid]["count"] += 1
 
     rows = []
     for emp in active_emps:
@@ -300,7 +285,6 @@ def get_my_target(
     """
     emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
     if not emp:
-        # Check by email or username if user_id was not linked
         emp = db.query(Employee).filter(
             or_(
                 Employee.email == current_user.email,
@@ -314,7 +298,6 @@ def get_my_target(
     p_type = period_type.lower()
 
     if not emp:
-        # If user has no employee record (e.g. root admin without employee profile)
         return EmployeeMyTargetSummary(
             has_target=False,
             employee_id=0,
@@ -341,40 +324,17 @@ def get_my_target(
     target_obj = target_q.first()
     target_amt = float(target_obj.target_amount) if target_obj else 0.0
 
-    # Calculate actual revenue strictly from confirmed eligible invoices
-    invoice_q = db.query(Quotation).filter(
-        Quotation.doc_type == "invoice",
-        Quotation.status.in_(["issued", "paid"]),
-        Quotation.payment_status.in_(["paid", "partial"]),
-        Quotation.status != "cancelled",
-        or_(
-            Quotation.assigned_to == emp.id,
-            Quotation.created_by == emp.id,
-            Quotation.prepared_by.ilike(f"%{emp.name}%"),
-            Quotation.lead_id.in_(db.query(Quotation.lead_id).filter(Quotation.assigned_to == emp.id))
-        )
+    # Calculate actual revenue using Unified RevenueService
+    from services.revenue_service import RevenueService
+    my_transactions = RevenueService.get_won_sales_transactions(
+        db=db,
+        period_year=year,
+        period_month=month,
+        period_type=p_type,
+        employee_ids_filter=[emp.id]
     )
 
-    date_col = func.coalesce(Quotation.issue_date, Quotation.created_at)
-    if p_type == "monthly" and month is not None:
-        invoice_q = invoice_q.filter(
-            func.extract('year', date_col) == year,
-            func.extract('month', date_col) == month
-        )
-    elif p_type == "quarterly" and month is not None:
-        if month in [1, 2, 3, 4]:
-            q_months = [(month - 1) * 3 + 1, (month - 1) * 3 + 2, (month - 1) * 3 + 3]
-        else:
-            q_months = [month]
-        invoice_q = invoice_q.filter(
-            func.extract('year', date_col) == year,
-            func.extract('month', date_col).in_(q_months)
-        )
-    elif p_type == "yearly":
-        invoice_q = invoice_q.filter(func.extract('year', date_col) == year)
-
-    my_invoices = invoice_q.all()
-    actual_rev = sum(float(inv.grand_total or 0.0) for inv in my_invoices)
+    actual_rev = sum(t["amount"] for t in my_transactions)
     remaining = max(0.0, target_amt - actual_rev)
     ach_pct = round((actual_rev / target_amt * 100), 1) if target_amt > 0 else 0.0
 
@@ -389,7 +349,7 @@ def get_my_target(
         actual_revenue=actual_rev,
         remaining_target=remaining,
         achievement_percentage=ach_pct,
-        confirmed_invoices_count=len(my_invoices)
+        confirmed_invoices_count=len(my_transactions)
     )
 
 @router.get("/companies-revenue", response_model=List[CompanyRevenueSummary])
@@ -400,26 +360,20 @@ def get_companies_revenue(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Company-wise confirmed revenue and associated invoices.
-    Allows authorized users to inspect each company's confirmed invoices and billing records.
+    Company-wise confirmed revenue and associated sales records.
+    Uses Unified RevenueService to reflect confirmed won sales and invoices accurately without duplicates.
     """
-    # Confirmed invoices
-    invoices = db.query(Quotation).filter(
-        Quotation.doc_type == "invoice",
-        Quotation.status.in_(["issued", "paid"]),
-        Quotation.payment_status.in_(["paid", "partial"]),
-        Quotation.status != "cancelled"
-    ).order_by(desc(Quotation.created_at)).all()
+    from services.revenue_service import RevenueService
+    won_transactions = RevenueService.get_won_sales_transactions(db=db)
 
-    # Group by customer / company
     active_emps = {e.id: e.name for e in db.query(Employee).all()}
     customers_map = {c.id: c for c in db.query(Customer).all()}
 
     summary_map: Dict[str, Dict[str, Any]] = {}
 
-    for inv in invoices:
-        c_id = inv.customer_id or 0
-        comp_name = (inv.company_name or inv.customer_name or (customers_map[c_id].company_name if c_id in customers_map else "Unknown Company")).strip()
+    for t in won_transactions:
+        c_id = t.get("customer_id") or 0
+        comp_name = (t.get("company_name") or t.get("customer_name") or "Unknown Company").strip()
         key = f"{c_id}_{comp_name.lower()}"
 
         cust = customers_map.get(c_id)
@@ -428,33 +382,31 @@ def get_companies_revenue(
             summary_map[key] = {
                 "customer_id": c_id,
                 "company_name": comp_name,
-                "contact_name": (cust.contact_name if cust else inv.customer_name) or "",
-                "phone": (cust.phone if cust else inv.phone) or "",
-                "email": (cust.email if cust else inv.email) or "",
+                "contact_name": (cust.contact_name if cust else t.get("customer_name")) or "",
+                "phone": (cust.phone if cust else "") or "",
+                "email": (cust.email if cust else "") or "",
                 "total_confirmed_revenue": 0.0,
                 "total_collected_revenue": 0.0,
                 "invoices": []
             }
 
-        billed_amt = float(inv.grand_total or 0.0)
-        collected_amt = float(inv.amount_paid or 0.0)
+        billed_amt = float(t.get("amount") or 0.0)
+        collected_amt = float(t.get("collected_amount") or 0.0)
         summary_map[key]["total_confirmed_revenue"] += billed_amt
         summary_map[key]["total_collected_revenue"] += collected_amt
 
-        sp_name = inv.prepared_by or (active_emps.get(inv.assigned_to) or active_emps.get(inv.created_by) or "Sales Executive")
-
         summary_map[key]["invoices"].append(CompanyRevenueItem(
-            invoice_id=inv.id,
-            invoice_number=inv.doc_number or f"INV-{inv.id}",
-            invoice_date=(inv.issue_date or inv.created_at).strftime("%b %d, %Y") if (inv.issue_date or inv.created_at) else "-",
-            status=inv.status,
-            payment_status=inv.payment_status,
-            subtotal=float(inv.subtotal or 0.0),
-            tax_total=float(inv.tax_total or 0.0),
+            invoice_id=t.get("invoice_id") or t.get("lead_id") or 0,
+            invoice_number=t.get("deal_name") or f"WON-{t.get('lead_id')}",
+            invoice_date=t["date"].strftime("%b %d, %Y") if t.get("date") and t["date"] != datetime.min else "-",
+            status=t.get("status") or "Won",
+            payment_status="PAID" if collected_amt >= billed_amt and billed_amt > 0 else "PARTIAL",
+            subtotal=billed_amt,
+            tax_total=0.0,
             grand_total=billed_amt,
             amount_paid=collected_amt,
-            salesperson_name=sp_name,
-            doc_type=inv.doc_type
+            salesperson_name=t.get("salesperson_name") or "Sales Executive",
+            doc_type=t.get("doc_type") or "deal"
         ))
 
     results = []

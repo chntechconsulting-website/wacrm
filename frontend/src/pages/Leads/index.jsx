@@ -735,6 +735,11 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       if (selectedLead && selectedLead.id === leadId) {
         setSelectedLead(prev => ({ ...prev, status: newStatus }));
       }
+      // Notify revenue dashboard and targets
+      window.dispatchEvent(new CustomEvent('revenueUpdated', {
+        detail: { lead_id: leadId, status: newStatus }
+      }));
+      window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || 'Failed to update status.');
@@ -813,6 +818,11 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     if (selectedLead && (selectedLead.id === data?.lead_id || selectedLead.id === pendingDealWonLead?.id)) {
       setSelectedLead(prev => prev ? ({ ...prev, status: 'WON' }) : null);
     }
+    // Notify revenue dashboard and targets
+    window.dispatchEvent(new CustomEvent('revenueUpdated', {
+      detail: { lead_id: data?.lead_id || pendingDealWonLead?.id, status: 'WON' }
+    }));
+    window.dispatchEvent(new Event('leadStatsUpdated'));
   };
 
   const handleAddNote = async (e) => {

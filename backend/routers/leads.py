@@ -1074,6 +1074,18 @@ def update_lead(
     if lead_in.followup_date is not None: lead.followup_date = lead_in.followup_date
     if lead_in.followup_time is not None: lead.followup_time = lead_in.followup_time
 
+    if lead_in.quotetask_quotation_amount is not None:
+        new_amt = float(lead_in.quotetask_quotation_amount)
+        lead.quotetask_quotation_amount = new_amt
+        # Synchronize with Finance and Support Handoffs if present
+        from models.workflow import FinanceHandoff, SupportHandoff
+        fh = db.query(FinanceHandoff).filter(FinanceHandoff.lead_id == lead.id).first()
+        if fh:
+            fh.final_amount = new_amt
+        sh = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
+        if sh:
+            sh.total_deal_amount = new_amt
+
     log_lead_activity(
         db=db,
         lead_id=lead.id,
@@ -1294,6 +1306,67 @@ def mark_deal_won_with_support_manager(
     except Exception as e:
         logger.error(f"Error completing deal won workflow: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process deal WON: {str(e)}")
+
+@router.put("/{lead_id}/won-amount")
+def update_won_deal_amount(
+    lead_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Edits the won deal amount for a WON or active deal.
+    Immediately synchronizes Lead.quotetask_quotation_amount, FinanceHandoff.final_amount,
+    and SupportHandoff.total_deal_amount, triggering automatic revenue recalculations.
+    """
+    can_edit = user_has_permission(current_user, "leads", "edit", db) or current_user.role in ["ADMIN", "MANAGER", "SALES"]
+    if not can_edit:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to edit this deal amount.")
+
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Deal / Lead not found")
+
+    new_amount = payload.get("amount")
+    if new_amount is None:
+        raise HTTPException(status_code=400, detail="Amount is required")
+    try:
+        new_amount = float(new_amount)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid amount value")
+
+    lead.quotetask_quotation_amount = new_amount
+
+    from models.workflow import FinanceHandoff, SupportHandoff
+    fh = db.query(FinanceHandoff).filter(FinanceHandoff.lead_id == lead.id).first()
+    if fh:
+        fh.final_amount = new_amount
+
+    sh = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
+    if sh:
+        sh.total_deal_amount = new_amount
+
+    current_emp = get_employee_for_user(current_user, db)
+    emp_id = current_emp.id if current_emp else None
+    emp_name = current_emp.name if current_emp else current_user.username
+
+    log_lead_activity(
+        db=db,
+        lead_id=lead.id,
+        performed_by_id=emp_id,
+        activity_type="DEAL_AMOUNT_UPDATED",
+        description=f"{emp_name} updated deal won amount to Rs. {new_amount:,.2f}"
+    )
+
+    db.commit()
+    db.refresh(lead)
+
+    return {
+        "success": True,
+        "lead_id": lead.id,
+        "new_amount": new_amount,
+        "message": f"Won deal amount updated to ₹{new_amount:,.2f}"
+    }
 
 @router.post("/{lead_id}/notes", response_model=LeadOut)
 def add_lead_note(

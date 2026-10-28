@@ -89,6 +89,19 @@ const Dashboard = () => {
 
   useEffect(() => {
     fetchDashboardData();
+
+    const handleUpdates = () => {
+      fetchDashboardData();
+      fetchEmployeeTarget();
+    };
+
+    window.addEventListener('revenueUpdated', handleUpdates);
+    window.addEventListener('leadStatsUpdated', handleUpdates);
+
+    return () => {
+      window.removeEventListener('revenueUpdated', handleUpdates);
+      window.removeEventListener('leadStatsUpdated', handleUpdates);
+    };
   }, []);
 
   useEffect(() => {

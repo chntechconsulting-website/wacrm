@@ -88,6 +88,7 @@ class LeadUpdate(BaseModel):
     followup_date: Optional[date] = None
     followup_time: Optional[str] = None
     assigned_to: Optional[int] = None
+    quotetask_quotation_amount: Optional[float] = None
 
     @field_validator(
         "email", "followup_date", "followup_time", "whatsapp_number",

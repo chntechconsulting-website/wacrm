@@ -14,7 +14,10 @@ import {
   Download,
   MoreVertical,
   TrendingUp,
-  LayoutDashboard
+  LayoutDashboard,
+  CheckCircle,
+  Edit3,
+  X
 } from 'lucide-react';
 
 const SalesRevenueReport = () => {
@@ -24,7 +27,14 @@ const SalesRevenueReport = () => {
   // Filters state
   const [selectedTeam, setSelectedTeam] = useState('All Teams');
   const [selectedSalesperson, setSelectedSalesperson] = useState(0);
-  const [dateRange, setDateRange] = useState('Oct 01, 2026 - Oct 31, 2026');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  // Edit Won Deal Modal
+  const [editingDeal, setEditingDeal] = useState(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const fetchRevenue = async () => {
     try {
@@ -32,6 +42,10 @@ const SalesRevenueReport = () => {
       const params = {};
       if (selectedTeam && selectedTeam !== 'All Teams') params.team = selectedTeam;
       if (selectedSalesperson && selectedSalesperson !== 0) params.salesperson_id = selectedSalesperson;
+      if (startDate && endDate) {
+        params.start_date = startDate;
+        params.end_date = endDate;
+      }
 
       const res = await API.get('/reports/sales-revenue', { params });
       if (res.data) {
@@ -46,10 +60,67 @@ const SalesRevenueReport = () => {
 
   useEffect(() => {
     fetchRevenue();
-  }, []);
+
+    // Auto-update listeners for real-time reactivity without manual refresh
+    const handleRevenueUpdate = () => {
+      fetchRevenue();
+    };
+
+    window.addEventListener('revenueUpdated', handleRevenueUpdate);
+    window.addEventListener('leadStatsUpdated', handleRevenueUpdate);
+
+    return () => {
+      window.removeEventListener('revenueUpdated', handleRevenueUpdate);
+      window.removeEventListener('leadStatsUpdated', handleRevenueUpdate);
+    };
+  }, [startDate, endDate]);
 
   const handleApply = () => {
     fetchRevenue();
+  };
+
+  const handleEditDealClick = (deal) => {
+    setEditingDeal(deal);
+    setEditAmount(deal.raw_amount || '');
+    setEditError('');
+  };
+
+  const handleSaveDealAmount = async (e) => {
+    e.preventDefault();
+    if (!editingDeal) return;
+    const num = parseFloat(editAmount);
+    if (isNaN(num) || num < 0) {
+      setEditError('Please enter a valid deal amount.');
+      return;
+    }
+
+    try {
+      setSavingEdit(true);
+      setEditError('');
+
+      if (editingDeal.lead_id) {
+        await API.put(`/leads/${editingDeal.lead_id}/won-amount`, { amount: num });
+      }
+
+      window.dispatchEvent(new CustomEvent('revenueUpdated', {
+        detail: { lead_id: editingDeal.lead_id, amount: num, status: 'Won' }
+      }));
+      window.dispatchEvent(new Event('leadStatsUpdated'));
+
+      PingoPopupService.showNotification({
+        title: 'Deal Amount Recalculated',
+        message: `Won deal updated to ₹${num.toLocaleString('en-IN')}. Revenue and achievements refreshed!`,
+        type: 'success'
+      });
+
+      setEditingDeal(null);
+      fetchRevenue();
+    } catch (err) {
+      console.error('Failed to update deal amount', err);
+      setEditError(err.response?.data?.detail || 'Failed to update deal amount.');
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const handleExportDeals = () => {
@@ -521,9 +592,26 @@ const SalesRevenueReport = () => {
         </div>
 
         <div className="sr-filters-bar">
-          <div className="sr-date-btn">
-            <Calendar size={15} color="#3b82f6" />
-            <span>{dateRange}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>From:</span>
+            <input
+              type="date"
+              className="sr-filter-select"
+              style={{ padding: '6px 10px' }}
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>To:</span>
+            <input
+              type="date"
+              className="sr-filter-select"
+              style={{ padding: '6px 10px' }}
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
           </div>
 
           <select
@@ -767,9 +855,28 @@ const SalesRevenueReport = () => {
                     <td style={{ color: '#64748b' }}>{d.expected_close}</td>
                     <td style={{ color: '#64748b' }}>{d.won_date}</td>
                     <td style={{ textAlign: 'right' }}>
-                      <button type="button" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}>
-                        <MoreVertical size={16} />
-                      </button>
+                      {d.status === 'Won' && d.lead_id && (
+                        <button
+                          type="button"
+                          onClick={() => handleEditDealClick(d)}
+                          title="Edit Won Deal Amount"
+                          style={{
+                            background: '#eff6ff',
+                            border: '1px solid #bfdbfe',
+                            borderRadius: '6px',
+                            color: '#2563eb',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            fontSize: '0.75rem',
+                            fontWeight: 600
+                          }}
+                        >
+                          <Edit3 size={13} /> Edit
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -778,6 +885,138 @@ const SalesRevenueReport = () => {
           </table>
         </div>
       </div>
+
+      {/* Edit Won Deal Modal */}
+      {editingDeal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(3px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999
+        }}>
+          <div style={{
+            background: '#ffffff',
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '440px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              padding: '18px 22px',
+              borderBottom: '1px solid #f1f5f9',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Edit3 size={18} color="#2563eb" />
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+                  Edit Won Deal Amount
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingDeal(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDealAmount} style={{ padding: '20px 22px' }}>
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
+                  Customer / Deal
+                </label>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0f172a' }}>
+                  {editingDeal.customer}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                  {editingDeal.deal_name}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '18px' }}>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>
+                  Confirmed Won Amount (₹) *
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  placeholder="e.g. 75000"
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '1rem',
+                    fontWeight: 700,
+                    color: '#0f172a',
+                    outline: 'none'
+                  }}
+                />
+                <span style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px', display: 'block' }}>
+                  Recalculates Total Revenue and Salesperson Achievement instantly.
+                </span>
+              </div>
+
+              {editError && (
+                <div style={{ padding: '8px 12px', background: '#fef2f2', color: '#b91c1c', borderRadius: '6px', fontSize: '0.8rem', marginBottom: '14px' }}>
+                  {editError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setEditingDeal(null)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#475569',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEdit}
+                  style={{
+                    padding: '8px 18px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: '#2563eb',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {savingEdit ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                  Save & Recalculate
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

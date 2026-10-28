@@ -111,6 +111,19 @@ const SalesTargetsPage = () => {
 
   useEffect(() => {
     fetchData();
+
+    // Auto-update listeners for real-time reactivity without manual refresh
+    const handleRevenueUpdate = () => {
+      fetchData();
+    };
+
+    window.addEventListener('revenueUpdated', handleRevenueUpdate);
+    window.addEventListener('leadStatsUpdated', handleRevenueUpdate);
+
+    return () => {
+      window.removeEventListener('revenueUpdated', handleRevenueUpdate);
+      window.removeEventListener('leadStatsUpdated', handleRevenueUpdate);
+    };
   }, [selectedYear, selectedMonth, selectedPeriodType, selectedDepartment, selectedEmployeeId]);
 
   const handleOpenAddModal = (empId = null) => {
