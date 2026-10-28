@@ -804,15 +804,28 @@ const DooctiInAppDialer = () => {
 
       API.post('/doocti/call-log', pushPayload)
         .then((res) => {
-          window.dispatchEvent(new CustomEvent('crm-call-completed', { detail: res.data }));
+          const detailData = { ...pushPayload, ...(res.data || {}) };
+          window.dispatchEvent(new CustomEvent('crm-call-completed', { detail: detailData }));
           window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: pushPayload.uniqueid, status: finalStatus } }));
           fetchRecentCalls();
         })
         .catch(() => {
+          window.dispatchEvent(new CustomEvent('crm-call-completed', { detail: pushPayload }));
           window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: pushPayload.uniqueid, status: finalStatus } }));
           fetchRecentCalls();
         });
     } else {
+      const fallbackPayload = {
+        uniqueid: session?.callId,
+        phone_number: targetPhone,
+        customer_phone: targetPhone,
+        status: finalStatus,
+        duration: talkDuration,
+        call_direction: session?.direction || (isDirectionInbound ? 'INBOUND' : 'OUTBOUND'),
+        lead_id: matchedLead?.id || session?.contactData?.id || null,
+        lead_name: matchedLead?.name || session?.contactData?.name || null
+      };
+      window.dispatchEvent(new CustomEvent('crm-call-completed', { detail: fallbackPayload }));
       window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: session?.callId, status: finalStatus } }));
     }
 

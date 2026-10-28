@@ -691,6 +691,7 @@ const CallLogsPage = () => {
                 <th style={{ minWidth: '150px' }}>Timestamp</th>
                 <th style={{ width: '90px' }}>Duration</th>
                 <th style={{ width: '130px' }}>Call Status</th>
+                <th style={{ width: '130px' }}>Product Category</th>
                 <th style={{ minWidth: '220px' }}>Recording</th>
                 <th style={{ width: '170px', textAlign: 'right' }}>Actions</th>
               </tr>
@@ -698,7 +699,7 @@ const CallLogsPage = () => {
             <tbody>
               {loading && callLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <div className="table-empty-state">
                       <RefreshCw size={28} className="spin" style={{ margin: '0 auto', color: '#2563eb' }} />
                       <div className="table-empty-title">Loading IVR telephony logs...</div>
@@ -708,7 +709,7 @@ const CallLogsPage = () => {
                 </tr>
               ) : callLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ padding: '36px 16px', background: '#f8fafc' }}>
+                  <td colSpan={9} style={{ padding: '36px 16px', background: '#f8fafc' }}>
                     <PingoEmptyState
                       pose="inspect"
                       height={120}
@@ -816,6 +817,32 @@ const CallLogsPage = () => {
                       {/* Status */}
                       <td>
                         {getStatusBadge(log.call_status)}
+                      </td>
+
+                      {/* Product Category */}
+                      <td>
+                        {(() => {
+                          const cat = (log.product_category || 'UNCLASSIFIED').toUpperCase();
+                          const isBio = cat === 'BIOMETRIC';
+                          const isWahrms = cat === 'WAHRMS';
+                          const bg = isBio ? '#eff6ff' : isWahrms ? '#f0fdf4' : '#f1f5f9';
+                          const color = isBio ? '#1d4ed8' : isWahrms ? '#15803d' : '#64748b';
+                          const border = isBio ? '#bfdbfe' : isWahrms ? '#bbf7d0' : '#cbd5e1';
+                          return (
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '3px 8px',
+                              borderRadius: '12px',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              backgroundColor: bg,
+                              color: color,
+                              border: '1px solid ' + border
+                            }}>
+                              {cat}
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Audio Recording */}

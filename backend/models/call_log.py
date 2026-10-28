@@ -36,6 +36,7 @@ class CallLog(Base):
     ended_at = Column(DateTime, nullable=True)
     
     notes = Column(Text, nullable=True)
+    product_category = Column(String(50), nullable=True)  # BIOMETRIC, WAHRMS, UNCLASSIFIED
     created_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
 
     lead = relationship("Lead", backref="call_logs")

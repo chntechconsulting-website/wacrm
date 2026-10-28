@@ -62,13 +62,14 @@ const STATUS_OPTIONS = [
   'RE-INQUIRY',
   'CONTACTED',
   'INTERESTED',
-  'QUALIFIED',
+  'RNR',
   'DEMO / MEETING',
   'PROPOSAL SENT',
   'NEGOTIATION',
   'FOLLOW-UP',
   'WON',
-  'LOST'
+  'LOST',
+  'JUNK'
 ];
 
 const SOURCE_OPTIONS = ['META', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'];
@@ -98,6 +99,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(initialStatusFromUrl);
   const [sourceFilter, setSourceFilter] = useState(initialSourceFromUrl);
+  const [productFilter, setProductFilter] = useState('');
   const [assignedToFilter, setAssignedToFilter] = useState(initialAssignedToFromUrl);
   const [sortOrder, setSortOrder] = useState('desc'); // 'desc' = newest received first, 'asc' = oldest received first
   const [receivedDateFilter, setReceivedDateFilter] = useState(''); // 'YYYY-MM-DD'
@@ -368,6 +370,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
       const effectiveSource = sourceFilter || defaultSource;
       if (effectiveSource && !reinquiryFilter) params.source_filter = effectiveSource;
+      if (productFilter) params.product_category_filter = productFilter;
 
       if (sortOrder) params.sort_order = sortOrder;
       if (receivedDateFilter) params.date_filter = receivedDateFilter;
@@ -401,7 +404,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     fetchLeads();
     fetchEmployees();
     fetchSourceCounts();
-  }, [search, statusFilter, sourceFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+  }, [search, statusFilter, sourceFilter, productFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
 
   // Real-time automatic lead synchronization: poll quietly every 5 seconds so new Meta leads appear automatically
   useEffect(() => {
@@ -411,7 +414,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }, 5000);
 
     return () => clearInterval(syncInterval);
-  }, [search, statusFilter, sourceFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+  }, [search, statusFilter, sourceFilter, productFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
 
   const handleOpenCreateModal = () => {
     setFormData({
@@ -950,6 +953,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     if (s.includes('NEW') || s === 'ASSIGNED') return { bg: 'rgba(59, 130, 246, 0.12)', color: '#2563eb' };
     if (s.includes('CONTACTED')) return { bg: 'rgba(14, 165, 233, 0.12)', color: '#0284c7' };
     if (s.includes('INTERESTED') && !s.includes('NOT')) return { bg: 'rgba(245, 158, 11, 0.12)', color: '#d97706' };
+    if (s.includes('RNR')) return { bg: 'rgba(249, 115, 22, 0.12)', color: '#c2410c' };
+    if (s.includes('JUNK')) return { bg: 'rgba(100, 116, 139, 0.14)', color: '#475569' };
     if (s.includes('QUALIFIED')) return { bg: 'rgba(20, 184, 166, 0.12)', color: '#0d9488' };
     if (s.includes('DEMO') || s.includes('MEETING')) return { bg: 'rgba(99, 102, 241, 0.12)', color: '#4f46e5' };
     if (s.includes('PROPOSAL')) return { bg: 'rgba(147, 51, 234, 0.12)', color: '#9333ea' };
@@ -1185,6 +1190,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             onClick={() => {
               setReinquiryFilter(prev => !prev);
               setSourceFilter('');
+                        setProductFilter('');
             }}
             style={{
               display: 'flex',
@@ -1249,6 +1255,18 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
               {SOURCE_OPTIONS.map(src => <option key={src} value={src}>{src}</option>)}
             </select>
 
+            <select 
+              value={productFilter} 
+              onChange={(e) => setProductFilter(e.target.value)}
+              style={{ width: '150px' }}
+              title="Filter by Product Category"
+            >
+              <option value="">All Products</option>
+              <option value="BIOMETRIC">BIOMETRIC</option>
+              <option value="WAHRMS">WAHRMS</option>
+              <option value="UNCLASSIFIED">UNCLASSIFIED</option>
+            </select>
+
             {/* Sort by Lead Received Date/Time */}
             <select
               value={sortOrder}
@@ -1310,6 +1328,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 <th>Phone</th>
                 <th>Company</th>
                 <th>Source</th>
+                <th style={{ minWidth: '130px' }}>Product</th>
                 <th style={{ minWidth: '140px' }}>Status</th>
                 <th>Assigned To</th>
                 <th 
@@ -1336,13 +1355,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-4 text-muted">
+                  <td colSpan="9" className="text-center py-4 text-muted">
                     Loading leads data...
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan="8" style={{ padding: '36px 16px', background: '#f8fafc' }}>
+                  <td colSpan="9" style={{ padding: '36px 16px', background: '#f8fafc' }}>
                     <PingoEmptyState
                       pose="playful"
                       height={120}
@@ -1444,6 +1463,39 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         <span style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '6px', backgroundColor: srcBadgeStyle.bg, color: srcBadgeStyle.color, fontWeight: '600' }}>
                           {lead.source}
                         </span>
+                      </td>
+                      <td>
+                        {(() => {
+                          const rawCat = (lead.product_category || 'UNCLASSIFIED').toUpperCase();
+                          const isBio = rawCat === 'BIOMETRIC';
+                          const isWahrms = rawCat === 'WAHRMS';
+                          const bg = isBio ? '#eff6ff' : isWahrms ? '#f0fdf4' : '#f8fafc';
+                          const color = isBio ? '#1d4ed8' : isWahrms ? '#15803d' : '#64748b';
+                          const border = isBio ? '#bfdbfe' : isWahrms ? '#bbf7d0' : '#cbd5e1';
+                          return (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              padding: '3px 9px',
+                              borderRadius: '12px',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              backgroundColor: bg,
+                              color: color,
+                              border: `1px solid ${border}`,
+                              whiteSpace: 'nowrap'
+                            }}>
+                              <span style={{
+                                width: '6px',
+                                height: '6px',
+                                borderRadius: '50%',
+                                backgroundColor: isBio ? '#2563eb' : isWahrms ? '#16a34a' : '#94a3b8'
+                              }} />
+                              {rawCat}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td style={{ minWidth: '140px' }} onClick={(e) => e.stopPropagation()}>
                         <select
@@ -1839,6 +1891,51 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           {selectedLead.source}
                         </span>
 
+                        {/* Product Category Pill */}
+                        {(() => {
+                          const cat = (selectedLead.product_category || 'UNCLASSIFIED').toUpperCase();
+                          const isBio = cat === 'BIOMETRIC';
+                          const isWahrms = cat === 'WAHRMS';
+                          const bg = isBio ? '#eff6ff' : isWahrms ? '#f0fdf4' : '#f8fafc';
+                          const color = isBio ? '#1d4ed8' : isWahrms ? '#15803d' : '#64748b';
+                          const border = isBio ? '#bfdbfe' : isWahrms ? '#bbf7d0' : '#cbd5e1';
+                          return (
+                            <div style={{ position: 'relative' }} title="Product Classification: Click to change">
+                              <select
+                                value={cat}
+                                onChange={async (e) => {
+                                  const newCat = e.target.value;
+                                  try {
+                                    await API.put(`/leads/${selectedLead.id}`, { product_category: newCat });
+                                    setSelectedLead(prev => ({ ...prev, product_category: newCat, product_category_confirmed: true }));
+                                    fetchLeads();
+                                  } catch (err) {
+                                    console.error('Failed to update product category:', err);
+                                  }
+                                }}
+                                style={{
+                                  appearance: 'none',
+                                  WebkitAppearance: 'none',
+                                  padding: '4px 24px 4px 10px',
+                                  borderRadius: '16px',
+                                  fontSize: '0.74rem',
+                                  fontWeight: '800',
+                                  backgroundColor: bg,
+                                  color: color,
+                                  border: `1.5px solid ${border}`,
+                                  cursor: 'pointer',
+                                  outline: 'none'
+                                }}
+                              >
+                                <option value="UNCLASSIFIED">UNCLASSIFIED</option>
+                                <option value="BIOMETRIC">BIOMETRIC</option>
+                                <option value="WAHRMS">WAHRMS</option>
+                              </select>
+                              <ChevronDown size={13} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: color }} />
+                            </div>
+                          );
+                        })()}
+
                         {/* Interactive Status Pill in Header */}
                         <div style={{ position: 'relative' }} title="Change Lead Status">
                           <select
@@ -2008,7 +2105,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
                       {/* 1-Click Fast Status Pills */}
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        {['NEW LEAD', 'CONTACTED', 'FOLLOW-UP', 'QUALIFIED', 'WON', 'LOST'].map(st => {
+                        {['NEW LEAD', 'CONTACTED', 'FOLLOW-UP', 'RNR', 'WON', 'LOST', 'JUNK'].map(st => {
                           const isActive = selectedLead.status === st;
                           const badge = getStatusBadgeStyle(st);
                           return (

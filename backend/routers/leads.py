@@ -158,6 +158,8 @@ def build_lead_out(lead: Lead) -> LeadOut:
         rating=lead.rating,
         priority=lead.priority,
         requirement_notes=lead.requirement_notes,
+        product_category=getattr(lead, 'product_category', None) or 'UNCLASSIFIED',
+        product_category_confirmed=bool(getattr(lead, 'product_category_confirmed', False)),
         followup_date=lead.followup_date,
         followup_time=lead.followup_time,
         assigned_to=lead.assigned_to,
@@ -201,6 +203,8 @@ def list_leads(
     status_val: Optional[str] = Query(None, alias="status"),
     source_filter: Optional[str] = None,
     source: Optional[str] = None,
+    product_category: Optional[str] = None,
+    product_category_filter: Optional[str] = None,
     priority_filter: Optional[str] = None,
     priority: Optional[str] = None,
     assigned_to_filter: Optional[int] = None,
@@ -283,6 +287,10 @@ def list_leads(
             query = query.filter(or_(Lead.status == "FOLLOW-UP", Lead.status == "FOLLOW_UP"))
         elif st_clean in ["DEMO", "MEETING", "DEMO / MEETING", "DEMO/MEETING"]:
             query = query.filter(or_(Lead.status == "DEMO / MEETING", Lead.status == "DEMO", Lead.status == "MEETING"))
+        elif st_clean in ["RNR", "RINGING_NO_RESPONSE", "RINGING NO RESPONSE"]:
+            query = query.filter(or_(Lead.status == "RNR", Lead.status == "RINGING NO RESPONSE", Lead.status == "RINGING_NO_RESPONSE"))
+        elif st_clean in ["JUNK", "SPAM", "INVALID"]:
+            query = query.filter(or_(Lead.status == "JUNK", Lead.status == "SPAM", Lead.status == "INVALID"))
         else:
             query = query.filter(Lead.status.ilike(eff_status.strip()))
 
@@ -302,6 +310,14 @@ def list_leads(
             query = query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel"))
         else:
             query = query.filter(Lead.source.ilike(eff_source))
+
+    eff_category = product_category_filter or product_category
+    if eff_category and eff_category.upper() != "ALL":
+        cat_clean = eff_category.strip().upper()
+        if cat_clean == "UNCLASSIFIED":
+            query = query.filter(or_(Lead.product_category == None, Lead.product_category == "", Lead.product_category == "UNCLASSIFIED"))
+        else:
+            query = query.filter(Lead.product_category == cat_clean)
 
     eff_priority = priority_filter or priority
     if eff_priority and eff_priority.upper() != "ALL":
@@ -1085,6 +1101,16 @@ def update_lead(
         sh = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
         if sh:
             sh.total_deal_amount = new_amt
+
+    if lead_in.product_category is not None:
+        cat_val = lead_in.product_category.strip().upper()
+        if cat_val in ['BIOMETRIC', 'WAHRMS', 'UNCLASSIFIED']:
+            lead.product_category = cat_val
+            if cat_val in ['BIOMETRIC', 'WAHRMS']:
+                lead.product_category_confirmed = True
+
+    if lead_in.product_category_confirmed is not None:
+        lead.product_category_confirmed = lead_in.product_category_confirmed
 
     log_lead_activity(
         db=db,

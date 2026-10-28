@@ -38,6 +38,7 @@ class CallLogResponse(BaseModel):
     answered_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     notes: Optional[str] = None
+    product_category: Optional[str] = None  # BIOMETRIC, WAHRMS, UNCLASSIFIED
     created_at: datetime
 
     # Additional expanded fields for UI

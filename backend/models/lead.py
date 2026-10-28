@@ -39,6 +39,8 @@ class Lead(Base):
     rating = Column(String(50), default="Warm", nullable=True)                  # Hot, Warm, Cold
     priority = Column(String(20), default="MEDIUM", nullable=True)              # High, Medium, Low
     requirement_notes = Column(Text, nullable=True)
+    product_category = Column(String(50), nullable=True, index=True)             # BIOMETRIC, WAHRMS, UNCLASSIFIED
+    product_category_confirmed = Column(Boolean, default=False, nullable=False)   # True if manually confirmed by user
 
     followup_date = Column(Date, nullable=True)
     followup_time = Column(String(20), nullable=True)

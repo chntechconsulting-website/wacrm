@@ -29,6 +29,8 @@ class LeadBase(BaseModel):
     rating: Optional[str] = "Warm"  # Hot, Warm, Cold
     priority: Optional[str] = "MEDIUM"  # High, Medium, Low
     requirement_notes: Optional[str] = None
+    product_category: Optional[str] = None  # BIOMETRIC, WAHRMS, UNCLASSIFIED
+    product_category_confirmed: Optional[bool] = False
 
     followup_date: Optional[date] = None
     followup_time: Optional[str] = None
@@ -89,6 +91,8 @@ class LeadUpdate(BaseModel):
     followup_time: Optional[str] = None
     assigned_to: Optional[int] = None
     quotetask_quotation_amount: Optional[float] = None
+    product_category: Optional[str] = None
+    product_category_confirmed: Optional[bool] = None
 
     @field_validator(
         "email", "followup_date", "followup_time", "whatsapp_number",

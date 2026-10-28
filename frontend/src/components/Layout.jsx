@@ -3,6 +3,7 @@ import { Outlet, Link, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar/Sidebar';
 import CRMDialer from './Dialer/CRMDialer';
 import DooctiInAppDialer from './Dialer/DooctiInAppDialer';
+import CallCompletionDispositionModal from './Dialer/CallCompletionDispositionModal';
 import FollowupReminderCard from './FollowupReminder/FollowupReminderCard';
 import { Menu, Building2, PhoneIncoming, X, ArrowRight } from 'lucide-react';
 import API from '../services/api';
@@ -10,6 +11,8 @@ import API from '../services/api';
 const Layout = () => {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [incomingAlert, setIncomingAlert] = useState(null);
+  const [dispositionCallData, setDispositionCallData] = useState(null);
+  const [showDispositionModal, setShowDispositionModal] = useState(false);
   const lastCallIdRef = useRef(null);
   const isInitialMount = useRef(true);
   const navigate = useNavigate();
@@ -49,10 +52,20 @@ const Layout = () => {
       setIncomingAlert(null);
     };
 
+    const handleCallCompletedDisposition = (e) => {
+      if (!isMounted) return;
+      const data = e.detail;
+      if (data) {
+        setDispositionCallData(data);
+        setShowDispositionModal(true);
+      }
+    };
+
     window.addEventListener('crm-incoming-call', handleIncomingCallEvent);
     window.addEventListener('crm-call-answered', handleCallAnsweredEvent);
     window.addEventListener('crm-incoming-call-ended', handleCallEndedEvent);
     window.addEventListener('crm-call-completed', handleCallEndedEvent);
+    window.addEventListener('crm-call-completed', handleCallCompletedDisposition);
 
     // 2. Resilient background polling: synchronizes active ringing/connected calls across tabs
     const checkRecentCalls = async () => {
@@ -108,6 +121,7 @@ const Layout = () => {
       window.removeEventListener('crm-call-answered', handleCallAnsweredEvent);
       window.removeEventListener('crm-incoming-call-ended', handleCallEndedEvent);
       window.removeEventListener('crm-call-completed', handleCallEndedEvent);
+      window.removeEventListener('crm-call-completed', handleCallCompletedDisposition);
     };
   }, [incomingAlert]);
 
@@ -413,6 +427,20 @@ const Layout = () => {
 
       {/* Global Automatic Follow-up Reminder Floating Notification Card */}
       <FollowupReminderCard />
+
+      {/* Mandatory Product Classification & Call Completion Disposition Modal */}
+      <CallCompletionDispositionModal
+        isOpen={showDispositionModal}
+        callData={dispositionCallData}
+        onClose={() => {
+          setShowDispositionModal(false);
+          setDispositionCallData(null);
+        }}
+        onSaved={() => {
+          setShowDispositionModal(false);
+          setDispositionCallData(null);
+        }}
+      />
     </div>
   );
 };

@@ -286,6 +286,8 @@ class DooctiLeadUpdatePayload(BaseModel):
     call_purpose: Optional[str] = None
     lead_stage: Optional[str] = None
     agent_email: Optional[str] = None
+    product_category: Optional[str] = None
+    call_id: Optional[str] = None
 
 # -------------------------------------------------------------
 # 1. Lead Retrieval by Phone Number (PDF Page 4 & 6)
@@ -314,6 +316,9 @@ def get_lead_by_number(
             if emp:
                 lead_owner_name = emp.name or f"{emp.first_name or ''} {emp.last_name or ''}".strip()
 
+        from services.product_categorization_service import ProductCategorizationService
+        cat_info = ProductCategorizationService.suggest_category_for_lead(matched_lead)
+
         lead_data = {
             "id": matched_lead.id,
             "customer_id": matched_lead.id,
@@ -328,6 +333,9 @@ def get_lead_by_number(
             "queue": "Default",
             "company": matched_lead.company or "",
             "entity_type": "Lead",
+            "product_category": matched_lead.product_category or cat_info.get("suggested_category") or "UNCLASSIFIED",
+            "suggested_product_category": cat_info.get("suggested_category") or "UNCLASSIFIED",
+            "product_category_confirmed": bool(matched_lead.product_category_confirmed),
             "created_at": matched_lead.created_at.isoformat() if hasattr(matched_lead, 'created_at') and matched_lead.created_at else None
         }
 
@@ -409,6 +417,9 @@ def get_lead_by_number(
             "queue": "Default",
             "company": "",
             "entity_type": "Lead",
+            "product_category": "UNCLASSIFIED",
+            "suggested_product_category": "UNCLASSIFIED",
+            "product_category_confirmed": False,
             "created_at": datetime.datetime.utcnow().isoformat()
         }
 
@@ -485,7 +496,8 @@ def get_lead_statuses(module: Optional[str] = None):
         {"label": "Contacted", "value": "CONTACTED", "code": "CONTACTED", "name": "Contacted"},
         {"label": "Interested", "value": "INTERESTED", "code": "INTERESTED", "name": "Interested"},
         {"label": "Follow Up", "value": "FOLLOW_UP", "code": "FOLLOW_UP", "name": "Follow Up"},
-        {"label": "Qualified", "value": "QUALIFIED", "code": "QUALIFIED", "name": "Qualified"},
+        {"label": "RNR", "value": "RNR", "code": "RNR", "name": "RNR"},
+        {"label": "Junk", "value": "JUNK", "code": "JUNK", "name": "Junk"},
         {"label": "Converted", "value": "CONVERTED", "code": "CONVERTED", "name": "Converted"},
         {"label": "Not Interested", "value": "NOT_INTERESTED", "code": "NOT_INTERESTED", "name": "Not Interested"},
         {"label": "Lost", "value": "LOST", "code": "LOST", "name": "Lost"}
@@ -901,12 +913,16 @@ async def push_doocti_call_log(
                     # When an agent dials a new phone number that doesn't exist in CRM,
                     # automatically create a new lead and assign to the logged-in/calling agent.
                     calling_agent_str = agent_name or station_str or f"Agent #{resolved_emp_id}" if resolved_emp_id else "Agent"
+                    from services.product_categorization_service import ProductCategorizationService
+                    init_cat = ProductCategorizationService.detect_category_from_text(combined_notes or "")
                     new_lead = Lead(
                         name=f"Call Lead ({raw_display})",
                         phone=raw_display,
                         source="DOOCTI",
                         status="NEW LEAD",
                         priority="MEDIUM",
+                        product_category=init_cat,
+                        product_category_confirmed=False,
                         assigned_to=resolved_emp_id,
                         assigned_by=resolved_emp_id,
                         assigned_at=now_ist if resolved_emp_id else None,
@@ -936,12 +952,16 @@ async def push_doocti_call_log(
                     )
                 else:
                     # INBOUND CALL: Auto-create lead so caller is tracked in CRM
+                    from services.product_categorization_service import ProductCategorizationService
+                    init_cat = ProductCategorizationService.detect_category_from_text(combined_notes or "")
                     new_lead = Lead(
                         name=f"Call Lead ({raw_display})",
                         phone=raw_display,
                         source="DOOCTI",
                         status="CONTACTED" if status_str in ["ANSWERED", "COMPLETED"] else "NEW LEAD",
                         priority="MEDIUM",
+                        product_category=init_cat,
+                        product_category_confirmed=False,
                         assigned_to=resolved_emp_id,
                         assigned_by=resolved_emp_id if resolved_emp_id else None,
                         assigned_at=now_ist if resolved_emp_id else None,
@@ -1092,6 +1112,16 @@ async def push_doocti_call_log(
             to_num = customer_phone or clean_target
 
         try:
+            # Sync product_category from Lead or payload if present
+            lead_cat = None
+            if resolved_lead_id:
+                ld = db.query(Lead).filter(Lead.id == resolved_lead_id).first()
+                if ld:
+                    lead_cat = ld.product_category
+            if not lead_cat:
+                from services.product_categorization_service import ProductCategorizationService
+                lead_cat = ProductCategorizationService.detect_category_from_text(combined_notes or "")
+
             call_entry = CallLog(
                 lead_id=resolved_lead_id,
                 employee_id=resolved_emp_id,
@@ -1106,7 +1136,8 @@ async def push_doocti_call_log(
                 started_at=started_at,
                 answered_at=answered_at,
                 ended_at=ended_at,
-                notes=combined_notes
+                notes=combined_notes,
+                product_category=lead_cat
             )
             db.add(call_entry)
             db.commit()
@@ -1146,6 +1177,12 @@ async def push_doocti_call_log(
         db.add(activity)
         db.commit()
 
+    lead_product_cat = None
+    if resolved_lead_id:
+        ld = db.query(Lead).filter(Lead.id == resolved_lead_id).first()
+        if ld:
+            lead_product_cat = ld.product_category
+
     return {
         "status": "success",
         "message": "Call log processed and saved successfully",
@@ -1153,6 +1190,7 @@ async def push_doocti_call_log(
         "call_log_id": call_entry.id,
         "employee_id": resolved_emp_id,
         "lead_id": resolved_lead_id,
+        "product_category": call_entry.product_category or lead_product_cat or "UNCLASSIFIED",
         "call_status": status_str,
         "duration": dur_sec,
         "recording_path": call_entry.recording_url
@@ -1177,13 +1215,24 @@ def update_lead_from_doocti(
         existing = lead.requirement_notes or ""
         lead.requirement_notes = f"{existing}\n[Doocti Call Notes]: {payload.call_notes}".strip()
 
+    if payload.product_category:
+        from services.product_categorization_service import ProductCategorizationService
+        ProductCategorizationService.save_lead_category(
+            db=db,
+            lead_id=lead.id,
+            category=payload.product_category,
+            is_manual_confirmation=True,
+            call_id=payload.call_id
+        )
+
     db.commit()
 
     # Log activity
+    cat_str = f" | Product Category: {lead.product_category}" if getattr(lead, 'product_category', None) else ""
     activity = LeadActivity(
         lead_id=lead.id,
         activity_type="LEAD_UPDATED",
-        description=f"Lead updated via Doocti Call Disposition. Status: {lead.status}. Notes: {payload.call_notes or 'None'}"
+        description=f"Lead updated via Doocti Call Disposition. Status: {lead.status}{cat_str}. Notes: {payload.call_notes or 'None'}"
     )
     db.add(activity)
     db.commit()
@@ -1192,7 +1241,8 @@ def update_lead_from_doocti(
         "status": "success",
         "message": "Lead updated successfully",
         "lead_id": lead.id,
-        "current_status": lead.status
+        "current_status": lead.status,
+        "product_category": lead.product_category
     }
 
 # -------------------------------------------------------------

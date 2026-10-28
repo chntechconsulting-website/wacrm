@@ -163,6 +163,7 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         answered_at=call.answered_at,
         ended_at=call.ended_at,
         notes=call.notes,
+        product_category=call.product_category or (call.lead.product_category if call.lead else 'UNCLASSIFIED'),
         created_at=call.created_at,
         lead_name=lead_name,
         employee_name=employee_name
