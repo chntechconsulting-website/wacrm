@@ -15,6 +15,7 @@ logger = logging.getLogger("wacrm")
 from config import settings
 from database import engine, Base, SessionLocal
 from models import User, Employee
+import models
 from services.auth import hash_password
 
 from routers import (
@@ -167,7 +168,9 @@ def startup_db_client():
                     "first_enquiry_date": "DATETIME NULL",
                     "latest_enquiry_date": "DATETIME NULL",
                     "previous_sources": "VARCHAR(255) NULL",
-                    "latest_source": "VARCHAR(50) NULL"
+                    "latest_source": "VARCHAR(50) NULL",
+                    "product_category": "VARCHAR(50) NULL",
+                    "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL"
                 }
                 for col_name, col_type in missing_cols.items():
                     if col_name not in columns:
@@ -182,7 +185,8 @@ def startup_db_client():
                 for col_sql in [
                     "ALTER TABLE call_logs ADD COLUMN transcript TEXT NULL",
                     "ALTER TABLE call_logs ADD COLUMN ai_summary TEXT NULL",
-                    "ALTER TABLE call_logs ADD COLUMN sentiment VARCHAR(50) NULL"
+                    "ALTER TABLE call_logs ADD COLUMN sentiment VARCHAR(50) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN product_category VARCHAR(50) NULL"
                 ]:
                     try:
                         conn.execute(text(col_sql))
@@ -282,6 +286,31 @@ def startup_db_client():
                         print(f"Auto-added missing column '{col_name}' to 'quotations' table.")
             except Exception as ex:
                 print(f"Quotations column sync check: {ex}")
+            # sales_targets table schema sync
+            try:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS sales_targets (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        employee_id INT NOT NULL,
+                        target_amount FLOAT NOT NULL DEFAULT 0.0,
+                        period_type VARCHAR(20) NOT NULL DEFAULT 'monthly',
+                        period_month INT NULL,
+                        period_year INT NOT NULL,
+                        created_by INT NULL,
+                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        INDEX ix_sales_targets_id (id),
+                        INDEX ix_sales_targets_employee_id (employee_id),
+                        CONSTRAINT uq_employee_target_period UNIQUE (employee_id, period_type, period_month, period_year),
+                        CONSTRAINT fk_sales_targets_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+                        CONSTRAINT fk_sales_targets_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                """))
+                conn.commit()
+                print("Sales targets table verified / synchronized.")
+            except Exception as ex:
+                print(f"Sales targets schema check: {ex}")
+
     except Exception as e:
         print(f"Error creating/synchronizing database tables: {e}")
 
