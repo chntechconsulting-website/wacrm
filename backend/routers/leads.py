@@ -260,17 +260,23 @@ def list_leads(
             query = query.filter(Lead.assigned_to == eff_assigned_to)
 
     if search:
-        search_fmt = f"%{search}%"
-        query = query.filter(
-            or_(
-                Lead.name.ilike(search_fmt),
-                Lead.first_name.ilike(search_fmt),
-                Lead.last_name.ilike(search_fmt),
-                Lead.phone.ilike(search_fmt),
-                Lead.email.ilike(search_fmt),
-                Lead.company.ilike(search_fmt)
-            )
-        )
+        clean_s = search.strip()
+        search_fmt = f"%{clean_s}%"
+        # If user searches phone with or without spaces/dashes/prefixes, extract digits
+        digits_only = "".join(filter(str.isdigit, clean_s))
+        conditions = [
+            Lead.name.ilike(search_fmt),
+            Lead.first_name.ilike(search_fmt),
+            Lead.last_name.ilike(search_fmt),
+            Lead.phone.ilike(search_fmt),
+            Lead.whatsapp_number.ilike(search_fmt),
+            Lead.email.ilike(search_fmt),
+            Lead.company.ilike(search_fmt)
+        ]
+        if len(digits_only) >= 4:
+            conditions.append(Lead.phone.ilike(f"%{digits_only[-10:]}%"))
+            conditions.append(Lead.whatsapp_number.ilike(f"%{digits_only[-10:]}%"))
+        query = query.filter(or_(*conditions))
 
     eff_status = status_filter or status_val
     if eff_status and eff_status.upper() != "ALL":
@@ -477,17 +483,23 @@ def list_my_leads(
     query = db.query(Lead).filter(Lead.assigned_to == current_emp.id)
 
     if search:
-        search_fmt = f"%{search}%"
-        query = query.filter(
-            or_(
-                Lead.name.ilike(search_fmt),
-                Lead.first_name.ilike(search_fmt),
-                Lead.last_name.ilike(search_fmt),
-                Lead.phone.ilike(search_fmt),
-                Lead.email.ilike(search_fmt),
-                Lead.company.ilike(search_fmt)
-            )
-        )
+        clean_s = search.strip()
+        search_fmt = f"%{clean_s}%"
+        # If user searches phone with or without spaces/dashes/prefixes, extract digits
+        digits_only = "".join(filter(str.isdigit, clean_s))
+        conditions = [
+            Lead.name.ilike(search_fmt),
+            Lead.first_name.ilike(search_fmt),
+            Lead.last_name.ilike(search_fmt),
+            Lead.phone.ilike(search_fmt),
+            Lead.whatsapp_number.ilike(search_fmt),
+            Lead.email.ilike(search_fmt),
+            Lead.company.ilike(search_fmt)
+        ]
+        if len(digits_only) >= 4:
+            conditions.append(Lead.phone.ilike(f"%{digits_only[-10:]}%"))
+            conditions.append(Lead.whatsapp_number.ilike(f"%{digits_only[-10:]}%"))
+        query = query.filter(or_(*conditions))
 
     if status_filter:
         query = query.filter(Lead.status == status_filter)

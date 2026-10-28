@@ -613,13 +613,18 @@ def list_call_logs(
         query = query.filter(CallLog.provider.ilike(f"%{provider}%"))
 
     if search:
-        s_fmt = f"%{search}%"
+        s_clean = search.strip()
+        s_fmt = f"%{s_clean}%"
+        query = query.outerjoin(Lead, CallLog.lead_id == Lead.id).outerjoin(Employee, CallLog.employee_id == Employee.id)
         query = query.filter(
             or_(
                 CallLog.from_number.ilike(s_fmt),
                 CallLog.to_number.ilike(s_fmt),
                 CallLog.provider_call_id.ilike(s_fmt),
-                CallLog.notes.ilike(s_fmt)
+                CallLog.notes.ilike(s_fmt),
+                Lead.name.ilike(s_fmt),
+                Lead.phone.ilike(s_fmt),
+                Employee.name.ilike(s_fmt)
             )
         )
 
