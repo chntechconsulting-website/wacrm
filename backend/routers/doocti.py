@@ -320,74 +320,7 @@ def get_lead_by_number(
     # 1. Search in Leads table using robust normalized phone search
     matched_lead = find_existing_lead_by_phone(db, raw_input_phone)
 
-    # Helper to ensure an incoming RINGING call record is immediately logged
-    def record_incoming_ringing_call(lead_id: Optional[int], caller_phone_str: str):
-        try:
-            cid = uniqueid or call_id
-            now_ist = get_ist_now()
-            # If uniqueid provided, check if CallLog already exists
-            existing_c = None
-            if cid:
-                existing_c = db.query(CallLog).filter(CallLog.provider_call_id == cid).first()
-            if not existing_c:
-                # Check 2-min window for same caller to avoid duplicate ringing entries
-                window_start = now_ist - datetime.timedelta(minutes=2)
-                existing_c = (
-                    db.query(CallLog)
-                    .filter(
-                        CallLog.from_number.like(f"%{target_num[-10:] if len(target_num)>=10 else target_num}%"),
-                        CallLog.call_direction == "INBOUND",
-                        CallLog.created_at >= window_start
-                    )
-                    .order_by(desc(CallLog.id))
-                    .first()
-                )
-
-            if not existing_c:
-                doocti_cfg = get_doocti_config(db)
-                dids = doocti_cfg.get("did_numbers") or DOOCTI_DIDS
-                to_trunk = dids[0] if dids else "07969671855"
-
-                # Check if lead is already assigned to an employee
-                emp_id = None
-                if lead_id:
-                    ld = db.query(Lead).filter(Lead.id == lead_id).first()
-                    if ld and ld.assigned_to:
-                        emp_id = ld.assigned_to
-
-                lead_cat = None
-                if lead_id:
-                    ld = db.query(Lead).filter(Lead.id == lead_id).first()
-                    if ld:
-                        lead_cat = ld.product_category
-
-                generated_call_id = cid or f"doocti_in_{target_num}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
-                ringing_entry = CallLog(
-                    lead_id=lead_id,
-                    employee_id=emp_id,
-                    provider="DOOCTI",
-                    provider_call_id=generated_call_id,
-                    from_number=caller_phone_str,
-                    to_number=to_trunk,
-                    call_status="RINGING",
-                    call_direction="INBOUND",
-                    duration_seconds=0,
-                    started_at=now_ist,
-                    notes=f"Inbound call ringing from {caller_phone_str}",
-                    product_category=lead_cat or "UNCLASSIFIED"
-                )
-                db.add(ringing_entry)
-                db.commit()
-                logger.info(f"🔔 [DOOCTI INBOUND] Created initial RINGING CallLog ID={ringing_entry.id} for caller {caller_phone_str}")
-        except Exception as e:
-            logger.warning(f"Failed to record initial ringing call in get_lead_by_number: {e}")
-            try:
-                db.rollback()
-            except Exception:
-                pass
-
     if matched_lead:
-        record_incoming_ringing_call(matched_lead.id, matched_lead.phone or raw_input_phone)
         lead_owner_name = "Unassigned"
         if matched_lead.assigned_to:
             emp = db.query(Employee).filter(Employee.id == matched_lead.assigned_to).first()
@@ -430,7 +363,6 @@ def get_lead_by_number(
     matched_customer = find_existing_customer_by_phone(db, raw_input_phone)
 
     if matched_customer:
-        record_incoming_ringing_call(matched_customer.converted_from_lead, matched_customer.phone or raw_input_phone)
         contact_data = {
             "id": matched_customer.id,
             "customer_id": matched_customer.id,
@@ -482,9 +414,6 @@ def get_lead_by_number(
         db.add(activity)
         db.commit()
 
-        # Immediate record of incoming ringing call
-        record_incoming_ringing_call(new_lead.id, raw_display_num)
-
         lead_data = {
             "id": new_lead.id,
             "customer_id": new_lead.id,
@@ -514,10 +443,6 @@ def get_lead_by_number(
             "lead": lead_data,
             "data": lead_data
         }
-
-    # Even if auto_create is False, record the inbound ringing call if it has a valid phone number
-    if len(target_num) >= 6:
-        record_incoming_ringing_call(None, raw_input_phone)
 
     return {
         "status": "not_found",

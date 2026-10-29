@@ -268,6 +268,7 @@ const DooctiInAppDialer = () => {
           let isExtActive = matchedData ? matchedData.is_active !== false : true;
 
           if (!matchedExt) {
+            console.warn('[Doocti] Employee/Extension mapping unavailable: No WebRTC extension found for user', { userId: user.id, employeeId: user.employee_id, username: user.username, availableExtensions: Object.keys(mapping) });
             setDidErrorNotice('No WebRTC extension is assigned to your user account. Please contact Administrator to map an extension in Settings → Integrations.');
           } else if (!isExtActive) {
             setDidErrorNotice(`WebRTC extension ${matchedExt} is currently deactivated. Please contact Administrator.`);
@@ -951,16 +952,31 @@ const DooctiInAppDialer = () => {
         const rawNum = msg.phone_number || msg.customer_number || msg.number || msg.caller || '';
         const inNum = String(rawNum).replace(/[^0-9]/g, '');
 
+        // GUARD: Require a provider-supplied call/session ID or a phone number for a valid ringing signal.
+        // Keypad typing, input focus events, and other non-telephony messages will lack these fields.
+        const providerCallId = msg.uniqueid || msg.call_id || msg.callid || msg.CallId || msg.id || '';
+        const hasProviderIdentifier = Boolean(providerCallId && String(providerCallId).trim());
+        const hasPhoneNumber = Boolean(inNum && inNum.length >= 6);
+
+        if (!hasProviderIdentifier && !hasPhoneNumber) {
+          // Not a real telephony ringing signal — ignore silently
+          return;
+        }
+
         // Check if an outbound call session is currently progressing (using synchronous ref + state)
         const currentSession = activeSessionRef.current;
         const currentActiveCall = activeCallRef.current || activeCall;
-        const isCurrentOutbound = currentSession?.direction === 'OUTBOUND' || (currentActiveCall && currentActiveCall.callStatus !== 'RINGING');
+        // An active outbound session is identified by its direction flag, regardless of current callStatus.
+        // This prevents a ringing signal during an active outbound call from being treated as a new inbound call.
+        const isCurrentOutbound = currentSession?.direction === 'OUTBOUND';
         const sessionPhone = String(currentSession?.customerPhone || '').replace(/[^0-9]/g, '');
         const isMatchingOutboundPhone = Boolean(sessionPhone && inNum && (sessionPhone.includes(inNum) || inNum.includes(sessionPhone)));
+        // Also treat any active call (CONNECTING, RINGING, CONNECTED) as blocking a new inbound popup
+        const hasActiveCallInProgress = Boolean(currentActiveCall && ['CONNECTING', 'RINGING', 'CONNECTED', 'ANSWERED'].includes(currentActiveCall.callStatus));
 
-        if (isCurrentOutbound || isMatchingOutboundPhone) {
-          // Outbound call is progressing and ringing at customer endpoint
-          if (activeSessionRef.current) {
+        if (isCurrentOutbound || isMatchingOutboundPhone || hasActiveCallInProgress) {
+          // Outbound call is progressing and ringing at customer endpoint, OR call already active
+          if (activeSessionRef.current && activeSessionRef.current.direction === 'OUTBOUND') {
             activeSessionRef.current.status = 'RINGING';
           }
           const updatedCallObj = {
@@ -975,7 +991,7 @@ const DooctiInAppDialer = () => {
           // INBOUND CALL ARRIVAL! (e.g. Doocti sending { type: "Ringing", phone_number: m })
           setIsRinging(true);
           toggleMinimize(false);
-          const realCallId = msg.uniqueid || msg.call_id || msg.callid || msg.CallId || msg.id || `doocti_inbound_${Date.now()}`;
+          const realCallId = providerCallId || `doocti_inbound_${Date.now()}`;
 
           // Guard against repeated Ringing events for the same inbound call to prevent duplicate logs
           const isSameInboundSession = activeSessionRef.current?.direction === 'INBOUND' && (
