@@ -328,6 +328,30 @@ const DooctiInAppDialer = () => {
   const isEndingCallRef = useRef(false);
   const dialpadInputRef = useRef(null);
 
+  // -------------------------------------------------------------
+  // Telephony engine lifecycle
+  // -------------------------------------------------------------
+  // The DooCTI webphone must be mounted with a real URL. An empty `src` makes the
+  // browser load the CRM itself inside the iframe (nested app, no SIP registration).
+  const rawTelephonySrc = String(config.domain || '').trim();
+  const telephonySrc = rawTelephonySrc && !/^https?:\/\//i.test(rawTelephonySrc)
+    ? `https://${rawTelephonySrc}`
+    : rawTelephonySrc;
+  const [iframeReady, setIframeReady] = useState(false);
+  const iframeLoadCountRef = useRef(0);
+  const iframeMountedAtRef = useRef(Date.now());
+  const [micDiagnostic, setMicDiagnostic] = useState(null);
+
+  // True once the provider document has signalled load, or if it has been mounted long
+  // enough that a missing load event cannot be the reason a dial would fail.
+  const isTelephonyReady = () =>
+    iframeReady || (Date.now() - iframeMountedAtRef.current > 4000 && Boolean(iframeRef.current?.contentWindow));
+
+  // WebRTC (getUserMedia) is unavailable on insecure origins. Without it the agent
+  // leg of every call has no microphone: outbound legs are dropped by the PBX and
+  // inbound calls ring but can never be answered with audio.
+  const mediaDevicesAvailable = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
+
   // Auto-focus dialpad number input when switching to dialpad tab
   useEffect(() => {
     if (activeTab === 'dialpad' && !isMinimized) {
@@ -347,8 +371,20 @@ const DooctiInAppDialer = () => {
 
   // Reload iframe in case agent session loses audio connection
   const handleReloadIframe = () => {
+    // Reloading the provider document destroys the live SIP session, so it is never
+    // allowed while a call is in progress.
+    if (activeSessionRef.current || activeCallRef.current) {
+      setDialerNotice({
+        type: 'warning',
+        title: 'Reload Blocked During Call',
+        message: 'The WebPhone cannot be reloaded while a call is active: reloading destroys the SIP session. Hang up first.'
+      });
+      return;
+    }
     if (iframeRef.current) {
       const currentSrc = iframeRef.current.src;
+      setIframeReady(false);
+      iframeMountedAtRef.current = Date.now();
       iframeRef.current.src = 'about:blank';
       setTimeout(() => {
         if (iframeRef.current) {
@@ -358,6 +394,56 @@ const DooctiInAppDialer = () => {
     }
     fetchRecentCalls();
   };
+
+  // Tracks provider document (re)loads. A reload during an active call means the
+  // provider document was destroyed (token expiry redirect, manual refresh, crash),
+  // taking the SIP session with it.
+  const handleIframeLoad = () => {
+    iframeLoadCountRef.current += 1;
+    setIframeReady(true);
+    console.info('[Doocti] WebPhone iframe loaded (load #' + iframeLoadCountRef.current + ') from', telephonySrc);
+
+    const session = activeSessionRef.current;
+    if (iframeLoadCountRef.current > 1 && session) {
+      console.warn('[Doocti] WebPhone document reloaded during an active call — the SIP session no longer exists.', {
+        sessionId: session.callId,
+        direction: session.direction,
+        status: session.status
+      });
+      setDialerNotice({
+        type: 'error',
+        title: 'WebPhone Reloaded During Call',
+        message: 'The DooCTI phone document reloaded, which terminates the SIP session. The call was ended. Re-open the phone panel and place the call again.'
+      });
+      handleEndCall('FAILED');
+    }
+  };
+
+  // Explicit microphone diagnostic: surfaces the exact WebRTC error name
+  // (NotAllowedError / NotFoundError / NotReadableError / SecurityError).
+  const testMicrophone = async () => {
+    setMicDiagnostic('checking');
+    if (!mediaDevicesAvailable) {
+      setMicDiagnostic('unavailable');
+      console.error('[Doocti] getUserMedia unavailable — CRM is not a secure context (HTTPS/localhost required) or the browser blocks media devices.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      setMicDiagnostic('ok');
+      console.info('[Doocti] Microphone access granted');
+    } catch (err) {
+      setMicDiagnostic(err?.name || 'error');
+      console.error('[Doocti] Microphone access failed:', err?.name, err?.message);
+    }
+  };
+
+  // Any change of provider URL re-mounts (and therefore restarts) the WebPhone document.
+  useEffect(() => {
+    iframeMountedAtRef.current = Date.now();
+    setIframeReady(false);
+  }, [telephonySrc]);
 
   // Save custom configuration
   const handleSaveConfig = (e) => {
@@ -524,6 +610,13 @@ const DooctiInAppDialer = () => {
             if (latest.id) session.dbCallId = latest.id;
             if (latest.provider_call_id) session.providerCallId = latest.provider_call_id;
             // The iframe's own terminal event is authoritative; polling is only a fallback.
+            console.warn('[Doocti] Terminating local session from server CDR fallback:', {
+              status: st,
+              callId: latest.id,
+              providerCallId: latest.provider_call_id,
+              correlatedBy: isSameCallId ? 'dbCallId' : (isSameProviderId ? 'providerCallId' : 'created-after-dial'),
+              sessionId: session.callId
+            });
             handleEndCall(st);
           }
         } catch (e) {
@@ -545,6 +638,53 @@ const DooctiInAppDialer = () => {
     if (!phoneNumber) return;
     setDialerNotice(null);
     setIsRinging(false);
+
+    // The provider must be configured and actually loaded before a C2C dial can be
+    // delivered. Without this gate the message is posted into a blank/foreign document.
+    if (!telephonySrc) {
+      setDialerNotice({
+        type: 'error',
+        title: 'Call Prevented: WebPhone Not Configured',
+        message: 'No DooCTI WebPhone URL is configured for this CRM. Set the DooCTI API / WebPhone URL in the backend IVR integration settings, then reopen the phone panel.'
+      });
+      toggleMinimize(false);
+      return;
+    }
+    if (!isTelephonyReady()) {
+      setDialerNotice({
+        type: 'warning',
+        title: 'WebPhone Still Loading',
+        message: 'The DooCTI phone panel has not finished loading yet. Wait for it to display the agent status, then place the call again.'
+      });
+      toggleMinimize(false);
+      console.info('[Doocti] Dial blocked — phone panel not ready yet', {
+        iframeReady,
+        loadedAfterMs: Date.now() - iframeMountedAtRef.current
+      });
+      return;
+    }
+
+    // Duplicate-dial guard: a second C2C message while a session is live makes the PBX
+    // originate another call to the same agent, which tears the first one down.
+    const liveSession = activeSessionRef.current;
+    if (liveSession && !isEndingCallRef.current) {
+      const liveAge = Date.now() - (liveSession.startTime || 0);
+      const isLive = ['CONNECTING', 'RINGING', 'ANSWERED'].includes(liveSession.status);
+      if (isLive && liveAge < 120000) {
+        console.warn('[Doocti] Dial blocked — a call session is already in progress:', {
+          sessionId: liveSession.callId,
+          status: liveSession.status,
+          ageMs: liveAge
+        });
+        setDialerNotice({
+          type: 'warning',
+          title: 'Call Already In Progress',
+          message: 'A call is already active in the phone panel. Hang up or decline it before dialing a new number.'
+        });
+        toggleMinimize(false);
+        return;
+      }
+    }
 
     // Validate outbound caller ID (DID) assignment
     let outboundCli = String(config.cliNumber || '').trim();
@@ -662,6 +802,12 @@ const DooctiInAppDialer = () => {
         // Passing entity_number and cli_number routes through Doocti's branch D,
         // which supplies all 6 parameters to An(phone, station, id, customer_name, cli_number, unique_id)
         // and triggers Asterisk Originate via POST /api/crm/call with the agent's assigned outbound DID.
+        console.info('[Doocti] Dispatching C2C dial:', {
+          number: cleanNumber,
+          cli: outboundCli,
+          station: userExt,
+          sessionId: uniqueSessionId
+        });
         iframeRef.current.contentWindow.postMessage({ data: payload }, '*');
       } catch (err) {
         console.error('Failed to dispatch postMessage to Doocti iframe:', err);
@@ -909,6 +1055,13 @@ const DooctiInAppDialer = () => {
         msg.state || msg.call_state || msg.disposition || msg.callstatus || msg.callStatus || 
         (msg.data && (msg.data.state || msg.data.call_state || msg.data.disposition)) || ''
       ).toLowerCase();
+
+      console.debug('[Doocti] WebPhone event:', {
+        type: msg.type || msg.action || msg.event || msg.status || msg.calltype || '',
+        calltype: msg.calltype || msg.call_type || '',
+        phone: msg.phone_number || msg.customer_number || msg.number || '',
+        raw: msg
+      });
 
       // Clear connecting timeout on any received telephony progress event
       if (['ringing', 'ring', 'inbound', 'incoming', 'answered', 'connected', 'in-progress', 'inprogress', 'talking', 'busy', 'failed', 'hangup', 'disconnected', 'ended'].some(k => eventType.includes(k) || callState.includes(k))) {
@@ -1287,10 +1440,13 @@ const DooctiInAppDialer = () => {
 
       {/* -----------------------------------------------------------
           2. Native CRM Softphone Window
+          The window is NEVER unmounted or set to display:none: the DooCTI WebPhone
+          iframe keeps its SIP registration, timers and audio engine alive while the
+          CRM is minimized. It is only moved off-screen.
       ------------------------------------------------------------ */}
       <div 
-        className="native-dialer-window"
-        style={{ display: isMinimized ? 'none' : 'flex' }}
+        className={`native-dialer-window ${isMinimized ? 'is-minimized' : ((activeCall || isRinging) ? 'in-call' : '')}`}
+        aria-hidden={isMinimized ? 'true' : 'false'}
       >
         {/* Top Header */}
         <div className="native-dialer-header">
@@ -1393,6 +1549,31 @@ const DooctiInAppDialer = () => {
                 Save
               </button>
             </div>
+
+            {/* WebRTC diagnostics */}
+            <div style={{ marginTop: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '8px', fontSize: '11px', color: '#475569' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span>
+                  WebPhone: {telephonySrc ? (iframeReady ? 'loaded' : 'loading…') : 'not configured'}
+                </span>
+                <button
+                  type="button"
+                  onClick={testMicrophone}
+                  className="doocti-btn-cancel"
+                  style={{ padding: '4px 10px' }}
+                >
+                  Test Microphone
+                </button>
+              </div>
+              {micDiagnostic && (
+                <div style={{ marginTop: '4px', color: micDiagnostic === 'ok' ? '#047857' : '#b91c1c' }}>
+                  {micDiagnostic === 'checking' && 'Requesting microphone…'}
+                  {micDiagnostic === 'ok' && 'Microphone OK'}
+                  {micDiagnostic === 'unavailable' && 'getUserMedia unavailable (insecure context)'}
+                  {!['checking', 'ok', 'unavailable'].includes(micDiagnostic) && `Microphone error: ${micDiagnostic}`}
+                </div>
+              )}
+            </div>
           </form>
         )}
 
@@ -1421,6 +1602,42 @@ const DooctiInAppDialer = () => {
             </div>
           </div>
         )}
+
+        {/* Persistent WebRTC / microphone capability warning.
+            Without getUserMedia the DooCTI WebPhone cannot attach audio: outbound legs
+            are dropped by the PBX and inbound calls ring but cannot be answered. */}
+        {!mediaDevicesAvailable && (
+          <div
+            className="dialer-notice-banner"
+            style={{
+              margin: '10px 12px 4px 12px',
+              padding: '10px 12px',
+              backgroundColor: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              fontSize: '12px',
+              color: '#991b1b',
+              lineHeight: '1.45'
+            }}
+          >
+            <AlertCircle size={16} style={{ color: '#ef4444', flexShrink: 0, marginTop: '2px' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, marginBottom: '2px' }}>
+                WebRTC Microphone Unavailable — Calls Cannot Connect
+              </div>
+              <div>
+                This page is not running in a secure context (or the browser blocks media
+                devices), so <code>navigator.mediaDevices.getUserMedia</code> does not exist.
+                Open the CRM over <strong>HTTPS</strong> or <strong>localhost</strong>, allow
+                microphone permission, then reload.
+              </div>
+            </div>
+          </div>
+        )}
+
 
         {/* Diagnostic Alert / Guidance Banner */}
         {dialerNotice && (
@@ -1901,13 +2118,28 @@ const DooctiInAppDialer = () => {
             Doocti Telephony Engine (Active WebPhone during Call or WebPhone Tab)
         ------------------------------------------------------------ */}
         <div className={`doocti-telephony-wrapper ${(activeCall || isRinging) ? 'active-mode' : (activeTab === 'phone' ? 'tab-mode' : 'background-mode')}`}>
-          <iframe
-            ref={iframeRef}
-            src={config.domain}
-            title="Doocti Telephony Engine"
-            className="doocti-telephony-iframe"
-            allow="microphone; camera; autoplay; display-capture; clipboard-read; clipboard-write; speaker-selection"
-          />
+          {telephonySrc ? (
+            <iframe
+              ref={iframeRef}
+              src={telephonySrc}
+              title="Doocti Telephony Engine"
+              className="doocti-telephony-iframe"
+              onLoad={handleIframeLoad}
+              allow="microphone; camera; autoplay; display-capture; clipboard-read; clipboard-write; speaker-selection"
+            />
+          ) : (
+            <div className="doocti-telephony-missing">
+              <AlertCircle size={22} />
+              <div>
+                <strong>WebPhone Not Configured</strong>
+                <p>
+                  No DooCTI WebPhone URL is configured. Set it in the backend IVR
+                  integration (DooCTI <code>api_url</code> / WebPhone URL), then reload
+                  this page.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
