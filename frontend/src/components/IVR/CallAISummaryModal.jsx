@@ -137,7 +137,7 @@ const CallAISummaryModal = ({ isOpen, onClose, callLog, onSummaryGenerated }) =>
             <div>
               <h2 className="ai-modal-title">AI Call Review & Telephony Intelligence</h2>
               <p className="ai-modal-subtitle">
-                <span>Employee: <strong>{currentCall.employee_name || 'System Administrator'}</strong></span>
+                <span>Employee: <strong>{currentCall.employee_name || 'Unassigned'}</strong></span>
                 <span>&bull;</span>
                 <span>Customer: <strong>{currentCall.lead_name || currentCall.to_number}</strong></span>
               </p>

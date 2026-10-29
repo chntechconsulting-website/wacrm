@@ -913,7 +913,7 @@ const CallLogsPage = () => {
                   const rawCust = log.customer_phone || '';
                   const rawEmp = log.employee_phone || '';
                   const customerNum = (!isExt(rawCust) && rawCust) ? rawCust : (!isExt(log.to_number) && log.to_number) ? log.to_number : (!isExt(log.from_number) && log.from_number) ? log.from_number : (rawCust || log.to_number || log.from_number || '');
-                  const agentExt = (isExt(rawEmp) && rawEmp) ? rawEmp : (isExt(log.from_number) && log.from_number) ? log.from_number : (isExt(log.to_number) && log.to_number) ? log.to_number : (log.employee_id ? `ID ${log.employee_id}` : '—');
+                  const agentExt = log.employee_extension || ((isExt(rawEmp) && rawEmp) ? rawEmp : (isExt(log.from_number) && log.from_number) ? log.from_number : (isExt(log.to_number) && log.to_number) ? log.to_number : '—');
                   const leadName = log.lead_name || (log.lead_id ? `Prospect #${log.lead_id}` : (customerNum ? 'Direct Caller' : 'Call'));
                   const targetPhone = customerNum || '—';
                   const providerName = (log.provider || 'DOOCTI').toUpperCase();
@@ -972,7 +972,7 @@ const CallLogsPage = () => {
                         <div className="agent-cell">
                           <div>
                             <div className="agent-name-text">
-                              {log.employee_name || 'System Administrator'}
+                              {log.employee_name || (agentExt !== '—' ? `Extension ${agentExt}` : 'Unassigned')}
                             </div>
                             <span className="agent-ext-tag">
                               Ext: {agentExt}

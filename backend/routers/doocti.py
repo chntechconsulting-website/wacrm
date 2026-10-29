@@ -1243,8 +1243,10 @@ async def push_doocti_call_log(
             existing_log.notes = f"{existing_log.notes or ''}\n{combined_notes}".strip()
         if resolved_lead_id and not existing_log.lead_id:
             existing_log.lead_id = resolved_lead_id
-        if resolved_emp_id and not existing_log.employee_id:
-            existing_log.employee_id = resolved_emp_id
+        if resolved_emp_id:
+            # Update employee_id if previously unset, or if incoming event carries verified agent extension/email
+            if not existing_log.employee_id or (station_str or agent_email or explicit_emp_id):
+                existing_log.employee_id = resolved_emp_id
         db.commit()
         db.refresh(existing_log)
         call_entry = existing_log

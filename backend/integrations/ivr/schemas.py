@@ -45,6 +45,7 @@ class CallLogResponse(BaseModel):
     recording_status: Optional[str] = "RECORDING_UNAVAILABLE"  # "RECORDING_AVAILABLE", "RECORDING_PROCESSING", "RECORDING_UNAVAILABLE"
     lead_name: Optional[str] = None
     employee_name: Optional[str] = None
+    employee_extension: Optional[str] = None
 
     class Config:
         from_attributes = True

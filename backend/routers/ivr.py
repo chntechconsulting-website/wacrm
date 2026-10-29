@@ -141,6 +141,26 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     if status_upper in ["ANSWERED", "CONNECTED"] and (call.ended_at or (call.duration_seconds and call.duration_seconds > 0)):
         display_status = "COMPLETED"
 
+    # Dynamically resolve employee extension from telephony configuration or call legs
+    from routers.doocti import get_doocti_config
+    doocti_cfg = get_doocti_config(db)
+    ext_mapping = doocti_cfg.get("extension_mapping") or {}
+    resolved_ext = None
+    if call.employee_id:
+        for ext_num, info in ext_mapping.items():
+            if info.get("employee_id") == call.employee_id:
+                resolved_ext = ext_num
+                break
+    if not resolved_ext:
+        if is_from_ext and raw_from in ext_mapping:
+            resolved_ext = raw_from
+        elif is_to_ext and raw_to in ext_mapping:
+            resolved_ext = raw_to
+        elif is_from_ext:
+            resolved_ext = raw_from
+        elif is_to_ext:
+            resolved_ext = raw_to
+
     return CallLogResponse(
         id=call.id,
         lead_id=call.lead_id,
@@ -166,7 +186,8 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         product_category=call.product_category or (call.lead.product_category if call.lead else 'UNCLASSIFIED'),
         created_at=call.created_at,
         lead_name=lead_name,
-        employee_name=employee_name
+        employee_name=employee_name,
+        employee_extension=resolved_ext
     )
 
 @router.get("/config-status", response_model=IVRConfigStatusResponse)
