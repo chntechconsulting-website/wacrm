@@ -4,10 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { 
   Phone, 
   PhoneCall, 
-  PhoneIncoming, 
   PhoneOutgoing, 
   PhoneMissed,
-  PhoneOff,
   Minus, 
   RotateCw, 
   Settings, 
@@ -470,49 +468,63 @@ const DooctiInAppDialer = () => {
           // Guard against matching stale call records from past calls/days
           const callStartTime = session.startTime || 0;
           const latestCreatedTime = latest.created_at ? new Date(latest.created_at).getTime() : 0;
-          const isNewerThanDial = latestCreatedTime >= (callStartTime - 2000);
+          const latestDirection = String(latest.call_direction || '').toUpperCase();
+          const isSameDirection = !latestDirection || latestDirection === session.direction;
+          // A record belongs to this session only if it was created after we dialed,
+          // or if it carries the exact db/provider id that we already adopted for this session.
+          const isNewerThanDial = latestCreatedTime >= callStartTime;
           const isSameCallId = Boolean(session.dbCallId && latest.id === session.dbCallId);
-          const isSameProviderId = Boolean(session.callId && latest.provider_call_id && (latest.provider_call_id === session.callId));
+          const isSameProviderId = Boolean(
+            session.providerCallId && latest.provider_call_id && latest.provider_call_id === session.providerCallId
+          );
+          const isCorrelated = isSameCallId || isSameProviderId || isNewerThanDial;
 
-          if (isLatestSameTarget && (isNewerThanDial || isSameCallId || isSameProviderId)) {
-            const st = (latest.call_status || '').toUpperCase();
-            if (st === 'RINGING' && activeCall.callStatus === 'CONNECTING') {
-              if (connectingTimeoutRef.current) {
-                clearTimeout(connectingTimeoutRef.current);
-                connectingTimeoutRef.current = null;
-              }
-              setActiveCall(prev => prev ? ({ ...prev, callStatus: 'RINGING' }) : null);
-            } else if (['ANSWERED', 'CONNECTED'].includes(st) && activeCall.callStatus !== 'CONNECTED') {
-              if (connectingTimeoutRef.current) {
-                clearTimeout(connectingTimeoutRef.current);
-                connectingTimeoutRef.current = null;
-              }
-              const ansTime = latest.answered_at ? new Date(latest.answered_at).getTime() : Date.now();
-              session.answeredAt = ansTime;
-              session.status = 'ANSWERED';
-              setActiveCall(prev => prev ? ({
-                ...prev,
-                callStatus: 'CONNECTED',
-                answeredAt: ansTime
-              }) : null);
-            } else if (['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED', 'MISSED'].includes(st)) {
-              // Never abort an outbound call from polling within 10 seconds of dialing unless provider call ID strictly matches
-              const elapsed = Date.now() - callStartTime;
-              if (session.direction === 'OUTBOUND' && elapsed < 10000 && !isSameProviderId) {
-                return;
-              }
-              if (connectingTimeoutRef.current) {
-                clearTimeout(connectingTimeoutRef.current);
-                connectingTimeoutRef.current = null;
-              }
-              // Server detected terminal state for THIS call
-              if (latest.ended_at) {
-                const diffMs = Date.now() - new Date(latest.ended_at).getTime();
-                if (diffMs < 30000 && diffMs >= 0) {
-                  handleEndCall(st);
-                }
-              }
+          if (!isLatestSameTarget || !isSameDirection || !isCorrelated) return;
+
+          const st = (latest.call_status || '').toUpperCase();
+          if (st === 'RINGING' && activeCall.callStatus === 'CONNECTING') {
+            if (connectingTimeoutRef.current) {
+              clearTimeout(connectingTimeoutRef.current);
+              connectingTimeoutRef.current = null;
             }
+            setActiveCall(prev => prev ? ({ ...prev, callStatus: 'RINGING' }) : null);
+          } else if (['ANSWERED', 'CONNECTED'].includes(st) && activeCall.callStatus !== 'CONNECTED') {
+            if (connectingTimeoutRef.current) {
+              clearTimeout(connectingTimeoutRef.current);
+              connectingTimeoutRef.current = null;
+            }
+            // Adopt the identifiers of the correlated server record for the rest of this session
+            if (latest.id) session.dbCallId = latest.id;
+            if (latest.provider_call_id) session.providerCallId = latest.provider_call_id;
+            const ansTime = latest.answered_at ? new Date(latest.answered_at).getTime() : Date.now();
+            session.answeredAt = ansTime;
+            session.status = 'ANSWERED';
+            setActiveCall(prev => prev ? ({
+              ...prev,
+              callStatus: 'CONNECTED',
+              answeredAt: ansTime
+            }) : null);
+          } else if (['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED', 'MISSED'].includes(st)) {
+            // Terminal records are only trusted when they are strictly tied to this session.
+            // A stale record for the same phone number must never tear down a live call.
+            const isStrictlyCorrelated = isSameCallId || isSameProviderId;
+            const elapsed = Date.now() - callStartTime;
+            if (!isStrictlyCorrelated) {
+              if (session.direction === 'OUTBOUND' && elapsed < 10000) return;
+              if (latestCreatedTime < callStartTime) return;
+            }
+            if (latest.ended_at) {
+              const diffMs = Date.now() - new Date(latest.ended_at).getTime();
+              if (diffMs > 300000 || diffMs < 0) return;
+            }
+            if (connectingTimeoutRef.current) {
+              clearTimeout(connectingTimeoutRef.current);
+              connectingTimeoutRef.current = null;
+            }
+            if (latest.id) session.dbCallId = latest.id;
+            if (latest.provider_call_id) session.providerCallId = latest.provider_call_id;
+            // The iframe's own terminal event is authoritative; polling is only a fallback.
+            handleEndCall(st);
           }
         } catch (e) {
           // Silent polling error
@@ -628,21 +640,19 @@ const DooctiInAppDialer = () => {
       clearTimeout(connectingTimeoutRef.current);
     }
     connectingTimeoutRef.current = setTimeout(() => {
-      setActiveCall(prev => {
-        // ONLY warn if the call is still strictly in CONNECTING state and no answer or progress occurred
-        const session = activeSessionRef.current;
-        const wasAnswered = Boolean(session?.answeredAt || prev?.answeredAt || session?.status === 'ANSWERED');
-        if (prev && prev.callStatus === 'CONNECTING' && !wasAnswered) {
-          console.warn('[Doocti] 30s timeout elapsed with no telephony progress signal for call:', session?.callId);
-          setDialerNotice({
-            type: 'warning',
-            title: 'Call Not Placed',
-            message: 'Doocti WebPhone did not place the call. Please verify: 1) Agent status in Doocti WebPhone is set to "Online" (Green) and not Paused, 2) Microphone access is allowed.'
-          });
-          return null;
-        }
-        return prev;
-      });
+      const session = activeSessionRef.current;
+      const current = activeCallRef.current;
+      // ONLY warn if the call is still strictly in CONNECTING state and no answer or progress occurred.
+      // Non-destructive: the session is kept so a slow-answering call is never removed from the UI.
+      const wasAnswered = Boolean(session?.answeredAt || current?.answeredAt || session?.status === 'ANSWERED');
+      if (current && current.callStatus === 'CONNECTING' && !wasAnswered) {
+        console.warn('[Doocti] 30s elapsed with no telephony progress signal for call:', session?.callId);
+        setDialerNotice({
+          type: 'warning',
+          title: 'No Call Progress Detected',
+          message: 'Doocti WebPhone has not reported progress yet. If the call is not dialing, verify: 1) Agent status in Doocti WebPhone is "Online" (Green) and not Paused, 2) Microphone access is allowed.'
+        });
+      }
     }, 30000);
 
     // Dispatch postMessage using wildcard target origin to ensure iframe receipt
@@ -660,66 +670,22 @@ const DooctiInAppDialer = () => {
   };
 
   // Answer Call Handler for Incoming Ringing Call
+  // The deployed DooCTI iframe exposes no answer command to the parent page: its message
+  // handler only supports C2C dialing, Logout, LeadStatus and AutoLogin. The SIP session can
+  // therefore only be answered inside the provider's own phone UI (session.answer()).
+  // We surface that UI and never fake a CONNECTED/ANSWERED state from the CRM.
   const handleAnswerCall = () => {
     if (connectingTimeoutRef.current) {
       clearTimeout(connectingTimeoutRef.current);
       connectingTimeoutRef.current = null;
     }
-    setIsRinging(false);
     toggleMinimize(false);
-    const ansTime = Date.now();
-    if (activeSessionRef.current) {
-      activeSessionRef.current.answeredAt = ansTime;
-      activeSessionRef.current.status = 'ANSWERED';
-    }
-
-    if (!activeCall && activeSessionRef.current) {
-      setActiveCall({
-        number: activeSessionRef.current.customerPhone || 'Customer',
-        name: activeSessionRef.current.contactData?.name || 'Customer',
-        callStatus: 'CONNECTED',
-        startedAt: activeSessionRef.current.startTime || ansTime,
-        answeredAt: ansTime,
-        isMuted: false,
-        isHeld: false
-      });
-    } else if (activeCall) {
-      setActiveCall(prev => ({
-        ...prev,
-        callStatus: 'CONNECTED',
-        answeredAt: ansTime
-      }));
-    }
-
-    // Persist answered state to CRM backend
-    const session = activeSessionRef.current;
-    if (session?.callId) {
-      API.post('/doocti/call-log', {
-        uniqueid: session.callId,
-        phone_number: session.customerPhone,
-        station: config.userNumber || '',
-        status: 'ANSWERED',
-        call_direction: session.direction || 'INBOUND',
-        answer_time: new Date(ansTime).toISOString()
-      }).catch(() => {});
-    }
-
-    window.dispatchEvent(new CustomEvent('crm-call-answered', { detail: { callId: session?.callId } }));
-
-    // Forward answer event to Doocti WebPhone iframe
-    const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
-    if (iframeRef.current && iframeRef.current.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.postMessage({ action: 'answer', event: 'answer', type: 'answer' }, targetOrigin);
-        iframeRef.current.contentWindow.postMessage({ action: 'accept', event: 'accept', type: 'accept' }, targetOrigin);
-      } catch (err) {
-        console.warn('Failed to dispatch answer postMessage to Doocti iframe:', err);
-      }
-    }
   };
 
   // End / Decline Call Handler
-  const handleEndCall = (outcomeOverride = null, isUserInitiated = false, phoneOverride = null) => {
+  // Invoked only from provider/backend terminal signals (iframe hangup event, CDR polling).
+  // The CRM cannot terminate a SIP session itself, so no hangup postMessage is sent.
+  const handleEndCall = (outcomeOverride = null, phoneOverride = null) => {
     if (connectingTimeoutRef.current) {
       clearTimeout(connectingTimeoutRef.current);
       connectingTimeoutRef.current = null;
@@ -842,20 +808,9 @@ const DooctiInAppDialer = () => {
       window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: session?.callId, status: finalStatus } }));
     }
 
-    // 3. Dispatch call hangup / disconnect postMessages to Doocti iframe ONLY if user initiated
-    // Do not send unsolicited hangup commands for provider/background sync events or state mismatches!
-    const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
-    if (isUserInitiated && iframeRef.current && iframeRef.current.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.postMessage({ action: 'hangup', event: 'hangup', type: 'hangup' }, targetOrigin);
-        iframeRef.current.contentWindow.postMessage({ event: 'call_disconnect', action: 'call_disconnect' }, targetOrigin);
-        if (wasRinging && !wasAnswered) {
-          iframeRef.current.contentWindow.postMessage({ action: 'decline', type: 'decline' }, targetOrigin);
-        }
-      } catch (err) {
-        console.warn('Failed to dispatch postMessage to Doocti iframe:', err);
-      }
-    }
+    // 3. The CRM never sends hangup/reject commands to the iframe: the deployed DooCTI
+    //    webphone does not handle them, so the SIP session must terminate through the
+    //    provider's own UI and its terminal event/CDR stays authoritative.
 
     // 4. Reset active call state cleanly without abrupt iframe reloads that trigger PBX re-ring loops
     activeCallRef.current = null;
@@ -983,16 +938,14 @@ const DooctiInAppDialer = () => {
 
         // Check if an outbound call session is currently progressing (using synchronous ref + state)
         const currentSession = activeSessionRef.current;
-        const currentActiveCall = activeCallRef.current || activeCall;
-        // An active outbound session is identified by its direction flag, regardless of current callStatus.
-        // This prevents a ringing signal during an active outbound call from being treated as a new inbound call.
+        // An active outbound session is identified by its direction flag AND by the dialed number.
+        // This prevents a ringing signal during an active outbound call from being treated as a new inbound call,
+        // while still allowing a genuine inbound call from a different number to ring through.
         const isCurrentOutbound = currentSession?.direction === 'OUTBOUND';
         const sessionPhone = String(currentSession?.customerPhone || '').replace(/[^0-9]/g, '');
         const isMatchingOutboundPhone = Boolean(sessionPhone && inNum && (sessionPhone.includes(inNum) || inNum.includes(sessionPhone)));
-        // Also treat any active call (CONNECTING, RINGING, CONNECTED) as blocking a new inbound popup
-        const hasActiveCallInProgress = Boolean(currentActiveCall && ['CONNECTING', 'RINGING', 'CONNECTED', 'ANSWERED'].includes(currentActiveCall.callStatus));
 
-        if (isCurrentOutbound || isMatchingOutboundPhone || hasActiveCallInProgress) {
+        if (isCurrentOutbound && isMatchingOutboundPhone) {
           // Outbound call is progressing and ringing at customer endpoint, OR call already active
           if (activeSessionRef.current && activeSessionRef.current.direction === 'OUTBOUND') {
             activeSessionRef.current.status = 'RINGING';
@@ -1215,52 +1168,47 @@ const DooctiInAppDialer = () => {
         return;
       }
 
-      // 2. Outbound call protection:
-      // Do not allow an outbound call to be terminated within the first 3500ms by spurious iframe idle/disconnect events
-      if (activeSession?.direction === 'OUTBOUND') {
-        const elapsedSinceDial = Date.now() - (activeSession.startTime || 0);
-        if (elapsedSinceDial < 3500) {
-          console.debug('[Doocti] Ignoring terminal event during initial outbound connection window:', eventType);
+      // 2. Direction and phone correlation:
+      //    Doocti's terminal event carries the direction in `calltype` and the customer number
+      //    in `phone_number`. Only act on events that belong to the live session, and never let a
+      //    mismatched or stale event clear a genuine call.
+      const msgCallType = String(msg.calltype || msg.call_type || msg.direction || '').toLowerCase();
+      if (msgCallType && activeSession?.direction) {
+        const sessionDirection = activeSession.direction === 'OUTBOUND' ? 'outbound' : 'inbound';
+        if (msgCallType !== sessionDirection) {
+          console.debug('[Doocti] Ignoring terminal event for other direction:', msgCallType, 'expected:', sessionDirection);
           return;
         }
+      }
 
-        // If provider specifies calltype as 'inbound', ignore it for our outbound call
-        const msgCallType = String(msg.calltype || msg.call_type || msg.direction || '').toLowerCase();
-        if (msgCallType === 'inbound') {
+      if (cleanTermNum.length >= 6 && activePhone.length >= 6) {
+        if (!activePhone.includes(cleanTermNum) && !cleanTermNum.includes(activePhone)) {
+          console.debug('[Doocti] Ignoring terminal event for mismatched phone:', cleanTermNum, 'expected:', activePhone);
           return;
-        }
-
-        // If phone number is specified in the terminal event, ensure it matches the dialed number
-        if (cleanTermNum.length >= 6 && activePhone.length >= 6) {
-          if (!activePhone.includes(cleanTermNum) && !cleanTermNum.includes(activePhone)) {
-            console.debug('[Doocti] Ignoring terminal event for mismatched phone:', cleanTermNum, 'expected:', activePhone);
-            return;
-          }
         }
       }
 
       // Specific Terminal Outcomes
       if (['busy', 'line_busy', 'engaged'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
-        handleEndCall('BUSY', false, rawTermNum);
+        handleEndCall('BUSY', rawTermNum);
       } else if (['failed', 'error', 'call_failed'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
         // For incoming calls that weren't answered, mark as MISSED, not FAILED
         const isInc = activeSessionRef.current?.direction === 'INBOUND' || isRinging;
-        handleEndCall(isInc ? 'MISSED' : 'FAILED', false, rawTermNum);
+        handleEndCall(isInc ? 'MISSED' : 'FAILED', rawTermNum);
       } else if (['no_answer', 'noanswer', 'unreachable', 'timeout'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
-        handleEndCall('MISSED', false, rawTermNum);
+        handleEndCall('MISSED', rawTermNum);
       } else if (['hangup', 'disconnected', 'ended', 'call_disconnect', 'call_ended', 'decline', 'rejected', 'terminate'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
-        handleEndCall(null, false, rawTermNum);
+        handleEndCall(null, rawTermNum);
       }
     };
 
-    // Expose functional call controls on window for Layout & other components
+    // Expose the only supported control: surface the provider phone panel.
+    // Answer/hangup cannot be driven from the CRM (no provider command exists).
     window.crmAnswerCall = () => handleAnswerCall();
-    window.crmRejectCall = () => handleEndCall('MISSED', true);
-    window.crmHangupCall = () => handleEndCall(null, true);
     window.expandDoocti = () => toggleMinimize(false);
 
     window.addEventListener('message', handleWindowMessage);
@@ -1530,11 +1478,6 @@ const DooctiInAppDialer = () => {
                 </span>
                 <span className="active-call-header-phone">
                   {activeCall?.number || 'Caller ID'}
-                  {activeCall?.callStatus === 'CONNECTING' && config.cliNumber && (
-                    <span style={{ fontSize: '10px', color: '#64748b', marginLeft: '6px' }}>
-                      (Caller ID: {config.cliNumber})
-                    </span>
-                  )}
                 </span>
               </div>
             </div>
@@ -1544,24 +1487,9 @@ const DooctiInAppDialer = () => {
                   <span className="active-call-timer-badge ringing-badge">
                     Ringing...
                   </span>
-                  <button
-                    type="button"
-                    className="active-call-header-btn btn-answer-call"
-                    onClick={handleAnswerCall}
-                    title="Answer Incoming Call"
-                  >
-                    <PhoneIncoming size={14} />
-                    <span>Answer</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="active-call-header-btn btn-decline-call"
-                    onClick={() => handleEndCall('MISSED', true)}
-                    title="Reject / Decline Incoming Call"
-                  >
-                    <PhoneOff size={14} />
-                    <span>Reject</span>
-                  </button>
+                  <span className="active-call-control-hint">
+                    Answer in the phone panel
+                  </span>
                 </div>
               ) : (
                 <>
@@ -1588,15 +1516,10 @@ const DooctiInAppDialer = () => {
                     {formatCallTimer(callDuration)}
                   </span>
 
-                  <button
-                    type="button"
-                    className="active-call-header-btn btn-end-call"
-                    onClick={() => handleEndCall(null, true)}
-                    title="End Call / Disconnect"
-                  >
-                    <PhoneOff size={14} />
-                    <span>End Call</span>
-                  </button>
+                  {/* The SIP session can only be controlled from the DooCTI phone panel below. */}
+                  <span className="active-call-control-hint">
+                    Hang up in the phone panel
+                  </span>
                 </>
               )}
             </div>

@@ -125,45 +125,18 @@ const Layout = () => {
     };
   }, [incomingAlert]);
 
-  // Answer Incoming Call action from global alert
-  const handleAnswerIncoming = () => {
+  // Answer Incoming Call action from global alert.
+  // The DooCTI iframe exposes no answer command to the CRM, so this only surfaces the
+  // provider's own phone panel, where the real Answer button lives. It must not fake
+  // a CONNECTED state.
+  const handleOpenSoftphone = () => {
     if (window.crmAnswerCall) {
       window.crmAnswerCall();
     }
     if (window.expandDoocti) {
       window.expandDoocti();
     }
-    setIncomingAlert(prev => prev ? ({ ...prev, call_status: 'CONNECTED' }) : null);
-  };
-
-  // Reject Incoming Call action from global alert
-  const handleRejectIncoming = () => {
-    const callId = incomingAlert?.id || incomingAlert?.provider_call_id;
-    if (window.crmRejectCall) {
-      window.crmRejectCall();
-    }
-    if (window.expandDoocti) {
-      window.expandDoocti();
-    }
-    if (callId) {
-      API.post(`/ivr/calls/${callId}/reject`).catch(() => {
-        API.post(`/doocti/calls/${callId}/reject`).catch(() => {});
-      });
-    }
-    setIncomingAlert(null);
-  };
-
-  // End active connected call action from global alert
-  const handleHangupActive = () => {
-    const callId = incomingAlert?.id || incomingAlert?.provider_call_id;
-    if (window.crmHangupCall) {
-      window.crmHangupCall();
-    }
-    if (callId) {
-      API.post(`/ivr/calls/${callId}/disconnect`).catch(() => {
-        API.post(`/doocti/calls/${callId}/disconnect`).catch(() => {});
-      });
-    }
+    // The phone panel now owns the call; its UI is the authoritative state from here on.
     setIncomingAlert(null);
   };
 
@@ -277,16 +250,17 @@ const Layout = () => {
             )}
           </div>
 
-          {/* Interactive Call Control Buttons */}
+          {/* Call Controls: the DooCTI phone panel owns Answer / Hang up / Decline.
+              The CRM only surfaces it, because the provider iframe accepts no call commands. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
             {incomingAlert.call_status === 'CONNECTED' ? (
               <>
                 <button
                   type="button"
-                  onClick={handleHangupActive}
+                  onClick={handleOpenSoftphone}
                   style={{
                     flex: 1,
-                    backgroundColor: '#ef4444',
+                    backgroundColor: '#1e293b',
                     color: '#ffffff',
                     border: 'none',
                     borderRadius: '10px',
@@ -297,38 +271,19 @@ const Layout = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: '6px',
-                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)'
+                    gap: '6px'
                   }}
-                  title="End Active Call"
+                  title="Open the DooCTI phone panel to hang up"
                 >
-                  <PhoneIncoming size={16} style={{ transform: 'rotate(135deg)' }} />
-                  <span>End Call</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (window.expandDoocti) window.expandDoocti();
-                  }}
-                  style={{
-                    backgroundColor: '#f1f5f9',
-                    color: '#1e293b',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '10px',
-                    padding: '10px 14px',
-                    fontSize: '0.84rem',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Open Softphone
+                  <PhoneIncoming size={16} />
+                  <span>Open Phone to Hang Up</span>
                 </button>
               </>
             ) : (
               <>
                 <button
                   type="button"
-                  onClick={handleAnswerIncoming}
+                  onClick={handleOpenSoftphone}
                   style={{
                     flex: 1,
                     backgroundColor: '#10b981',
@@ -345,34 +300,27 @@ const Layout = () => {
                     gap: '6px',
                     boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)'
                   }}
-                  title="Answer Call"
+                  title="Open the DooCTI phone panel and press its green Answer button"
                 >
                   <PhoneIncoming size={16} />
-                  <span>Answer Call</span>
+                  <span>Open Phone to Answer</span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleRejectIncoming}
+                  onClick={() => setIncomingAlert(null)}
                   style={{
-                    flex: 1,
-                    backgroundColor: '#ef4444',
-                    color: '#ffffff',
-                    border: 'none',
+                    backgroundColor: '#f1f5f9',
+                    color: '#1e293b',
+                    border: '1px solid #e2e8f0',
                     borderRadius: '10px',
                     padding: '10px 14px',
                     fontSize: '0.84rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.35)'
+                    fontWeight: 600,
+                    cursor: 'pointer'
                   }}
-                  title="Reject / Decline Call"
+                  title="Hide this alert (the call keeps ringing in the phone panel)"
                 >
-                  <X size={16} />
-                  <span>Reject</span>
+                  Dismiss
                 </button>
               </>
             )}

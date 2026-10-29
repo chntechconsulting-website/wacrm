@@ -1339,6 +1339,14 @@
   gap: 8px;
 }
 
+.active-call-control-hint {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
 .active-call-header-btn {
   border: none;
   color: #ffffff;
