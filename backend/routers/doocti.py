@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, asc, or_
+from sqlalchemy import desc, asc, or_, and_
 
 from database import get_db
 from models import Lead, LeadActivity, Customer, Employee, CallLog, Followup
@@ -632,12 +632,13 @@ async def push_doocti_call_log(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    # 0. Ingest raw data from any format (JSON, Form Data, Query Params)
-    raw_data: Dict[str, Any] = {}
+    # 0. Ingest raw data from any format (JSON, Form Data, Query Params, or request.state payload)
+    raw_payload = getattr(getattr(request, "state", None), "cdr_payload", None)
+    raw_data: Dict[str, Any] = dict(raw_payload) if isinstance(raw_payload, dict) else {}
     content_type = request.headers.get("content-type", "").lower()
     client_ip = request.client.host if request.client else "unknown"
 
-    if request.method == "POST":
+    if not raw_data and request.method == "POST":
         if "application/json" in content_type:
             try:
                 raw_data = await request.json()
@@ -725,6 +726,28 @@ async def push_doocti_call_log(
 
     # Pre-lookup existing log by provider_call_id for idempotent updates / delayed recording delivery
     existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first() if call_id else None
+
+    # Pre-lookup active call if call_id is an Asterisk PBX uniqueid and initial call was logged via in-app session
+    if not existing_log:
+        raw_cust = extract_string_val(
+            raw_data.get("phone_number") or raw_data.get("customer_number") or 
+            raw_data.get("destination") or raw_data.get("to_number") or 
+            raw_data.get("caller") or raw_data.get("from_number")
+        )
+        clean_cust = clean_phone(raw_cust)
+        if clean_cust and len(clean_cust) >= 6:
+            existing_log = (
+                db.query(CallLog)
+                .filter(
+                    or_(
+                        CallLog.to_number.like(f"%{clean_cust}%"),
+                        CallLog.from_number.like(f"%{clean_cust}%"),
+                    ),
+                    CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
+                )
+                .order_by(desc(CallLog.id))
+                .first()
+            )
 
     # 2. Agent & Station extraction (handling both scalar and dict values)
     agent_name = extract_string_val(
@@ -934,8 +957,11 @@ async def push_doocti_call_log(
             status_str = "ANSWERED"  # Internal active in-call state while talking
     elif any(k in raw_upper for k in ["COMPLETED", "COMPLETE", "HANGUP", "DISCONNECTED", "ENDED"]):
         # Disconnect / Complete event:
-        # If inbound call has 0 duration and was not answered, it is a MISSED call!
-        if call_dir == "INBOUND" and dur_sec == 0 and not answered_at and not was_previously_answered:
+        # If provider explicitly reports COMPLETE / COMPLETED, it is a completed call!
+        if raw_upper in ["COMPLETE", "COMPLETED"]:
+            status_str = "COMPLETED"
+        elif call_dir == "INBOUND" and dur_sec == 0 and not answered_at and not was_previously_answered:
+            # If inbound call has 0 duration and was not answered, it is a MISSED call!
             status_str = "MISSED"
             dur_sec = 0
             answered_at = None
@@ -946,8 +972,6 @@ async def push_doocti_call_log(
             status_str = "COMPLETED" if dur_sec > 0 else ("MISSED" if call_dir == "INBOUND" else "NO_ANSWER")
         elif was_previously_answered:
             status_str = "COMPLETED"
-        elif raw_upper in ["COMPLETE", "COMPLETED"] and dur_sec > 0:
-            status_str = "COMPLETED"
         else:
             status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
             dur_sec = 0
@@ -955,7 +979,25 @@ async def push_doocti_call_log(
     else:
         status_str = raw_upper or ("RINGING" if call_dir == "INBOUND" and dur_sec == 0 else "COMPLETED")
 
-    # 9. Resolve Employee (Agent) - Determine calling/answering agent early
+    # 9. Compile Notes early (to preserve original provider status & allow lead categorization)
+    notes_parts = []
+    if agent_name:
+        notes_parts.append(f"Agent: {agent_name}")
+    if station_str:
+        notes_parts.append(f"Station: {station_str}")
+    if matched_did:
+        notes_parts.append(f"DID: {matched_did}")
+    if raw_status:
+        notes_parts.append(f"DooCTI Status: {raw_status}")
+    if raw_data.get("disposition"):
+        notes_parts.append(f"Disposition: {raw_data['disposition']}")
+    if raw_data.get("call_purpose"):
+        notes_parts.append(f"Purpose: {raw_data['call_purpose']}")
+    if raw_data.get("notes"):
+        notes_parts.append(f"Notes: {raw_data['notes']}")
+    combined_notes = " | ".join(notes_parts) if notes_parts else "DooCTI Call completed."
+
+    # 10. Resolve Employee (Agent) - Determine calling/answering agent early
     explicit_emp_id = raw_data.get("employee_id")
     resolved_emp_id = resolve_employee_for_call(
         db=db,
@@ -966,7 +1008,7 @@ async def push_doocti_call_log(
         extension_map=ext_mapping
     )
 
-    # 10. Resolve or Auto-create Lead
+    # 11. Resolve or Auto-create Lead
     resolved_lead_id = None
     entity_id_val = raw_data.get("entity_id") or raw_data.get("lead_id")
     if entity_id_val and str(entity_id_val).isdigit() and int(entity_id_val) > 0:
@@ -1065,24 +1107,6 @@ async def push_doocti_call_log(
             f"Leaving unassigned instead of assigning to Admin."
         )
 
-    # 11. Compile Notes
-    notes_parts = []
-    if agent_name:
-        notes_parts.append(f"Agent: {agent_name}")
-    if station_str:
-        notes_parts.append(f"Station: {station_str}")
-    if matched_did:
-        notes_parts.append(f"DID: {matched_did}")
-    if raw_status:
-        notes_parts.append(f"DooCTI Status: {raw_status}")
-    if raw_data.get("disposition"):
-        notes_parts.append(f"Disposition: {raw_data['disposition']}")
-    if raw_data.get("call_purpose"):
-        notes_parts.append(f"Purpose: {raw_data['call_purpose']}")
-    if raw_data.get("notes"):
-        notes_parts.append(f"Notes: {raw_data['notes']}")
-    combined_notes = " | ".join(notes_parts) if notes_parts else "DooCTI Call completed."
-
     # Direction
     call_dir = (raw_data.get("call_direction") or raw_data.get("direction") or call_dir or "OUTBOUND").upper()
 
@@ -1090,11 +1114,42 @@ async def push_doocti_call_log(
     if not existing_log and call_id:
         existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
 
-    # Cross-provider duplicate detection: same phone + same time window (3 min) from any provider
-    # Prevents double entries when Doocti AND Smartflo both fire webhooks for the same physical call
+    # Cross-provider & PBX duplicate detection:
+    # 1. Same phone + currently active call (RINGING, CONNECTING, ANSWERED, INITIATED) within past 4 hours.
+    #    When an agent answers and speaks for >4 minutes (e.g. 5, 10, 30 mins), the initial record
+    #    might have been created with a synthetic ID (e.g. doocti_1282_phone_timestamp) while the CDR
+    #    webhook arrives with the PBX uniqueid (e.g. 1792669919.123839191) at call completion.
+    #    Matching active calls by customer number connects the CDR to the active session regardless of duration.
+    if not existing_log and clean_target:
+        four_hours_ago = (started_at or now_ist) - datetime.timedelta(hours=4)
+        active_match = (
+            db.query(CallLog)
+            .filter(
+                or_(
+                    CallLog.to_number.like(f"%{clean_target}%"),
+                    CallLog.from_number.like(f"%{clean_target}%"),
+                ),
+                CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
+                CallLog.created_at >= four_hours_ago,
+            )
+            .order_by(desc(CallLog.id))
+            .first()
+        )
+        if active_match:
+            existing_log = active_match
+            logger.info(
+                f"🔁 [DOOCTI CDR] Matched active call in progress: CallLog ID={existing_log.id} "
+                f"(provider={existing_log.provider}, call_id={existing_log.provider_call_id}) "
+                f"for phone={clean_target}. Updating with final CDR outcome."
+            )
+
+    # 2. Same phone + time window matching:
+    #    Accommodates calls of any duration (up to 4 hours) by checking both started_at and created_at.
     if not existing_log and clean_target and started_at:
-        window_start = started_at - datetime.timedelta(minutes=3)
-        window_end = started_at + datetime.timedelta(minutes=3)
+        # Window spans from started_at minus 10 minutes to started_at plus max(dur_sec + 300, 600) seconds
+        margin_sec = max(dur_sec + 600, 1800)
+        window_start = started_at - datetime.timedelta(minutes=10)
+        window_end = started_at + datetime.timedelta(seconds=margin_sec)
         existing_log = (
             db.query(CallLog)
             .filter(
@@ -1102,8 +1157,10 @@ async def push_doocti_call_log(
                     CallLog.to_number.like(f"%{clean_target}%"),
                     CallLog.from_number.like(f"%{clean_target}%"),
                 ),
-                CallLog.started_at >= window_start,
-                CallLog.started_at <= window_end,
+                or_(
+                    and_(CallLog.started_at >= window_start, CallLog.started_at <= window_end),
+                    and_(CallLog.created_at >= window_start, CallLog.created_at <= window_end),
+                ),
                 CallLog.call_direction == call_dir,
             )
             .order_by(desc(CallLog.created_at))
@@ -1111,10 +1168,10 @@ async def push_doocti_call_log(
         )
         if existing_log:
             logger.info(
-                f"🔁 [DOOCTI CDR] Cross-provider duplicate detected: "
+                f"🔁 [DOOCTI CDR] Duplicate/prior session detected: "
                 f"existing CallLog ID={existing_log.id} (provider={existing_log.provider}, "
-                f"call_id={existing_log.provider_call_id}) matches phone={clean_target} "
-                f"within 3-min window. Merging instead of creating duplicate."
+                f"call_id={existing_log.provider_call_id}) matches phone={clean_target}. "
+                f"Merging instead of creating duplicate."
             )
 
     if existing_log:
@@ -1154,6 +1211,11 @@ async def push_doocti_call_log(
             existing_log.duration_seconds = dur_sec
         elif not existing_log.duration_seconds:
             existing_log.duration_seconds = 0
+
+        # If call was completed or has positive talk duration, status MUST be COMPLETED
+        if (existing_log.duration_seconds and existing_log.duration_seconds > 0) or has_prior_answer:
+            if existing_log.call_status in ["NO_ANSWER", "NO ANSWER", "MISSED", "BUSY", "FAILED", "RINGING", "CONNECTING", "ANSWERED", "CONNECTED"]:
+                existing_log.call_status = "COMPLETED"
 
         if rec_url:
             is_new_loopback = "127.0.0.1" in rec_url or "localhost" in rec_url

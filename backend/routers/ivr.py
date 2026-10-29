@@ -577,10 +577,10 @@ async def sync_telephony_cdr_dump(
     for call_item in calls_data:
         try:
             # Re-use authoritative Doocti push handler for each record
+            request.state.cdr_payload = call_item
             res = await push_doocti_call_log(
                 request=request,
-                db=db,
-                payload=call_item
+                db=db
             )
             if res and res.get("status") in ["success", "updated", "created", "ignored"]:
                 synced_count += 1
