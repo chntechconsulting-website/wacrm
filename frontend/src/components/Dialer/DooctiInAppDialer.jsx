@@ -625,21 +625,11 @@ const DooctiInAppDialer = () => {
     // Dispatch postMessage using wildcard target origin to ensure iframe receipt
     if (iframeRef.current && iframeRef.current.contentWindow) {
       try {
-        // Direct Web Dialer Method:
-        // Doocti's native dialpad dispatches { type: 'Manual', data: { number, id } }
-        // which triggers An(number, station, id) without cli_number.
-        // This directs Doocti Asterisk PBX to use the agent's WebRTC extension station routing,
-        // avoiding trunk pilot fallback.
-        // NOTE: We do NOT send a secondary C2C message with cli_number because Doocti's listener
-        // is debounced by 1000ms; sending both caused the second message (with cli_number)
-        // to overwrite the Manual message, triggering the Asterisk trunk pilot fallback!
-        iframeRef.current.contentWindow.postMessage({
-          type: 'Manual',
-          data: {
-            number: cleanNumber,
-            id: String(contactData.id || contactData.lead_id || matchedLead?.id || '0')
-          }
-        }, '*');
+        // Dispatch Click-to-Call message matching Doocti's expected C2C schema
+        // Passing entity_number and cli_number routes through Doocti's branch D,
+        // which supplies all 6 parameters to An(phone, station, id, customer_name, cli_number, unique_id)
+        // and triggers Asterisk Originate via POST /api/crm/call with the agent's assigned outbound DID.
+        iframeRef.current.contentWindow.postMessage({ data: payload }, '*');
       } catch (err) {
         console.error('Failed to dispatch postMessage to Doocti iframe:', err);
       }
