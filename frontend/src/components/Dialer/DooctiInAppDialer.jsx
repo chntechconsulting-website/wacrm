@@ -307,6 +307,10 @@ const DooctiInAppDialer = () => {
   const [callDuration, setCallDuration] = useState(0);
   const [isRinging, setIsRinging] = useState(false);
 
+  // Synchronous refs to prevent race conditions during asynchronous message handling
+  const activeCallRef = useRef(null);
+  activeCallRef.current = activeCall;
+
   // Recent Calls & Leads Data
   const [recentCalls, setRecentCalls] = useState([]);
   const [loadingCalls, setLoadingCalls] = useState(false);
@@ -585,8 +589,7 @@ const DooctiInAppDialer = () => {
       status: 'CONNECTING'
     };
 
-    // Transition to Active Call View with CONNECTING status and timer at 00:00
-    setActiveCall({
+    const callObj = {
       number: cleanNumber,
       name: leadName,
       callStatus: 'CONNECTING',
@@ -594,7 +597,9 @@ const DooctiInAppDialer = () => {
       answeredAt: null,
       isMuted: false,
       isHeld: false
-    });
+    };
+    activeCallRef.current = callObj;
+    setActiveCall(callObj);
 
     setCallDuration(0);
     toggleMinimize(false);
@@ -834,6 +839,7 @@ const DooctiInAppDialer = () => {
     }
 
     // 4. Reset active call state cleanly without abrupt iframe reloads that trigger PBX re-ring loops
+    activeCallRef.current = null;
     setActiveCall(null);
     activeSessionRef.current = null;
     setDialNumber('');
@@ -942,26 +948,53 @@ const DooctiInAppDialer = () => {
       const isRingingSignal = ['ringing', 'ring', 'inbound', 'incoming', 'call_incoming'].some(k => eventType.includes(k) || callState.includes(k));
 
       if (isRingingSignal) {
-        if (activeCall && (activeCall.callStatus === 'CONNECTING' || activeCall.callStatus === 'DIALING')) {
-          // Outbound call is progressing and ringing
-          setActiveCall(prev => prev ? ({ ...prev, callStatus: 'RINGING' }) : null);
+        const rawNum = msg.phone_number || msg.customer_number || msg.number || msg.caller || '';
+        const inNum = String(rawNum).replace(/[^0-9]/g, '');
+
+        // Check if an outbound call session is currently progressing (using synchronous ref + state)
+        const currentSession = activeSessionRef.current;
+        const currentActiveCall = activeCallRef.current || activeCall;
+        const isCurrentOutbound = currentSession?.direction === 'OUTBOUND' || (currentActiveCall && currentActiveCall.callStatus !== 'RINGING');
+        const sessionPhone = String(currentSession?.customerPhone || '').replace(/[^0-9]/g, '');
+        const isMatchingOutboundPhone = Boolean(sessionPhone && inNum && (sessionPhone.includes(inNum) || inNum.includes(sessionPhone)));
+
+        if (isCurrentOutbound || isMatchingOutboundPhone) {
+          // Outbound call is progressing and ringing at customer endpoint
+          if (activeSessionRef.current) {
+            activeSessionRef.current.status = 'RINGING';
+          }
+          const updatedCallObj = {
+            ...(activeCallRef.current || activeCall || {}),
+            callStatus: 'RINGING',
+            number: activeCallRef.current?.number || activeCall?.number || inNum || rawNum,
+            name: activeCallRef.current?.name || activeCall?.name || 'Customer'
+          };
+          activeCallRef.current = updatedCallObj;
+          setActiveCall(updatedCallObj);
         } else {
           // INBOUND CALL ARRIVAL! (e.g. Doocti sending { type: "Ringing", phone_number: m })
           setIsRinging(true);
           toggleMinimize(false);
-          const rawNum = msg.phone_number || msg.customer_number || msg.number || msg.caller || '';
-          const inNum = String(rawNum).replace(/[^0-9]/g, '');
           const realCallId = msg.uniqueid || msg.call_id || msg.callid || msg.CallId || msg.id || `doocti_inbound_${Date.now()}`;
 
-          activeSessionRef.current = {
-            callId: realCallId,
-            customerPhone: inNum || rawNum,
-            startTime: Date.now(),
-            direction: 'INBOUND',
-            status: 'RINGING'
-          };
+          // Guard against repeated Ringing events for the same inbound call to prevent duplicate logs
+          const isSameInboundSession = activeSessionRef.current?.direction === 'INBOUND' && (
+            activeSessionRef.current?.callId === realCallId ||
+            (inNum && activeSessionRef.current?.customerPhone === inNum)
+          );
 
-          setActiveCall({
+          if (!isSameInboundSession) {
+            activeSessionRef.current = {
+              callId: realCallId,
+              customerPhone: inNum || rawNum,
+              startTime: Date.now(),
+              direction: 'INBOUND',
+              status: 'RINGING',
+              loggedRinging: false
+            };
+          }
+
+          const newInboundCall = {
             number: inNum || rawNum || 'Incoming Caller',
             name: msg.customer_name || 'Incoming Call',
             callStatus: 'RINGING',
@@ -969,126 +1002,133 @@ const DooctiInAppDialer = () => {
             answeredAt: null,
             isMuted: false,
             isHeld: false
-          });
+          };
+          activeCallRef.current = newInboundCall;
+          setActiveCall(newInboundCall);
 
-          // 1. Fetch CRM lead details for caller ID in real time BEFORE logging RINGING
-          if (inNum && inNum.length >= 6) {
-            API.get(`/doocti/lead-by-number?number=${inNum}&auto_create=false`)
-              .then(res => {
-                const lead = res.data?.lead || null;
-                if (activeSessionRef.current) {
-                  activeSessionRef.current.contactData = lead;
-                }
-                const leadName = lead?.name || msg.customer_name || 'Incoming Caller';
-                setActiveCall(prev => prev ? ({
-                  ...prev,
-                  name: leadName,
-                  contactData: lead
-                }) : null);
+          // Only log RINGING to CRM backend once per unique inbound session
+          if (!activeSessionRef.current?.loggedRinging) {
+            activeSessionRef.current.loggedRinging = true;
 
-                // Register call in CRM DB as RINGING with resolved entity_id to eliminate duplicate leads
-                API.post('/doocti/call-log', {
-                  uniqueid: realCallId,
-                  phone_number: inNum || rawNum,
-                  station: config.userNumber || '',
-                  agent: user?.name || config.userEmail,
-                  agent_email: user?.email || config.userEmail,
-                  employee_id: user?.employee_id || user?.id,
-                  entity_id: lead?.id || null,
-                  status: 'RINGING',
-                  call_direction: 'INBOUND',
-                  duration: 0,
-                  start_time: new Date().toISOString()
-                }).then(logRes => {
-                  if (logRes.data?.call_log_id && activeSessionRef.current) {
-                    activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+            // 1. Fetch CRM lead details for caller ID in real time BEFORE logging RINGING
+            if (inNum && inNum.length >= 6) {
+              API.get(`/doocti/lead-by-number?number=${inNum}&auto_create=false`)
+                .then(res => {
+                  const lead = res.data?.lead || null;
+                  if (activeSessionRef.current) {
+                    activeSessionRef.current.contactData = lead;
                   }
-                }).catch(() => {});
+                  const leadName = lead?.name || msg.customer_name || 'Incoming Caller';
+                  setActiveCall(prev => prev ? ({
+                    ...prev,
+                    name: leadName,
+                    contactData: lead
+                  }) : null);
 
-                // Dispatch global real-time event for Layout.jsx & other CRM components
-                window.dispatchEvent(new CustomEvent('crm-incoming-call', {
-                  detail: {
-                    id: activeSessionRef.current?.dbCallId || null,
-                    provider_call_id: realCallId,
-                    customer_phone: inNum || rawNum,
-                    from_number: inNum || rawNum,
-                    lead_name: leadName,
-                    company: lead?.company || '',
-                    lead_status: lead?.status || 'NEW',
-                    employee_name: lead?.lead_owner || user?.name || 'Sales Representative',
-                    call_status: 'RINGING',
+                  // Register call in CRM DB as RINGING with resolved entity_id to eliminate duplicate leads
+                  API.post('/doocti/call-log', {
+                    uniqueid: realCallId,
+                    phone_number: inNum || rawNum,
+                    station: config.userNumber || '',
+                    agent: user?.name || config.userEmail,
+                    agent_email: user?.email || config.userEmail,
+                    employee_id: user?.employee_id || user?.id,
+                    entity_id: lead?.id || null,
+                    status: 'RINGING',
                     call_direction: 'INBOUND',
-                    started_at: new Date().toISOString()
-                  }
-                }));
-              })
-              .catch(() => {
-                API.post('/doocti/call-log', {
-                  uniqueid: realCallId,
-                  phone_number: inNum || rawNum,
-                  station: config.userNumber || '',
-                  agent: user?.name || config.userEmail,
-                  agent_email: user?.email || config.userEmail,
-                  employee_id: user?.employee_id || user?.id,
-                  status: 'RINGING',
-                  call_direction: 'INBOUND',
-                  duration: 0,
-                  start_time: new Date().toISOString()
-                }).then(logRes => {
-                  if (logRes.data?.call_log_id && activeSessionRef.current) {
-                    activeSessionRef.current.dbCallId = logRes.data.call_log_id;
-                  }
-                }).catch(() => {});
+                    duration: 0,
+                    start_time: new Date().toISOString()
+                  }).then(logRes => {
+                    if (logRes.data?.call_log_id && activeSessionRef.current) {
+                      activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+                    }
+                  }).catch(() => {});
 
-                window.dispatchEvent(new CustomEvent('crm-incoming-call', {
-                  detail: {
-                    id: null,
-                    provider_call_id: realCallId,
-                    customer_phone: inNum || rawNum,
-                    from_number: inNum || rawNum,
-                    lead_name: msg.customer_name || 'Incoming Caller',
-                    company: '',
-                    lead_status: 'NEW',
-                    employee_name: user?.name || 'Sales Representative',
-                    call_status: 'RINGING',
+                  // Dispatch global real-time event for Layout.jsx & other CRM components
+                  window.dispatchEvent(new CustomEvent('crm-incoming-call', {
+                    detail: {
+                      id: activeSessionRef.current?.dbCallId || null,
+                      provider_call_id: realCallId,
+                      customer_phone: inNum || rawNum,
+                      from_number: inNum || rawNum,
+                      lead_name: leadName,
+                      company: lead?.company || '',
+                      lead_status: lead?.status || 'NEW',
+                      employee_name: lead?.lead_owner || user?.name || 'Sales Representative',
+                      call_status: 'RINGING',
+                      call_direction: 'INBOUND',
+                      started_at: new Date().toISOString()
+                    }
+                  }));
+                })
+                .catch(() => {
+                  API.post('/doocti/call-log', {
+                    uniqueid: realCallId,
+                    phone_number: inNum || rawNum,
+                    station: config.userNumber || '',
+                    agent: user?.name || config.userEmail,
+                    agent_email: user?.email || config.userEmail,
+                    employee_id: user?.employee_id || user?.id,
+                    status: 'RINGING',
                     call_direction: 'INBOUND',
-                    started_at: new Date().toISOString()
-                  }
-                }));
-              });
-          } else {
-            API.post('/doocti/call-log', {
-              uniqueid: realCallId,
-              phone_number: inNum || rawNum,
-              station: config.userNumber || '',
-              agent: user?.name || config.userEmail,
-              agent_email: user?.email || config.userEmail,
-              employee_id: user?.employee_id || user?.id,
-              status: 'RINGING',
-              call_direction: 'INBOUND',
-              duration: 0,
-              start_time: new Date().toISOString()
-            }).then(logRes => {
-              if (logRes.data?.call_log_id && activeSessionRef.current) {
-                activeSessionRef.current.dbCallId = logRes.data.call_log_id;
-              }
-            }).catch(() => {});
+                    duration: 0,
+                    start_time: new Date().toISOString()
+                  }).then(logRes => {
+                    if (logRes.data?.call_log_id && activeSessionRef.current) {
+                      activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+                    }
+                  }).catch(() => {});
 
-            window.dispatchEvent(new CustomEvent('crm-incoming-call', {
-              detail: {
-                id: null,
-                provider_call_id: realCallId,
-                customer_phone: rawNum || 'Unknown Caller',
-                from_number: rawNum || 'Unknown Caller',
-                lead_name: 'Incoming Caller',
-                company: '',
-                lead_status: 'NEW',
-                employee_name: user?.name || 'Sales Representative',
-                call_status: 'RINGING',
+                  window.dispatchEvent(new CustomEvent('crm-incoming-call', {
+                    detail: {
+                      id: null,
+                      provider_call_id: realCallId,
+                      customer_phone: inNum || rawNum,
+                      from_number: inNum || rawNum,
+                      lead_name: msg.customer_name || 'Incoming Caller',
+                      company: '',
+                      lead_status: 'NEW',
+                      employee_name: user?.name || 'Sales Representative',
+                      call_status: 'RINGING',
+                      call_direction: 'INBOUND',
+                      started_at: new Date().toISOString()
+                    }
+                  }));
+                });
+            } else {
+              API.post('/doocti/call-log', {
+                uniqueid: realCallId,
+                phone_number: inNum || rawNum,
+                station: config.userNumber || '',
+                agent: user?.name || config.userEmail,
+                agent_email: user?.email || config.userEmail,
+                employee_id: user?.employee_id || user?.id,
+                status: 'RINGING',
                 call_direction: 'INBOUND',
-                started_at: new Date().toISOString()
-              }
-            }));
+                duration: 0,
+                start_time: new Date().toISOString()
+              }).then(logRes => {
+                if (logRes.data?.call_log_id && activeSessionRef.current) {
+                  activeSessionRef.current.dbCallId = logRes.data.call_log_id;
+                }
+              }).catch(() => {});
+
+              window.dispatchEvent(new CustomEvent('crm-incoming-call', {
+                detail: {
+                  id: null,
+                  provider_call_id: realCallId,
+                  customer_phone: rawNum || 'Unknown Caller',
+                  from_number: rawNum || 'Unknown Caller',
+                  lead_name: 'Incoming Caller',
+                  company: '',
+                  lead_status: 'NEW',
+                  employee_name: user?.name || 'Sales Representative',
+                  call_status: 'RINGING',
+                  call_direction: 'INBOUND',
+                  started_at: new Date().toISOString()
+                }
+              }));
+            }
           }
         }
       }
