@@ -34,10 +34,10 @@ import './DooctiInAppDialer.css';
 import { formatLeadReceived } from '../../utils/dateUtils';
 import PingoMascot from '../Common/PingoMascot';
 
-// Default configuration loaded dynamically from server
+// Default configuration loaded dynamically from server with verified DooCTI defaults
 const DEFAULT_DOOCTI_CONFIG = {
-  domain: '',
-  tenantId: '',
+  domain: 'https://beta3-app.doocti.com/',
+  tenantId: 'chntechnolog',
   userEmail: '',
   userId: '',
   userNumber: '',
@@ -333,7 +333,7 @@ const DooctiInAppDialer = () => {
   // -------------------------------------------------------------
   // The DooCTI webphone must be mounted with a real URL. An empty `src` makes the
   // browser load the CRM itself inside the iframe (nested app, no SIP registration).
-  const rawTelephonySrc = String(config.domain || '').trim();
+  const rawTelephonySrc = String(config.domain || '').trim() || 'https://beta3-app.doocti.com/';
   const telephonySrc = rawTelephonySrc && !/^https?:\/\//i.test(rawTelephonySrc)
     ? `https://${rawTelephonySrc}`
     : rawTelephonySrc;
@@ -669,8 +669,9 @@ const DooctiInAppDialer = () => {
     const liveSession = activeSessionRef.current;
     if (liveSession && !isEndingCallRef.current) {
       const liveAge = Date.now() - (liveSession.startTime || 0);
-      const isLive = ['CONNECTING', 'RINGING', 'ANSWERED'].includes(liveSession.status);
-      if (isLive && liveAge < 120000) {
+      const isAnsweredOrRinging = ['RINGING', 'ANSWERED'].includes(liveSession.status);
+      const isRecentConnecting = liveSession.status === 'CONNECTING' && liveAge < 15000;
+      if (isAnsweredOrRinging || isRecentConnecting) {
         console.warn('[Doocti] Dial blocked — a call session is already in progress:', {
           sessionId: liveSession.callId,
           status: liveSession.status,
@@ -679,7 +680,9 @@ const DooctiInAppDialer = () => {
         setDialerNotice({
           type: 'warning',
           title: 'Call Already In Progress',
-          message: 'A call is already active in the phone panel. Hang up or decline it before dialing a new number.'
+          message: isAnsweredOrRinging
+            ? 'A call is already active in the phone panel. Hang up or decline it before dialing a new number.'
+            : 'A call is currently connecting. Click Cancel on the connecting call if you want to dial a new number.'
         });
         toggleMinimize(false);
         return;
@@ -826,6 +829,15 @@ const DooctiInAppDialer = () => {
       connectingTimeoutRef.current = null;
     }
     toggleMinimize(false);
+  };
+
+  // Cancel connecting call handler: allows agent to immediately abort a stuck dial attempt
+  const handleCancelCall = () => {
+    if (connectingTimeoutRef.current) {
+      clearTimeout(connectingTimeoutRef.current);
+      connectingTimeoutRef.current = null;
+    }
+    handleEndCall('NO_ANSWER');
   };
 
   // End / Decline Call Handler
@@ -1704,18 +1716,41 @@ const DooctiInAppDialer = () => {
                   <span className="active-call-timer-badge ringing-badge">
                     Ringing...
                   </span>
-                  <span className="active-call-control-hint">
-                    Answer in the phone panel
+                  <span className="active-call-control-hint" style={{ color: '#059669', fontWeight: 600 }}>
+                    Click Answer in phone panel below
                   </span>
                 </div>
               ) : (
                 <>
                   {/* Status Indicator Badge */}
                   {activeCall?.callStatus === 'CONNECTING' ? (
-                    <span className="active-call-timer-badge connecting-badge">
-                      <span className="recording-pulse-dot" style={{ backgroundColor: '#38bdf8' }} />
-                      CONNECTING
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className="active-call-timer-badge connecting-badge">
+                        <span className="recording-pulse-dot" style={{ backgroundColor: '#38bdf8' }} />
+                        CONNECTING
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCancelCall}
+                        className="btn-cancel-connecting"
+                        style={{
+                          backgroundColor: '#fef2f2',
+                          color: '#dc2626',
+                          border: '1px solid #fecaca',
+                          borderRadius: '6px',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                        title="Cancel this connecting call"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   ) : activeCall?.callStatus === 'RINGING' ? (
                     <span className="active-call-timer-badge ringing-badge">
                       <span className="recording-pulse-dot" style={{ backgroundColor: '#fbbf24' }} />
@@ -1735,7 +1770,7 @@ const DooctiInAppDialer = () => {
 
                   {/* The SIP session can only be controlled from the DooCTI phone panel below. */}
                   <span className="active-call-control-hint">
-                    Hang up in the phone panel
+                    {activeCall?.callStatus === 'CONNECTING' ? 'Phone panel controls active below' : 'Hang up in phone panel below'}
                   </span>
                 </>
               )}

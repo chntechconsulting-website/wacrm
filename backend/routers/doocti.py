@@ -63,8 +63,8 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
         "admin_extension": admin_ext,
         "agent_extensions": agent_exts,
         "extension_mapping": ext_map,
-        "api_url": data.get("api_url", ""),
-        "account_id": data.get("account_id", ""),
+        "api_url": (data.get("api_url") or "").strip() or "https://beta3-app.doocti.com/",
+        "account_id": (data.get("account_id") or "").strip() or "chntechnolog",
         "recording_base_url": data.get("recording_base_url", "https://bmxrx2cviyka.compat.objectstorage.ap-mumbai-1.oraclecloud.com/doocti/cti_chntechnolog_20261009"),
         "secret_token": data.get("secret_token")
     }
@@ -1632,6 +1632,10 @@ def get_my_doocti_agent_extension(
         assigned_did = ext_mapping[found_ext].get("did_number") or assigned_did
         if ext_mapping[found_ext].get("is_active") is False:
             is_active = False
+
+    # Dynamic fallback to primary DID if not individually assigned on extension
+    if found_ext and not assigned_did and dids:
+        assigned_did = dids[0]
 
     if found_ext and is_active and assigned_did:
         return {

@@ -104,6 +104,8 @@ class DooctiIVRProvider(BaseIVRProvider):
             )
 
         assigned_did = ext_info.get("did_number") if isinstance(ext_info, dict) else None
+        if not assigned_did and self.did_numbers:
+            assigned_did = self.did_numbers[0]
         if not assigned_did:
             raise ValueError(
                 f"No outbound DID number is assigned to extension {agent_ext}. "

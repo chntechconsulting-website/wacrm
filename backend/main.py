@@ -1,7 +1,8 @@
 import os
 import logging
-from typing import Optional
-from fastapi import FastAPI, APIRouter
+import datetime
+from typing import Optional, Dict, Any
+from fastapi import FastAPI, APIRouter, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -13,8 +14,9 @@ logging.basicConfig(
 logger = logging.getLogger("wacrm")
 
 from config import settings
-from database import engine, Base, SessionLocal
-from models import User, Employee
+from database import engine, Base, SessionLocal, get_db
+from models import User, Employee, CallLog
+from sqlalchemy.orm import Session
 import models
 from services.auth import hash_password
 
@@ -131,8 +133,76 @@ def crm_proxy_lead_status(module: Optional[str] = None):
     from routers.doocti import get_lead_statuses
     return get_lead_statuses(module)
 
+@crm_proxy_router.post("/call")
+async def crm_proxy_call(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Handles C2C Call Origination requests dispatched from DooCTI WebPhone iframe
+    (POST /crm/call, POST /api/crm/call, POST /api/v1/crm/call).
+    Returns 200 OK with uid so DooCTI WebPhone successfully starts call session without pausing agent.
+    Also creates/updates active CallLog session in CRM DB.
+    """
+    from routers.doocti import get_doocti_config
+    from utils.timezone import get_ist_now
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    station = str(body.get("station") or body.get("user_number") or "").strip()
+    cust_phone = str(body.get("phone_number") or body.get("customer_number") or body.get("phone") or "").strip()
+    cust_data = body.get("custdata") or {}
+    lead_id = cust_data.get("lead_id") or body.get("entity_id") or body.get("lead_id")
+    cli_number = str(body.get("cli_number") or body.get("caller_id") or "").strip()
+    crm_uid = cust_data.get("crm_unique_id") or body.get("crm_unique_id")
+    ts = int(datetime.datetime.now().timestamp() * 1000)
+    provider_call_id = crm_uid or f"doocti_{station}_{cust_phone}_{ts}"
+
+    # Record provisional CallLog if customer phone is provided
+    if cust_phone:
+        try:
+            cfg = get_doocti_config(db)
+            ext_map = cfg.get("extension_mapping") or {}
+            emp_id = None
+            if station and station in ext_map:
+                emp_id = ext_map[station].get("employee_id")
+
+            existing = db.query(CallLog).filter(CallLog.provider_call_id == provider_call_id).first()
+            if not existing:
+                new_log = CallLog(
+                    provider_call_id=provider_call_id,
+                    from_number=cli_number or station,
+                    to_number=cust_phone,
+                    call_direction="OUTBOUND",
+                    call_status="CONNECTING",
+                    provider="DOOCTI",
+                    employee_id=emp_id,
+                    lead_id=int(lead_id) if lead_id and str(lead_id).isdigit() else None,
+                    started_at=get_ist_now()
+                )
+                db.add(new_log)
+                db.commit()
+        except Exception as e:
+            logger.warning(f"[Doocti Proxy] Error saving provisional call log: {e}")
+
+    return {
+        "status": 200,
+        "statusCode": 200,
+        "success": True,
+        "message": "Call initiated successfully",
+        "uid": provider_call_id,
+        "data": {
+            "uid": provider_call_id,
+            "station": station,
+            "status": "INITIATED"
+        }
+    }
+
 app.include_router(crm_proxy_router)
 app.include_router(crm_proxy_router, prefix="/api")
+app.include_router(crm_proxy_router, prefix="/api/v1")
 app.include_router(crm_proxy_router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
