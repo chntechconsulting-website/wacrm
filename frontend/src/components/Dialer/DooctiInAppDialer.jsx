@@ -463,10 +463,18 @@ const DooctiInAppDialer = () => {
           if (!latest) return;
 
           const session = activeSessionRef.current;
-          const cleanTarget = session?.customerPhone || activeCall.number;
+          if (!session) return;
+          const cleanTarget = session.customerPhone || activeCall.number;
           const isLatestSameTarget = cleanTarget && (latest.to_number?.includes(cleanTarget) || latest.from_number?.includes(cleanTarget) || latest.customer_phone?.includes(cleanTarget));
 
-          if (isLatestSameTarget) {
+          // Guard against matching stale call records from past calls/days
+          const callStartTime = session.startTime || 0;
+          const latestCreatedTime = latest.created_at ? new Date(latest.created_at).getTime() : 0;
+          const isNewerThanDial = latestCreatedTime >= (callStartTime - 2000);
+          const isSameCallId = Boolean(session.dbCallId && latest.id === session.dbCallId);
+          const isSameProviderId = Boolean(session.callId && latest.provider_call_id && (latest.provider_call_id === session.callId));
+
+          if (isLatestSameTarget && (isNewerThanDial || isSameCallId || isSameProviderId)) {
             const st = (latest.call_status || '').toUpperCase();
             if (st === 'RINGING' && activeCall.callStatus === 'CONNECTING') {
               if (connectingTimeoutRef.current) {
@@ -480,24 +488,29 @@ const DooctiInAppDialer = () => {
                 connectingTimeoutRef.current = null;
               }
               const ansTime = latest.answered_at ? new Date(latest.answered_at).getTime() : Date.now();
-              if (session) {
-                session.answeredAt = ansTime;
-                session.status = 'ANSWERED';
-              }
+              session.answeredAt = ansTime;
+              session.status = 'ANSWERED';
               setActiveCall(prev => prev ? ({
                 ...prev,
                 callStatus: 'CONNECTED',
                 answeredAt: ansTime
               }) : null);
             } else if (['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED', 'MISSED'].includes(st)) {
+              // Never abort an outbound call from polling within 10 seconds of dialing unless provider call ID strictly matches
+              const elapsed = Date.now() - callStartTime;
+              if (session.direction === 'OUTBOUND' && elapsed < 10000 && !isSameProviderId) {
+                return;
+              }
               if (connectingTimeoutRef.current) {
                 clearTimeout(connectingTimeoutRef.current);
                 connectingTimeoutRef.current = null;
               }
-              // Server detected terminal state
-              const diffMs = latest.ended_at ? (Date.now() - new Date(latest.ended_at).getTime()) : 0;
-              if (diffMs < 30000) {
-                handleEndCall(st);
+              // Server detected terminal state for THIS call
+              if (latest.ended_at) {
+                const diffMs = Date.now() - new Date(latest.ended_at).getTime();
+                if (diffMs < 30000 && diffMs >= 0) {
+                  handleEndCall(st);
+                }
               }
             }
           }
@@ -519,9 +532,13 @@ const DooctiInAppDialer = () => {
   const dialLead = (phoneNumber, contactData = {}) => {
     if (!phoneNumber) return;
     setDialerNotice(null);
+    setIsRinging(false);
 
     // Validate outbound caller ID (DID) assignment
-    const outboundCli = String(config.cliNumber || '').trim();
+    let outboundCli = String(config.cliNumber || '').trim();
+    if (!outboundCli && config.didNumbers && config.didNumbers.length > 0) {
+      outboundCli = String(config.didNumbers[0]).trim();
+    }
     if (!outboundCli) {
       setDialerNotice({
         type: 'error',
@@ -825,9 +842,10 @@ const DooctiInAppDialer = () => {
       window.dispatchEvent(new CustomEvent('crm-incoming-call-ended', { detail: { callId: session?.callId, status: finalStatus } }));
     }
 
-    // 3. Dispatch call hangup / disconnect postMessages to Doocti iframe
+    // 3. Dispatch call hangup / disconnect postMessages to Doocti iframe ONLY if user initiated
+    // Do not send unsolicited hangup commands for provider/background sync events or state mismatches!
     const targetOrigin = config.domain.endsWith('/') ? config.domain.slice(0, -1) : config.domain;
-    if (iframeRef.current && iframeRef.current.contentWindow) {
+    if (isUserInitiated && iframeRef.current && iframeRef.current.contentWindow) {
       try {
         iframeRef.current.contentWindow.postMessage({ action: 'hangup', event: 'hangup', type: 'hangup' }, targetOrigin);
         iframeRef.current.contentWindow.postMessage({ event: 'call_disconnect', action: 'call_disconnect' }, targetOrigin);
@@ -987,6 +1005,7 @@ const DooctiInAppDialer = () => {
           };
           activeCallRef.current = updatedCallObj;
           setActiveCall(updatedCallObj);
+          return;
         } else {
           // INBOUND CALL ARRIVAL! (e.g. Doocti sending { type: "Ringing", phone_number: m })
           setIsRinging(true);
@@ -1147,6 +1166,7 @@ const DooctiInAppDialer = () => {
             }
           }
         }
+        return;
       }
 
       // Call Answered / Connected
@@ -1181,9 +1201,44 @@ const DooctiInAppDialer = () => {
             dbCallId: activeSessionRef.current?.dbCallId
           }
         }));
+        return;
       }
 
       const rawTermNum = msg.phone_number || msg.customer_number || msg.number || msg.destination || msg.callee || msg.caller || '';
+      const cleanTermNum = String(rawTermNum || '').replace(/[^0-9]/g, '');
+      const activeSession = activeSessionRef.current;
+      const activePhone = String(activeSession?.customerPhone || activeCallRef.current?.number || '').replace(/[^0-9]/g, '');
+
+      // Guard terminal events:
+      // 1. If no active session or call exists, ignore
+      if (!activeSession && !activeCallRef.current) {
+        return;
+      }
+
+      // 2. Outbound call protection:
+      // Do not allow an outbound call to be terminated within the first 3500ms by spurious iframe idle/disconnect events
+      if (activeSession?.direction === 'OUTBOUND') {
+        const elapsedSinceDial = Date.now() - (activeSession.startTime || 0);
+        if (elapsedSinceDial < 3500) {
+          console.debug('[Doocti] Ignoring terminal event during initial outbound connection window:', eventType);
+          return;
+        }
+
+        // If provider specifies calltype as 'inbound', ignore it for our outbound call
+        const msgCallType = String(msg.calltype || msg.call_type || msg.direction || '').toLowerCase();
+        if (msgCallType === 'inbound') {
+          return;
+        }
+
+        // If phone number is specified in the terminal event, ensure it matches the dialed number
+        if (cleanTermNum.length >= 6 && activePhone.length >= 6) {
+          if (!activePhone.includes(cleanTermNum) && !cleanTermNum.includes(activePhone)) {
+            console.debug('[Doocti] Ignoring terminal event for mismatched phone:', cleanTermNum, 'expected:', activePhone);
+            return;
+          }
+        }
+      }
+
       // Specific Terminal Outcomes
       if (['busy', 'line_busy', 'engaged'].some(k => eventType.includes(k) || callState.includes(k))) {
         setIsRinging(false);
