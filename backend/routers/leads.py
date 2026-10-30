@@ -537,8 +537,11 @@ def download_excel_template():
 async def import_leads_excel(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(["ADMIN", "MANAGER"]))
+    current_user: User = Depends(require_permission("leads", "create"))
 ):
+    # Bulk import is a bulk lead-create operation, so it uses the same dynamic
+    # permission as single lead creation instead of a hardcoded role list. Sales
+    # executives (and any custom role granted leads:create) can therefore import.
     if not (file.filename.endswith('.xlsx') or file.filename.endswith('.xls')):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an Excel (.xlsx) file.")
 
@@ -546,6 +549,11 @@ async def import_leads_excel(
     current_emp = get_employee_for_user(current_user, db)
     creator_id = current_emp.id if current_emp else None
     creator_name = current_emp.name if current_emp else current_user.username
+
+    # Assigning a lead to somebody else is a separate privilege (leads:assign).
+    # Without it (e.g. a sales executive) the imported leads belong to the
+    # importer, otherwise a restricted role could hand leads to any employee.
+    can_assign_imports = user_has_permission(current_user, "leads", "assign", db)
 
     try:
         results = parse_and_validate_excel_leads(contents, db)
@@ -558,6 +566,13 @@ async def import_leads_excel(
     now = get_ist_now()
     for lead_data in valid_leads:
         lead_data["source"] = "EXCEL"
+        # Users without assignment rights may only import leads for themselves.
+        # This keeps a sales executive from using the importer to assign leads to
+        # arbitrary employees (their view scope is "own" anyway).
+        if not can_assign_imports:
+            lead_data["assigned_to"] = creator_id
+            if creator_id and str(lead_data.get("status") or "NEW").upper() == "NEW":
+                lead_data["status"] = "ASSIGNED"
         lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
             db=db,
             enquiry_data=lead_data,
