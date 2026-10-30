@@ -110,12 +110,20 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
             emp_phone = raw_from or (call.employee.phone if call.employee else "")
 
     resolved_rec = resolve_recording_url(call.recording_url, db)
+    status_upper = (call.call_status or "").upper()
+    duration = call.duration_seconds or 0
+
+    # Fallback to automated Oracle Cloud Storage recording matcher if recording_url is missing
+    if not resolved_rec and (duration > 0 or status_upper in ["ANSWERED", "CONNECTED", "COMPLETED"]):
+        from services.doocti_recording_service import DooctiRecordingService
+        try:
+            resolved_rec = DooctiRecordingService.match_recording_for_call(call, db, auto_save=True)
+        except Exception:
+            pass
+
     raw_rec = str(call.recording_url or "").strip()
     is_loopback = "127.0.0.1" in raw_rec or "localhost" in raw_rec
-
-    status_upper = (call.call_status or "").upper()
     is_connected = status_upper in ["ANSWERED", "CONNECTED", "COMPLETED"]
-    duration = call.duration_seconds or 0
 
     now_ist = get_ist_now()
     call_end_time = call.ended_at or call.created_at
@@ -616,6 +624,21 @@ async def sync_telephony_cdr_dump(
         "errors_count": len(errors)
     }
 
+@router.api_route("/sync-recordings", methods=["GET", "POST"])
+@router.api_route("/sync-recordings/", methods=["GET", "POST"])
+def sync_call_recordings_endpoint(
+    days: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Scans completed calls missing audio recordings and auto-links them
+    from DooCTI's Oracle Cloud Object Storage bucket.
+    """
+    from services.doocti_recording_service import DooctiRecordingService
+    result = DooctiRecordingService.sync_all_missing_recordings(db=db, days_back=days)
+    return result
+
 @router.get("/calls", response_model=CallLogListResponse)
 def list_call_logs(
     response: Response,
@@ -955,6 +978,13 @@ def stream_call_recording(
             )
 
     rec_url = resolve_recording_url(call.recording_url, db)
+    if not rec_url and ((call.duration_seconds and call.duration_seconds > 0) or (call.call_status or "").upper() in ["ANSWERED", "CONNECTED", "COMPLETED"]):
+        from services.doocti_recording_service import DooctiRecordingService
+        try:
+            rec_url = DooctiRecordingService.match_recording_for_call(call, db, auto_save=True)
+        except Exception:
+            pass
+
     if not rec_url:
         raw_rec = str(call.recording_url or "").strip()
         if "127.0.0.1" in raw_rec or "localhost" in raw_rec:

@@ -534,6 +534,15 @@ def get_call_statuses(module: Optional[str] = None):
         "statuses": dispos
     }
 
+@router.api_route("/sync-recordings", methods=["GET", "POST"])
+@router.api_route("/sync-recordings/", methods=["GET", "POST"])
+def doocti_sync_recordings_alias(
+    days: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db)
+):
+    from services.doocti_recording_service import DooctiRecordingService
+    return DooctiRecordingService.sync_all_missing_recordings(db=db, days_back=days)
+
 # -------------------------------------------------------------
 # 4. Call Log Push API (DooCTI Push Call Log)
 # Ingests CDR, duration, recordings, and status from DooCTI
@@ -652,7 +661,7 @@ async def push_doocti_call_log(
     # Pre-lookup existing log by provider_call_id for idempotent updates / delayed recording delivery
     existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first() if call_id else None
 
-    # Pre-lookup active call if call_id is an Asterisk PBX uniqueid and initial call was logged via in-app session
+    # Pre-lookup active or recently completed call if call_id is an Asterisk PBX uniqueid and initial call was logged via in-app session
     if not existing_log:
         raw_cust = extract_string_val(
             raw_data.get("phone_number") or raw_data.get("customer_number") or 
@@ -668,7 +677,13 @@ async def push_doocti_call_log(
                         CallLog.to_number.like(f"%{clean_cust}%"),
                         CallLog.from_number.like(f"%{clean_cust}%"),
                     ),
-                    CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
+                    or_(
+                        CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
+                        and_(
+                            CallLog.call_status.in_(["COMPLETED", "ANSWERED", "NO_ANSWER"]),
+                            CallLog.recording_url.is_(None)
+                        )
+                    ),
                 )
                 .order_by(desc(CallLog.id))
                 .first()
@@ -750,7 +765,13 @@ async def push_doocti_call_log(
 
     # 4b. REJECT GHOST CALLS: Prevent self-extension loop, empty phone numbers, or invalid internal loops
     # ONLY reject if it is a NEW call (no existing CallLog matches this uniqueid/call_id)
-    if not existing_log:
+    # AND never reject if recording is supplied (delayed recording delivery event from PBX)
+    has_rec_in_payload = bool(
+        raw_data.get("recording_path") or 
+        raw_data.get("recording_url") or 
+        raw_data.get("recording")
+    )
+    if not existing_log and not has_rec_in_payload:
         if (
             not clean_target or 
             len(clean_target) < 6 or 
@@ -1054,7 +1075,13 @@ async def push_doocti_call_log(
                     CallLog.to_number.like(f"%{clean_target}%"),
                     CallLog.from_number.like(f"%{clean_target}%"),
                 ),
-                CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
+                or_(
+                    CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
+                    and_(
+                        CallLog.call_status.in_(["COMPLETED", "ANSWERED", "NO_ANSWER"]),
+                        CallLog.recording_url.is_(None)
+                    )
+                ),
                 CallLog.created_at >= four_hours_ago,
             )
             .order_by(desc(CallLog.id))
@@ -1149,8 +1176,19 @@ async def push_doocti_call_log(
             # Update if existing has no recording, or is loopback, or new rec_url is a public/valid URL
             if not curr_rec or is_curr_loopback or not is_new_loopback:
                 existing_log.recording_url = rec_url
+        elif not existing_log.recording_url and ((existing_log.duration_seconds and existing_log.duration_seconds > 0) or (existing_log.call_status or "").upper() in ["COMPLETED", "ANSWERED"]):
+            from services.doocti_recording_service import DooctiRecordingService
+            try:
+                matched_rec = DooctiRecordingService.match_recording_for_call(existing_log, db, auto_save=False)
+                if matched_rec:
+                    existing_log.recording_url = matched_rec
+            except Exception:
+                pass
+
         if call_id and (not existing_log.provider_call_id or existing_log.provider_call_id.startswith("doocti_") or existing_log.provider_call_id.startswith("call_")):
-            existing_log.provider_call_id = call_id
+            conflict = db.query(CallLog).filter(CallLog.provider_call_id == call_id, CallLog.id != existing_log.id).first()
+            if not conflict:
+                existing_log.provider_call_id = call_id
         if started_at and not existing_log.started_at:
             existing_log.started_at = started_at
         if answered_at and not existing_log.answered_at:
@@ -1215,6 +1253,17 @@ async def push_doocti_call_log(
             db.add(call_entry)
             db.commit()
             db.refresh(call_entry)
+
+            # Auto-resolve recording from Oracle storage if not in payload
+            if not call_entry.recording_url and (dur_sec > 0 or status_str in ["COMPLETED", "ANSWERED"]):
+                from services.doocti_recording_service import DooctiRecordingService
+                try:
+                    matched_new = DooctiRecordingService.match_recording_for_call(call_entry, db, auto_save=True)
+                    if matched_new:
+                        logger.info(f"🎯 [DOOCTI CDR] Auto-linked recording for newly created CallLog ID={call_entry.id}")
+                except Exception:
+                    pass
+
             logger.info(f"✅ [DOOCTI CDR] Created CallLog ID={call_entry.id} uniqueid='{call_id}' Status='{status_str}' Duration={dur_sec}s EmpID={resolved_emp_id}")
         except Exception as insert_err:
             db.rollback()

@@ -23,7 +23,8 @@ import {
   Play,
   Pause,
   Database,
-  UploadCloud
+  UploadCloud,
+  Volume2
 } from 'lucide-react';
 import { formatLocalDateTime } from '../../utils/dateUtils';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
@@ -275,6 +276,7 @@ const CallLogsPage = () => {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncingRecordings, setSyncingRecordings] = useState(false);
   const [syncNotice, setSyncNotice] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const fileInputRef = useRef(null);
@@ -382,6 +384,37 @@ const CallLogsPage = () => {
       setTimeout(() => setSyncNotice(null), 4000);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Scan and auto-link missing call recordings from DooCTI Oracle Cloud Object Storage
+  const handleSyncRecordings = async () => {
+    try {
+      setSyncingRecordings(true);
+      const res = await API.post('/ivr/sync-recordings?days=14');
+      const syncedCount = res.data?.synced_count || 0;
+      if (syncedCount > 0) {
+        setSyncNotice({
+          type: 'success',
+          message: `Successfully found and linked ${syncedCount} missing call recording${syncedCount > 1 ? 's' : ''}!`
+        });
+        await fetchCallLogs(true);
+      } else {
+        setSyncNotice({
+          type: 'success',
+          message: 'All completed call recordings are fully synchronized.'
+        });
+      }
+      setTimeout(() => setSyncNotice(null), 5000);
+    } catch (err) {
+      console.error('Failed to sync recordings:', err);
+      setSyncNotice({
+        type: 'error',
+        message: 'Could not sync recordings: ' + (err.response?.data?.detail || err.message)
+      });
+      setTimeout(() => setSyncNotice(null), 5000);
+    } finally {
+      setSyncingRecordings(false);
     }
   };
 
@@ -638,6 +671,17 @@ const CallLogsPage = () => {
           >
             <UploadCloud size={15} className={syncing ? 'spin' : ''} />
             <span>{syncing ? 'Syncing...' : 'Sync CDR Dump'}</span>
+          </button>
+
+          <button 
+            onClick={handleSyncRecordings} 
+            className="btn-refresh-logs" 
+            title="Scan and auto-link missing call recordings from DooCTI cloud storage"
+            disabled={loading || syncingRecordings}
+            style={{ backgroundColor: '#f0fdf4', color: '#166534', borderColor: '#bbf7d0' }}
+          >
+            <Volume2 size={15} className={syncingRecordings ? 'spin' : ''} />
+            <span>{syncingRecordings ? 'Finding...' : 'Sync Recordings'}</span>
           </button>
 
           <button 
