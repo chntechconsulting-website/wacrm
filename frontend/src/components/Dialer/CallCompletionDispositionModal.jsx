@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import API from '../../services/api';
 import PingoPopupService from '../../services/pingoPopupService';
 import { useAuth } from '../../context/AuthContext';
 import {
   PhoneCall,
+  PhoneIncoming,
+  PhoneOutgoing,
   User,
+  Mail,
+  Building2,
   Clock,
   Tag,
   CheckCircle2,
@@ -15,14 +19,48 @@ import {
   Cpu,
   Layers,
   HelpCircle,
-  Calendar
+  Calendar,
+  CalendarClock,
+  UserCheck,
+  Briefcase
 } from 'lucide-react';
+
+const STATUS_OPTIONS = [
+  'NEW LEAD',
+  'CONTACTED',
+  'INTERESTED',
+  'DEMO / MEETING',
+  'PROPOSAL SENT',
+  'FOLLOW-UP',
+  'RNR',
+  'WON',
+  'LOST',
+  'JUNK'
+];
+
+const SOURCE_OPTIONS = [
+  'Inbound Call',
+  'Outbound Call',
+  'Referral',
+  'Website',
+  'Meta',
+  'Manual',
+  'Other'
+];
+
+const FOLLOWUP_TYPES = [
+  'Call',
+  'Meeting',
+  'Demo',
+  'WhatsApp',
+  'Email'
+];
 
 /**
  * CallCompletionDispositionModal
- * Displays after an incoming or outgoing DooCTI / IVR call ends.
- * Enforces mandatory product categorization (BIOMETRIC, WAHRMS, UNCLASSIFIED)
- * along with call notes and disposition status.
+ * Appears ONLY when a new inbound or outbound call has genuinely completed.
+ * Allows agents to create a new Lead or update an existing Lead, link call logs,
+ * confirm mandatory product classification, and schedule follow-ups.
  */
 const CallCompletionDispositionModal = ({
   isOpen,
@@ -31,19 +69,34 @@ const CallCompletionDispositionModal = ({
   onSaved
 }) => {
   const { currentUser } = useAuth();
-  const [leadName, setLeadName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [callStatus, setCallStatus] = useState('COMPLETED');
+
+  // Call Identification & Metadata
+  const [callId, setCallId] = useState('');
+  const [callDirection, setCallDirection] = useState('INBOUND');
   const [durationSeconds, setDurationSeconds] = useState(0);
+  const [callDateTime, setCallDateTime] = useState('');
+  const [isExistingLead, setIsExistingLead] = useState(false);
   const [leadId, setLeadId] = useState(null);
-  const [existingCategory, setExistingCategory] = useState(null);
-  const [categoryConfirmed, setCategoryConfirmed] = useState(false);
+
+  // Active Employees for assignment
+  const [employees, setEmployees] = useState([]);
+
+  // Customer Details Form Fields
+  const [customerName, setCustomerName] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
+  const [email, setEmail] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('UNCLASSIFIED');
   const [suggestedCategory, setSuggestedCategory] = useState('UNCLASSIFIED');
+  const [existingCategory, setExistingCategory] = useState(null);
+  const [requirementNotes, setRequirementNotes] = useState('');
+  const [leadSource, setLeadSource] = useState('Inbound Call');
+  const [leadStatus, setLeadStatus] = useState('CONTACTED');
+  const [assignedEmployeeId, setAssignedEmployeeId] = useState('');
   const [callNotes, setCallNotes] = useState('');
-  const [dispositionStatus, setDispositionStatus] = useState('CONTACTED');
 
-  // Follow-up specific fields
+  // Follow-up Section Fields
+  const [followupRequired, setFollowupRequired] = useState(false);
   const getTomorrowDate = () => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -51,68 +104,138 @@ const CallCompletionDispositionModal = ({
   };
   const [followupDate, setFollowupDate] = useState(getTomorrowDate());
   const [followupTime, setFollowupTime] = useState('10:00 AM');
+  const [followupType, setFollowupType] = useState('Call');
   const [followupPriority, setFollowupPriority] = useState('MEDIUM');
+  const [followupNotes, setFollowupNotes] = useState('');
+  const [followupAssignedTo, setFollowupAssignedTo] = useState('');
 
+  // Form State
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Fetch active employees once
+  useEffect(() => {
+    let isSubscribed = true;
+    const fetchEmployees = async () => {
+      try {
+        const res = await API.get('/employees/?status_filter=ACTIVE');
+        if (isSubscribed && Array.isArray(res.data)) {
+          setEmployees(res.data);
+        }
+      } catch (err) {
+        console.warn('Failed to load active employees for disposition modal:', err);
+      }
+    };
+    fetchEmployees();
+    return () => {
+      isSubscribed = false;
+    };
+  }, []);
+
+  // Initialize and populate call and lead data
   useEffect(() => {
     if (!isOpen || !callData) return;
 
     setSaveError('');
     setSaveSuccess(false);
 
-    const rawPhone = callData.phone_number || callData.customer_phone || callData.to_number || callData.from_number || '';
-    const cleanPhone = String(rawPhone || '').replace(/[^0-9]/g, '');
-    setPhoneNumber(rawPhone);
+    // 1. Extract call metadata
+    const rawCallId = String(
+      callData.uniqueid || callData.call_id || callData.provider_call_id || callData.id || ''
+    ).trim();
+    setCallId(rawCallId);
 
-    const dur = callData.duration || callData.duration_seconds || 0;
-    setDurationSeconds(dur);
-
-    const st = (callData.status || callData.call_status || 'COMPLETED').toUpperCase();
-    setCallStatus(st);
-
-    if (['MISSED', 'NO_ANSWER', 'FAILED'].includes(st)) {
-      setDispositionStatus('NO_ANSWER');
-    } else {
-      setDispositionStatus('CONTACTED');
+    // One-time form check: if already processed in this session, do not show
+    if (rawCallId) {
+      try {
+        const handledKey = 'crm_call_lead_form_handled_' + rawCallId;
+        if (sessionStorage.getItem(handledKey) === 'true') {
+          if (onClose) onClose();
+          return;
+        }
+      } catch (e) {}
     }
 
-    setFollowupDate(getTomorrowDate());
-    setFollowupTime('10:00 AM');
-    setFollowupPriority('MEDIUM');
+    const rawPhone = String(
+      callData.phone_number || callData.customer_phone || callData.to_number || callData.from_number || ''
+    ).trim();
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+    setMobileNumber(rawPhone);
 
+    const dir = String(callData.call_direction || callData.direction || 'INBOUND').toUpperCase();
+    setCallDirection(dir);
+    setLeadSource(dir === 'INBOUND' ? 'Inbound Call' : 'Outbound Call');
+
+    const dur = Number(callData.duration || callData.duration_seconds || 0);
+    setDurationSeconds(dur);
+
+    const timeVal = callData.ended_at || callData.end_time || callData.started_at || callData.start_time || callData.created_at || new Date().toISOString();
+    try {
+      setCallDateTime(new Date(timeVal).toLocaleString('en-IN', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      }));
+    } catch (e) {
+      setCallDateTime(new Date().toLocaleString());
+    }
+
+    // Default assigned employee to current user if available
+    const defaultEmpId = currentUser?.employee_id ? String(currentUser.employee_id) : '';
+    setAssignedEmployeeId(defaultEmpId);
+    setFollowupAssignedTo(defaultEmpId);
+
+    // Initial notes
     const initialNotes = callData.notes || '';
     setCallNotes(initialNotes);
 
-    // Initial lead identification
+    // Reset follow-up
+    setFollowupRequired(false);
+    setFollowupDate(getTomorrowDate());
+    setFollowupTime('10:00 AM');
+    setFollowupType('Call');
+    setFollowupPriority('MEDIUM');
+    setFollowupNotes('');
+
+    // Pre-populate or check existing lead
     const targetLeadId = callData.lead_id || callData.entity_id || null;
     if (targetLeadId) {
       setLeadId(targetLeadId);
+      setIsExistingLead(true);
+    } else {
+      setLeadId(null);
+      setIsExistingLead(false);
     }
 
-    const initialName = callData.lead_name || callData.name || (targetLeadId ? `Lead #${targetLeadId}` : 'Caller');
-    setLeadName(initialName);
+    const defaultName = callData.lead_name || callData.name || '';
+    setCustomerName(defaultName);
 
-    // Auto-detect or fetch lead info if phone is available
+    // Look up customer phone in database
     if (cleanPhone && cleanPhone.length >= 6) {
       API.get(`/doocti/lead-by-number?number=${cleanPhone}&auto_create=false`)
         .then(res => {
           if (res.data?.success && res.data?.lead) {
             const ld = res.data.lead;
+            setIsExistingLead(true);
             setLeadId(ld.id);
-            setLeadName(ld.name || ld.company || `Lead #${ld.id}`);
-            
+            if (ld.name) setCustomerName(ld.name);
+            if (ld.email) setEmail(ld.email);
+            if (ld.company) setCompanyName(ld.company);
+            if (ld.requirement_notes) setRequirementNotes(ld.requirement_notes);
+            if (ld.source) setLeadSource(ld.source);
+            if (ld.status) setLeadStatus(ld.status);
+            if (ld.assigned_to) {
+              setAssignedEmployeeId(String(ld.assigned_to));
+              setFollowupAssignedTo(String(ld.assigned_to));
+            }
+
             const existingCat = ld.product_category || null;
             const isConfirmed = Boolean(ld.product_category_confirmed);
             const suggested = ld.suggested_product_category || ld.product_category || 'UNCLASSIFIED';
 
             setExistingCategory(existingCat);
-            setCategoryConfirmed(isConfirmed);
             setSuggestedCategory(suggested);
 
-            // Default selection: if confirmed, keep confirmed; otherwise suggested or unclassified
             if (isConfirmed && existingCat) {
               setSelectedCategory(existingCat);
             } else if (suggested && suggested !== 'UNCLASSIFIED') {
@@ -123,7 +246,6 @@ const CallCompletionDispositionModal = ({
               setSelectedCategory('UNCLASSIFIED');
             }
           } else {
-            // Not found in leads - analyze call notes
             detectFromNotes(initialNotes);
           }
         })
@@ -133,7 +255,7 @@ const CallCompletionDispositionModal = ({
     } else {
       detectFromNotes(initialNotes);
     }
-  }, [isOpen, callData]);
+  }, [isOpen, callData, currentUser]);
 
   const detectFromNotes = (text) => {
     if (!text) {
@@ -161,13 +283,41 @@ const CallCompletionDispositionModal = ({
     return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
   };
 
+  // When Lead Status is changed to FOLLOW-UP, automatically enable follow-up section
+  const handleStatusChange = (newStatus) => {
+    setLeadStatus(newStatus);
+    if (newStatus === 'FOLLOW-UP') {
+      setFollowupRequired(true);
+    }
+  };
+
+  // Explicit skip action (closes form and marks call as handled so it never reopens)
+  const handleSkip = () => {
+    if (callId) {
+      try {
+        sessionStorage.setItem('crm_call_lead_form_handled_' + callId, 'true');
+      } catch (e) {}
+    }
+    if (onClose) onClose();
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setSaveError('');
 
-    // Validation for Follow-up status
-    const isFollowup = dispositionStatus === 'FOLLOW-UP';
-    if (isFollowup && !followupDate) {
+    // Validations
+    if (!customerName || !customerName.trim()) {
+      setSaveError('Customer Name is required.');
+      return;
+    }
+
+    const cleanPhone = String(mobileNumber || '').replace(/[^0-9]/g, '');
+    if (!cleanPhone || cleanPhone.length < 8) {
+      setSaveError('A valid Customer Mobile Number (at least 8-10 digits) is required.');
+      return;
+    }
+
+    if (followupRequired && !followupDate) {
       setSaveError('Please select a valid Follow-up Date.');
       return;
     }
@@ -175,72 +325,75 @@ const CallCompletionDispositionModal = ({
     setSaving(true);
 
     try {
-      const callUniqueId = callData?.uniqueid || callData?.callId || callData?.provider_call_id || null;
-      const currentEmpId = currentUser?.employee_id || currentUser?.id || null;
-
       const payload = {
-        status: dispositionStatus,
-        call_notes: callNotes,
+        lead_id: leadId ? Number(leadId) : null,
+        call_id: callId || null,
+        name: customerName.trim(),
+        phone: mobileNumber.trim(),
+        email: email.trim() || null,
+        company: companyName.trim() || null,
         product_category: selectedCategory,
-        call_id: callUniqueId,
-        employee_id: currentEmpId,
+        requirement_notes: requirementNotes.trim() || null,
+        source: leadSource,
+        status: leadStatus,
+        assigned_to: assignedEmployeeId ? Number(assignedEmployeeId) : null,
+        call_notes: callNotes.trim() || null,
+        call_direction: callDirection,
+        call_duration: durationSeconds,
         agent_email: currentUser?.email || null,
-        followup_date: isFollowup ? followupDate : null,
-        followup_time: isFollowup ? (followupTime || '10:00 AM') : null,
-        followup_priority: isFollowup ? followupPriority : 'MEDIUM'
+        employee_id: currentUser?.employee_id || null,
+        followup_required: Boolean(followupRequired),
+        followup_date: followupRequired && followupDate ? followupDate : null,
+        followup_time: followupRequired ? (followupTime || '10:00 AM') : null,
+        followup_type: followupRequired ? followupType : 'Call',
+        followup_notes: followupRequired ? followupNotes.trim() : null,
+        followup_priority: followupPriority || 'MEDIUM',
+        followup_assigned_to: followupRequired && followupAssignedTo ? Number(followupAssignedTo) : null
       };
 
-      let savedLeadId = leadId;
+      const res = await API.post('/doocti/lead/save-completion', payload);
+      const savedLead = res.data?.lead || {};
+      const savedLeadId = res.data?.lead_id || leadId || savedLead.id;
 
-      // 1. If leadId is present, update Lead through backend API
-      if (leadId) {
-        await API.post('/doocti/lead/update', {
-          ...payload,
-          lead_id: leadId
-        });
-      } else if (phoneNumber) {
-        // Find or auto-create lead so disposition is not lost
-        const findRes = await API.get(`/doocti/lead-by-number?number=${phoneNumber}&auto_create=true`);
-        if (findRes.data?.lead?.id) {
-          savedLeadId = findRes.data.lead.id;
-          setLeadId(savedLeadId);
-          await API.post('/doocti/lead/update', {
-            ...payload,
-            lead_id: savedLeadId
-          });
-        }
+      // Mark this call ID as successfully handled in sessionStorage
+      if (callId) {
+        try {
+          sessionStorage.setItem('crm_call_lead_form_handled_' + callId, 'true');
+        } catch (e) {}
       }
 
       setSaveSuccess(true);
+
+      // Trigger CRM events to refresh lead lists and follow-up reminders
       window.dispatchEvent(new Event('leadStatsUpdated'));
       window.dispatchEvent(new Event('followupReminderRefresh'));
       window.dispatchEvent(new CustomEvent('call-disposition-saved', {
         detail: {
           leadId: savedLeadId,
           product_category: selectedCategory,
-          status: dispositionStatus,
+          status: leadStatus,
           notes: callNotes,
-          followup_date: isFollowup ? followupDate : null,
-          followup_time: isFollowup ? followupTime : null
+          followup_date: followupRequired ? followupDate : null,
+          followup_time: followupRequired ? followupTime : null
         }
       }));
 
       PingoPopupService.showNotification({
-        title: 'Call Disposition Saved',
-        message: isFollowup 
-          ? `Follow-up scheduled for ${followupDate}. Category: ${selectedCategory}.` 
-          : `Category: ${selectedCategory}. Notes and status updated successfully.`,
+        title: isExistingLead ? 'Lead Updated' : 'Lead Created',
+        message: followupRequired
+          ? `Lead '${customerName}' saved with follow-up scheduled for ${followupDate}.`
+          : `Lead '${customerName}' saved successfully.`,
         type: 'success'
       });
 
       setTimeout(() => {
         if (onSaved) onSaved({ leadId: savedLeadId, product_category: selectedCategory });
         if (onClose) onClose();
-      }, 700);
+      }, 750);
     } catch (err) {
-      console.error('Failed to save call disposition:', err);
-      const msg = err.response?.data?.detail || err.message || 'Network error: Failed to save call disposition. Please try again.';
-      setSaveError(msg);
+      console.error('Failed to save call lead details:', err);
+      const msg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Failed to save lead. Please check the details and try again.';
+      setSaveError(typeof msg === 'string' ? msg : JSON.stringify(msg));
     } finally {
       setSaving(false);
     }
@@ -255,7 +408,7 @@ const CallCompletionDispositionModal = ({
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: 'rgba(15, 23, 42, 0.6)',
+      backgroundColor: 'rgba(15, 23, 42, 0.65)',
       backdropFilter: 'blur(4px)',
       display: 'flex',
       alignItems: 'center',
@@ -267,46 +420,50 @@ const CallCompletionDispositionModal = ({
         backgroundColor: '#ffffff',
         borderRadius: '16px',
         width: '100%',
-        maxWidth: '520px',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+        maxWidth: '720px',
+        maxHeight: '90vh',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.28)',
+        display: 'flex',
+        flexDirection: 'column',
         overflow: 'hidden',
         animation: 'fadeIn 0.2s ease-out'
       }}>
-        {/* Header */}
+        {/* Modal Header */}
         <div style={{
-          padding: '18px 22px',
+          padding: '16px 22px',
           background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
           color: '#ffffff',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          flexShrink: 0
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{
-              width: '36px',
-              height: '36px',
+              width: '38px',
+              height: '38px',
               borderRadius: '10px',
-              backgroundColor: 'rgba(255, 255, 255, 0.1)',
+              backgroundColor: 'rgba(255, 255, 255, 0.12)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               color: '#38bdf8'
             }}>
-              <PhoneCall size={20} />
+              {callDirection === 'INBOUND' ? <PhoneIncoming size={20} /> : <PhoneOutgoing size={20} />}
             </div>
             <div>
               <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, letterSpacing: '-0.01em' }}>
-                Call Ended &bull; Disposition
+                {isExistingLead ? 'Call Completed – Update Lead' : 'New Call Completed – Create Lead'}
               </h3>
               <p style={{ margin: 0, fontSize: '0.75rem', color: '#94a3b8' }}>
-                Mandatory Product Classification &amp; Notes
+                Customer Details, Product Classification &amp; Follow-up Scheduling
               </p>
             </div>
           </div>
           <button
             type="button"
-            onClick={onClose}
-            title="Dismiss Popup"
+            onClick={handleSkip}
+            title="Skip and dismiss form"
             style={{
               background: 'none',
               border: 'none',
@@ -319,61 +476,82 @@ const CallCompletionDispositionModal = ({
               borderRadius: '6px'
             }}
           >
-            <X size={18} />
+            <X size={20} />
           </button>
         </div>
 
         {/* Call Summary Banner */}
         <div style={{
-          padding: '14px 22px',
+          padding: '12px 22px',
           backgroundColor: '#f8fafc',
           borderBottom: '1px solid #e2e8f0',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: '8px'
+          gap: '10px',
+          flexShrink: 0
         }}>
-          <div>
-            <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#0f172a' }}>
-              {leadName || 'Direct Caller'}
-            </div>
-            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
-              {phoneNumber || 'Unknown Number'} {leadId && `(Lead #${leadId})`}
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{
               fontSize: '0.72rem',
               fontWeight: 700,
               padding: '3px 8px',
               borderRadius: '6px',
-              backgroundColor: callStatus === 'COMPLETED' ? '#dcfce7' : '#fee2e2',
-              color: callStatus === 'COMPLETED' ? '#15803d' : '#b91c1c'
+              backgroundColor: callDirection === 'INBOUND' ? '#dcfce7' : '#eff6ff',
+              color: callDirection === 'INBOUND' ? '#15803d' : '#1d4ed8',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
             }}>
-              {callStatus}
+              {callDirection === 'INBOUND' ? <PhoneIncoming size={12} /> : <PhoneOutgoing size={12} />}
+              {callDirection} CALL
             </span>
             <span style={{
               fontSize: '0.72rem',
               fontWeight: 700,
               padding: '3px 8px',
               borderRadius: '6px',
-              backgroundColor: '#eff6ff',
-              color: '#1d4ed8',
+              backgroundColor: '#f1f5f9',
+              color: '#334155',
               display: 'flex',
               alignItems: 'center',
               gap: '4px'
             }}>
               <Clock size={12} /> {formatDuration(durationSeconds)}
             </span>
+            {callId && (
+              <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                Call ID: <strong style={{ color: '#0f172a' }}>{callId.length > 18 ? callId.slice(0, 18) + '...' : callId}</strong>
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {callDateTime && (
+              <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                {callDateTime}
+              </span>
+            )}
+            {isExistingLead && leadId && (
+              <span style={{
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                padding: '2px 8px',
+                borderRadius: '6px',
+                backgroundColor: '#e0e7ff',
+                color: '#4338ca'
+              }}>
+                Existing Lead #{leadId}
+              </span>
+            )}
           </div>
         </div>
 
-        {/* Main Disposition Form */}
-        <form onSubmit={handleSave} style={{ padding: '20px 22px' }}>
+        {/* Scrollable Form Body */}
+        <form onSubmit={handleSave} style={{ overflowY: 'auto', padding: '18px 22px', flexGrow: 1 }}>
           {/* 1. Mandatory Product Classification */}
           <div style={{ marginBottom: '18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <label style={{
                 fontSize: '0.82rem',
                 fontWeight: 800,
@@ -382,20 +560,19 @@ const CallCompletionDispositionModal = ({
                 alignItems: 'center',
                 gap: '6px'
               }}>
-                <Tag size={14} color="#2563eb" />
+                <Tag size={15} color="#2563eb" />
                 Product Classification *
               </label>
               {existingCategory && (
                 <span style={{ fontSize: '0.72rem', color: '#64748b' }}>
                   Current: <strong style={{ color: '#0f172a' }}>{existingCategory}</strong>
-                  {categoryConfirmed && ' (Confirmed)'}
                 </span>
               )}
             </div>
 
             <div style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr 1fr',
+              gridTemplateColumns: 'repeat(3, 1fr)',
               gap: '8px',
               marginBottom: '6px'
             }}>
@@ -404,7 +581,7 @@ const CallCompletionDispositionModal = ({
                 type="button"
                 onClick={() => setSelectedCategory('BIOMETRIC')}
                 style={{
-                  padding: '10px 8px',
+                  padding: '9px 8px',
                   borderRadius: '10px',
                   border: selectedCategory === 'BIOMETRIC' ? '2px solid #2563eb' : '1px solid #cbd5e1',
                   backgroundColor: selectedCategory === 'BIOMETRIC' ? '#eff6ff' : '#ffffff',
@@ -429,7 +606,7 @@ const CallCompletionDispositionModal = ({
                 type="button"
                 onClick={() => setSelectedCategory('WAHRMS')}
                 style={{
-                  padding: '10px 8px',
+                  padding: '9px 8px',
                   borderRadius: '10px',
                   border: selectedCategory === 'WAHRMS' ? '2px solid #16a34a' : '1px solid #cbd5e1',
                   backgroundColor: selectedCategory === 'WAHRMS' ? '#f0fdf4' : '#ffffff',
@@ -454,7 +631,7 @@ const CallCompletionDispositionModal = ({
                 type="button"
                 onClick={() => setSelectedCategory('UNCLASSIFIED')}
                 style={{
-                  padding: '10px 8px',
+                  padding: '9px 8px',
                   borderRadius: '10px',
                   border: selectedCategory === 'UNCLASSIFIED' ? '2px solid #64748b' : '1px solid #cbd5e1',
                   backgroundColor: selectedCategory === 'UNCLASSIFIED' ? '#f1f5f9' : '#ffffff',
@@ -471,7 +648,7 @@ const CallCompletionDispositionModal = ({
               >
                 <HelpCircle size={18} color={selectedCategory === 'UNCLASSIFIED' ? '#0f172a' : '#64748b'} />
                 <span>UNCLASSIFIED</span>
-                <span style={{ fontSize: '0.66rem', color: '#64748b', fontWeight: 500 }}>Ambiguous / General</span>
+                <span style={{ fontSize: '0.66rem', color: '#64748b', fontWeight: 500 }}>General / Ambiguous</span>
               </button>
             </div>
 
@@ -484,166 +661,465 @@ const CallCompletionDispositionModal = ({
                 borderRadius: '6px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px'
+                gap: '6px',
+                marginTop: '4px'
               }}>
-                <span>💡 Auto-detected from lead signals: <strong>{suggestedCategory}</strong></span>
+                <span>💡 Auto-detected from notes/IVR: <strong>{suggestedCategory}</strong></span>
               </div>
             )}
           </div>
 
-          {/* 2. Call Disposition Outcome */}
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-              Lead Call Disposition
-            </label>
-            <select
-              value={dispositionStatus}
-              onChange={(e) => setDispositionStatus(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '9px 12px',
-                borderRadius: '8px',
-                border: '1.5px solid #cbd5e1',
-                fontSize: '0.86rem',
-                fontWeight: 600,
-                color: '#0f172a',
-                outline: 'none',
-                backgroundColor: '#ffffff'
-              }}
-            >
-              <option value="CONTACTED">Contacted / Discussion Completed</option>
-              <option value="INTERESTED">Interested / Demo Requested</option>
-              <option value="FOLLOW-UP">Follow-up Required</option>
-              <option value="RNR">RNR (Ringing No Response)</option>
-              <option value="PROPOSAL SENT">Proposal / Quotation Sent</option>
-              <option value="NO_ANSWER">No Answer / Busy / Disconnected</option>
-              <option value="NOT_INTERESTED">Not Interested / Closed</option>
-              <option value="JUNK">Junk / Invalid Lead</option>
-            </select>
-          </div>
-
-          {/* Conditional Follow-up Scheduling Section */}
-          {dispositionStatus === 'FOLLOW-UP' && (
-            <div style={{
-              marginBottom: '16px',
-              padding: '12px 14px',
-              backgroundColor: '#eff6ff',
-              borderRadius: '10px',
-              border: '1px solid #bfdbfe'
+          {/* 2. Customer Details Section */}
+          <div style={{
+            backgroundColor: '#ffffff',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            padding: '14px 16px',
+            marginBottom: '16px'
+          }}>
+            <h4 style={{
+              margin: '0 0 12px 0',
+              fontSize: '0.86rem',
+              fontWeight: 800,
+              color: '#1e293b',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
             }}>
-              <div style={{
-                fontSize: '0.8rem',
-                fontWeight: 800,
-                color: '#1e40af',
-                marginBottom: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}>
-                <Calendar size={15} color="#2563eb" />
-                Schedule Next Follow-up *
-              </div>
+              <User size={16} color="#2563eb" />
+              Customer Details
+            </h4>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '8px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                    Follow-up Date
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={followupDate}
-                    onChange={(e) => setFollowupDate(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '7px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid #cbd5e1',
-                      fontSize: '0.82rem',
-                      color: '#0f172a',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                    Follow-up Time
-                  </label>
-                  <input
-                    type="text"
-                    value={followupTime}
-                    placeholder="e.g. 10:30 AM"
-                    onChange={(e) => setFollowupTime(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '7px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid #cbd5e1',
-                      fontSize: '0.82rem',
-                      color: '#0f172a',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff'
-                    }}
-                  />
-                </div>
+            {/* Row 1: Name & Phone */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Customer Name <span style={{ color: '#dc2626' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. John Doe / Business Contact"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
-                  Priority
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Mobile Number <span style={{ color: '#dc2626' }}>*</span>
                 </label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {['LOW', 'MEDIUM', 'HIGH'].map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setFollowupPriority(p)}
-                      style={{
-                        flex: 1,
-                        padding: '5px 8px',
-                        fontSize: '0.74rem',
-                        fontWeight: followupPriority === p ? 800 : 500,
-                        borderRadius: '6px',
-                        border: followupPriority === p ? '1.5px solid #2563eb' : '1px solid #cbd5e1',
-                        backgroundColor: followupPriority === p ? '#dbeafe' : '#ffffff',
-                        color: followupPriority === p ? '#1d4ed8' : '#64748b',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
+                <input
+                  type="tel"
+                  required
+                  placeholder="e.g. 9876543210"
+                  value={mobileNumber}
+                  onChange={(e) => setMobileNumber(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                />
               </div>
             </div>
-          )}
 
-          {/* 3. Call Notes */}
-          <div style={{ marginBottom: '18px' }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-              Call Notes &amp; Client Requirement
-            </label>
-            <textarea
-              rows={3}
-              value={callNotes}
-              onChange={(e) => setCallNotes(e.target.value)}
-              placeholder="Record key discussion points, requirements, and next steps..."
-              style={{
-                width: '100%',
-                padding: '9px 12px',
-                borderRadius: '8px',
-                border: '1.5px solid #cbd5e1',
-                fontSize: '0.86rem',
-                color: '#0f172a',
-                outline: 'none',
-                resize: 'vertical',
-                boxSizing: 'border-box'
-              }}
-            />
+            {/* Row 2: Email & Company */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  placeholder="e.g. customer@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Company Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Acme Solutions Pvt Ltd"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Row 3: Source, Status & Assigned Employee */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Lead Source
+                </label>
+                <select
+                  value={leadSource}
+                  onChange={(e) => setLeadSource(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    backgroundColor: '#ffffff',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                >
+                  {SOURCE_OPTIONS.map(src => (
+                    <option key={src} value={src}>{src}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Lead Status
+                </label>
+                <select
+                  value={leadStatus}
+                  onChange={(e) => handleStatusChange(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    backgroundColor: '#ffffff',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                >
+                  {STATUS_OPTIONS.map(st => (
+                    <option key={st} value={st}>{st}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                  Assigned Employee
+                </label>
+                <select
+                  value={assignedEmployeeId}
+                  onChange={(e) => {
+                    setAssignedEmployeeId(e.target.value);
+                    if (!followupAssignedTo) setFollowupAssignedTo(e.target.value);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: '7px',
+                    border: '1.5px solid #cbd5e1',
+                    fontSize: '0.84rem',
+                    color: '#0f172a',
+                    backgroundColor: '#ffffff',
+                    boxSizing: 'border-box',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="">-- Unassigned --</option>
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name} {emp.designation ? `(${emp.designation})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Row 4: Enquiry / Product Requirement */}
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Enquiry / Product Requirement
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Specific customer requirements, model preferences, employee count, etc."
+                value={requirementNotes}
+                onChange={(e) => setRequirementNotes(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  border: '1.5px solid #cbd5e1',
+                  fontSize: '0.84rem',
+                  color: '#0f172a',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                  resize: 'vertical'
+                }}
+              />
+            </div>
+
+            {/* Row 5: Call Discussion Notes */}
+            <div>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Call Discussion Notes
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Key points discussed during this call..."
+                value={callNotes}
+                onChange={(e) => setCallNotes(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  border: '1.5px solid #cbd5e1',
+                  fontSize: '0.84rem',
+                  color: '#0f172a',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                  resize: 'vertical'
+                }}
+              />
+            </div>
           </div>
 
-          {/* Feedback & Error states */}
+          {/* 3. Follow-up Integration Section (Optional with Toggle) */}
+          <div style={{
+            backgroundColor: followupRequired ? '#f8fafc' : '#ffffff',
+            border: followupRequired ? '1.5px solid #93c5fd' : '1px solid #e2e8f0',
+            borderRadius: '12px',
+            padding: '14px 16px',
+            marginBottom: '16px',
+            transition: 'all 0.15s ease'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: followupRequired ? '12px' : 0
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CalendarClock size={18} color="#2563eb" />
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '0.86rem', fontWeight: 800, color: '#1e293b' }}>
+                    Follow-up Scheduling
+                  </h4>
+                  <p style={{ margin: 0, fontSize: '0.72rem', color: '#64748b' }}>
+                    Create a scheduled task in the Follow-ups module for the assigned agent
+                  </p>
+                </div>
+              </div>
+
+              {/* Yes / No Toggle Button Group */}
+              <div style={{
+                display: 'inline-flex',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                overflow: 'hidden'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setFollowupRequired(true)}
+                  style={{
+                    padding: '5px 14px',
+                    fontSize: '0.78rem',
+                    fontWeight: followupRequired ? 800 : 500,
+                    backgroundColor: followupRequired ? '#2563eb' : '#ffffff',
+                    color: followupRequired ? '#ffffff' : '#475569',
+                    border: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Yes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFollowupRequired(false)}
+                  style={{
+                    padding: '5px 14px',
+                    fontSize: '0.78rem',
+                    fontWeight: !followupRequired ? 800 : 500,
+                    backgroundColor: !followupRequired ? '#64748b' : '#ffffff',
+                    color: !followupRequired ? '#ffffff' : '#475569',
+                    border: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  No
+                </button>
+              </div>
+            </div>
+
+            {/* Follow-up Details (Expanded when followupRequired = true) */}
+            {followupRequired && (
+              <div style={{ marginTop: '12px', borderTop: '1px dashed #cbd5e1', paddingTop: '12px' }}>
+                {/* Followup Date & Time */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Follow-up Date <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input
+                      type="date"
+                      required={followupRequired}
+                      min={new Date().toISOString().split('T')[0]}
+                      value={followupDate}
+                      onChange={(e) => setFollowupDate(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: '7px',
+                        border: '1.5px solid #cbd5e1',
+                        fontSize: '0.84rem',
+                        color: '#0f172a',
+                        backgroundColor: '#ffffff',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Follow-up Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 10:30 AM"
+                      value={followupTime}
+                      onChange={(e) => setFollowupTime(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: '7px',
+                        border: '1.5px solid #cbd5e1',
+                        fontSize: '0.84rem',
+                        color: '#0f172a',
+                        backgroundColor: '#ffffff',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Followup Type & Assigned Employee */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Follow-up Type
+                    </label>
+                    <select
+                      value={followupType}
+                      onChange={(e) => setFollowupType(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: '7px',
+                        border: '1.5px solid #cbd5e1',
+                        fontSize: '0.84rem',
+                        color: '#0f172a',
+                        backgroundColor: '#ffffff',
+                        boxSizing: 'border-box'
+                      }}
+                    >
+                      {FOLLOWUP_TYPES.map(ft => (
+                        <option key={ft} value={ft}>{ft}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Assign Follow-up To
+                    </label>
+                    <select
+                      value={followupAssignedTo}
+                      onChange={(e) => setFollowupAssignedTo(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: '7px',
+                        border: '1.5px solid #cbd5e1',
+                        fontSize: '0.84rem',
+                        color: '#0f172a',
+                        backgroundColor: '#ffffff',
+                        boxSizing: 'border-box'
+                      }}
+                    >
+                      <option value="">-- Same as Lead Owner --</option>
+                      {employees.map(emp => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.name} {emp.designation ? `(${emp.designation})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Follow-up Notes */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Follow-up Notes / Agenda
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="Specific items to prepare or discuss during the follow-up..."
+                    value={followupNotes}
+                    onChange={(e) => setFollowupNotes(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      borderRadius: '7px',
+                      border: '1.5px solid #cbd5e1',
+                      fontSize: '0.84rem',
+                      color: '#0f172a',
+                      backgroundColor: '#ffffff',
+                      boxSizing: 'border-box',
+                      outline: 'none',
+                      resize: 'vertical'
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Feedback & Error Alerts */}
           {saveError && (
             <div style={{
               padding: '10px 14px',
@@ -657,7 +1133,7 @@ const CallCompletionDispositionModal = ({
               alignItems: 'center',
               gap: '8px'
             }}>
-              <AlertCircle size={16} />
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
               <span>{saveError}</span>
             </div>
           )}
@@ -675,19 +1151,24 @@ const CallCompletionDispositionModal = ({
               alignItems: 'center',
               gap: '8px'
             }}>
-              <CheckCircle2 size={16} />
-              <span>Disposition and product category saved successfully!</span>
+              <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+              <span>Lead and disposition saved successfully!</span>
             </div>
           )}
 
-          {/* Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+          {/* Action Buttons */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '10px',
+            paddingTop: '6px'
+          }}>
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleSkip}
               disabled={saving}
               style={{
-                padding: '9px 16px',
+                padding: '9px 18px',
                 borderRadius: '8px',
                 border: '1px solid #cbd5e1',
                 backgroundColor: '#ffffff',
@@ -697,28 +1178,30 @@ const CallCompletionDispositionModal = ({
                 cursor: 'pointer'
               }}
             >
-              Skip / Later
+              Skip
             </button>
+
             <button
               type="submit"
               disabled={saving}
               style={{
-                padding: '9px 20px',
+                padding: '9px 22px',
                 borderRadius: '8px',
                 border: 'none',
                 backgroundColor: '#2563eb',
                 color: '#ffffff',
                 fontSize: '0.85rem',
                 fontWeight: 700,
-                cursor: 'pointer',
+                cursor: saving ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)'
+                gap: '8px',
+                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)',
+                opacity: saving ? 0.7 : 1
               }}
             >
               {saving ? <RefreshCw size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
-              <span>Save Call Disposition</span>
+              <span>{isExistingLead ? 'Update Lead Details' : 'Save Lead & Disposition'}</span>
             </button>
           </div>
         </form>

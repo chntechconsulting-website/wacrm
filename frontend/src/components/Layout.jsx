@@ -55,10 +55,59 @@ const Layout = () => {
     const handleCallCompletedDisposition = (e) => {
       if (!isMounted) return;
       const data = e.detail;
-      if (data) {
-        setDispositionCallData(data);
-        setShowDispositionModal(true);
+      if (!data) return;
+
+      // 1. Strict Genuine Completion Filter:
+      // Ringing, connecting, failed, busy, or unanswered calls MUST NEVER open the form
+      const st = String(data.status || data.call_status || '').toUpperCase();
+      const dur = Number(data.duration || data.duration_seconds || 0);
+      const nonCompleted = [
+        'RINGING', 'CONNECTING', 'INITIATING', 'FAILED', 'BUSY', 
+        'NO_ANSWER', 'NO ANSWER', 'MISSED', 'REJECTED', 'DECLINED', 'CANCELLED'
+      ];
+      if (nonCompleted.includes(st)) {
+        return;
       }
+
+      const isCompleted = ['COMPLETED', 'ANSWERED', 'CONNECTED'].includes(st) || dur > 0;
+      if (!isCompleted) {
+        return;
+      }
+
+      // 2. Validate Customer Mobile Number:
+      const rawPhone = data.phone_number || data.customer_phone || data.to_number || data.from_number || '';
+      const cleanPhone = String(rawPhone || '').replace(/[^0-9]/g, '');
+      if (!cleanPhone || cleanPhone.length < 6) {
+        return;
+      }
+
+      // 3. Unique Call ID & One-Time Tracking (prevent duplicate/repeated events, refreshes, or historical polling):
+      const callId = String(data.uniqueid || data.call_id || data.provider_call_id || data.id || '').trim();
+      if (!callId) {
+        return;
+      }
+
+      try {
+        const handledKey = 'crm_call_lead_form_handled_' + callId;
+        if (sessionStorage.getItem(handledKey) === 'true') {
+          return; // Already processed, saved, or explicitly skipped
+        }
+      } catch (err) {}
+
+      // 4. Historical Call Guard:
+      // Only open for calls that genuinely completed during the active session (within past 5 minutes)
+      const callTime = data.end_time || data.ended_at || data.start_time || data.started_at;
+      if (callTime) {
+        try {
+          const callAgeMs = Date.now() - new Date(callTime).getTime();
+          if (callAgeMs > 5 * 60 * 1000) {
+            return; // Historical record - do not open
+          }
+        } catch (e) {}
+      }
+
+      setDispositionCallData(data);
+      setShowDispositionModal(true);
     };
 
     window.addEventListener('crm-incoming-call', handleIncomingCallEvent);
