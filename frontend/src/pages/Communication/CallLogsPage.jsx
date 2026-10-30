@@ -324,22 +324,43 @@ const CallLogsPage = () => {
 
   const fastPollTimerRef = useRef(null);
   const fastPollCountRef = useRef(0);
+  const latestCallLogsRequestIdRef = useRef(0);
+  const isCallLogsInitialMount = useRef(true);
+  const callLogsFiltersRef = useRef({});
+
+  // Always keep callLogsFiltersRef synced with latest state so polling and intervals preserve active filters
+  callLogsFiltersRef.current = {
+    statusFilter,
+    directionFilter,
+    employeeFilter,
+    providerFilter,
+    search,
+    currentPage,
+    pageSize
+  };
 
   const fetchCallLogs = async (silent = false) => {
+    const reqId = ++latestCallLogsRequestIdRef.current;
     try {
       if (!silent) setLoading(true);
+      const cur = callLogsFiltersRef.current || {};
       const params = {
-        page: currentPage,
-        limit: pageSize,
+        page: cur.currentPage || 1,
+        limit: cur.pageSize || 25,
         _t: Date.now()
       };
-      if (statusFilter) params.call_status = statusFilter;
-      if (directionFilter) params.direction = directionFilter;
-      if (employeeFilter) params.employee_id = employeeFilter;
-      if (providerFilter) params.provider = providerFilter;
-      if (search) params.search = search;
+      if (cur.statusFilter) params.call_status = cur.statusFilter;
+      if (cur.directionFilter) params.direction = cur.directionFilter;
+      if (cur.employeeFilter) params.employee_id = cur.employeeFilter;
+      if (cur.providerFilter) params.provider = cur.providerFilter;
+      if (cur.search && cur.search.trim()) params.search = cur.search.trim();
       
       const res = await API.get('/ivr/calls', { params });
+      
+      // Strict stale response guard against out-of-order background polling overwriting newer filter results
+      if (reqId !== latestCallLogsRequestIdRef.current) {
+        return [];
+      }
       const items = res.data?.items || [];
       setCallLogs(items);
       setTotalRecords(res.data?.total ?? items.length);
@@ -348,10 +369,14 @@ const CallLogsPage = () => {
       }
       return items;
     } catch (err) {
-      console.error("Failed to load call logs:", err);
+      if (reqId === latestCallLogsRequestIdRef.current) {
+        console.error("Failed to load call logs:", err);
+      }
       return [];
     } finally {
-      if (!silent) setLoading(false);
+      if (reqId === latestCallLogsRequestIdRef.current) {
+        if (!silent) setLoading(false);
+      }
     }
   };
 
@@ -492,10 +517,13 @@ const CallLogsPage = () => {
   };
 
   const startFastPolling = () => {
-    if (fastPollTimerRef.current) clearInterval(fastPollTimerRef.current);
+    if (fastPollTimerRef.current) {
+      clearInterval(fastPollTimerRef.current);
+      fastPollTimerRef.current = null;
+    }
     fastPollCountRef.current = 0;
 
-    // Immediately fetch once
+    // Immediately fetch once using active filters from ref
     fetchCallLogs(true);
 
     fastPollTimerRef.current = setInterval(async () => {
@@ -533,8 +561,9 @@ const CallLogsPage = () => {
     const params = new URLSearchParams(location.search);
     const urlStatus = params.get('status') || params.get('call_status');
     const urlEmp = params.get('employee_id');
-    if (urlStatus !== null) setStatusFilter(urlStatus);
-    if (urlEmp !== null) setEmployeeFilter(urlEmp);
+    if (urlStatus !== null && urlStatus !== '') setStatusFilter(urlStatus);
+    if (urlEmp !== null && urlEmp !== '') setEmployeeFilter(urlEmp);
+    isCallLogsInitialMount.current = false;
   }, [location.search]);
 
   useEffect(() => {

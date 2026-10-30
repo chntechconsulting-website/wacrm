@@ -118,11 +118,9 @@ const SalesTargetsPage = () => {
     };
 
     window.addEventListener('revenueUpdated', handleRevenueUpdate);
-    window.addEventListener('leadStatsUpdated', handleRevenueUpdate);
 
     return () => {
       window.removeEventListener('revenueUpdated', handleRevenueUpdate);
-      window.removeEventListener('leadStatsUpdated', handleRevenueUpdate);
     };
   }, [selectedYear, selectedMonth, selectedPeriodType, selectedDepartment, selectedEmployeeId]);
 

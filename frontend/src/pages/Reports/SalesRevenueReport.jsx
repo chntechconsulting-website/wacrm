@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import API from '../../services/api';
 import PingoPopupService from '../../services/pingoPopupService';
@@ -30,50 +30,84 @@ const SalesRevenueReport = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
+  const latestRevenueRequestIdRef = useRef(0);
+  const revenueFiltersRef = useRef({});
+
+  // Synchronize ref on every render so background updates preserve active filters
+  revenueFiltersRef.current = {
+    selectedTeam,
+    selectedSalesperson,
+    startDate,
+    endDate
+  };
+
+  const hasActiveRevenueFilters = Boolean(
+    (selectedTeam && selectedTeam !== 'All Teams') ||
+    (selectedSalesperson && selectedSalesperson !== 0) ||
+    startDate ||
+    endDate
+  );
+
+  const handleClearAllRevenueFilters = () => {
+    setSelectedTeam('All Teams');
+    setSelectedSalesperson(0);
+    setStartDate('');
+    setEndDate('');
+  };
+
   // Edit Won Deal Modal
   const [editingDeal, setEditingDeal] = useState(null);
   const [editAmount, setEditAmount] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
 
-  const fetchRevenue = async () => {
+  const fetchRevenue = async (silent = false) => {
+    const reqId = ++latestRevenueRequestIdRef.current;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
+      const cur = revenueFiltersRef.current || {};
       const params = {};
-      if (selectedTeam && selectedTeam !== 'All Teams') params.team = selectedTeam;
-      if (selectedSalesperson && selectedSalesperson !== 0) params.salesperson_id = selectedSalesperson;
-      if (startDate && endDate) {
-        params.start_date = startDate;
-        params.end_date = endDate;
+      if (cur.selectedTeam && cur.selectedTeam !== 'All Teams') params.team = cur.selectedTeam;
+      if (cur.selectedSalesperson && cur.selectedSalesperson !== 0) params.salesperson_id = cur.selectedSalesperson;
+      if (cur.startDate && cur.endDate) {
+        params.start_date = cur.startDate;
+        params.end_date = cur.endDate;
       }
 
       const res = await API.get('/reports/sales-revenue', { params });
+
+      // Guard against stale out-of-order responses overwriting newer filter data
+      if (reqId !== latestRevenueRequestIdRef.current) {
+        return;
+      }
       if (res.data) {
         setData(res.data);
       }
     } catch (err) {
-      console.error('Failed to load sales revenue report', err);
+      if (reqId === latestRevenueRequestIdRef.current) {
+        console.error('Failed to load sales revenue report', err);
+      }
     } finally {
-      setLoading(false);
+      if (reqId === latestRevenueRequestIdRef.current) {
+        if (!silent) setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchRevenue();
+    fetchRevenue(false);
 
     // Auto-update listeners for real-time reactivity without manual refresh
     const handleRevenueUpdate = () => {
-      fetchRevenue();
+      fetchRevenue(true);
     };
 
     window.addEventListener('revenueUpdated', handleRevenueUpdate);
-    window.addEventListener('leadStatsUpdated', handleRevenueUpdate);
 
     return () => {
       window.removeEventListener('revenueUpdated', handleRevenueUpdate);
-      window.removeEventListener('leadStatsUpdated', handleRevenueUpdate);
     };
-  }, [startDate, endDate]);
+  }, []);
 
   const handleApply = () => {
     fetchRevenue();
@@ -643,6 +677,31 @@ const SalesRevenueReport = () => {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Apply
           </button>
+
+          {hasActiveRevenueFilters && (
+            <button
+              type="button"
+              className="btn-clear-filters"
+              onClick={handleClearAllRevenueFilters}
+              disabled={loading}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                backgroundColor: '#f1f5f9',
+                color: '#475569',
+                fontSize: '0.84rem',
+                fontWeight: '700',
+                cursor: 'pointer'
+              }}
+              title="Reset all active filters"
+            >
+              <X size={14} /> Clear
+            </button>
+          )}
         </div>
       </div>
 

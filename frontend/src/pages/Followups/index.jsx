@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -44,6 +44,25 @@ const Followups = () => {
   const [priorityFilter, setPriorityFilter] = useState(queryParams.get('priority') || queryParams.get('priority_filter') || '');
   const [search, setSearch] = useState('');
 
+  const latestFollowupRequestIdRef = useRef(0);
+  const isFollowupInitialMount = useRef(true);
+  const followupFiltersRef = useRef({});
+
+  // Synchronize ref on every render so intervals and callbacks always read active filters
+  followupFiltersRef.current = {
+    statusFilter,
+    priorityFilter,
+    search
+  };
+
+  const hasActiveFollowupFilters = Boolean(statusFilter || priorityFilter || search);
+
+  const handleClearAllFollowupFilters = () => {
+    setStatusFilter('');
+    setPriorityFilter('');
+    setSearch('');
+  };
+
   // Alerts
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -65,21 +84,32 @@ const Followups = () => {
     status: 'Pending'
   });
 
-  const fetchFollowups = async () => {
+  const fetchFollowups = async (silent = false) => {
+    const reqId = ++latestFollowupRequestIdRef.current;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
+      const cur = followupFiltersRef.current || {};
       const params = {};
-      if (statusFilter) params.status_filter = statusFilter;
-      if (priorityFilter) params.priority_filter = priorityFilter;
+      if (cur.statusFilter) params.status_filter = cur.statusFilter;
+      if (cur.priorityFilter) params.priority_filter = cur.priorityFilter;
 
       const res = await API.get('/followups/', { params });
-      setFollowups(res.data);
-      window.dispatchEvent(new Event('leadStatsUpdated'));
+
+      // Guard against stale out-of-order responses overwriting newer filter data
+      if (reqId !== latestFollowupRequestIdRef.current) {
+        return;
+      }
+      setFollowups(res.data || []);
+      // Note: do not dispatch leadStatsUpdated here to prevent recursive auto-reset loops
     } catch (err) {
-      console.error(err);
-      setError('Failed to fetch follow-ups list.');
+      if (reqId === latestFollowupRequestIdRef.current) {
+        console.error(err);
+        if (!silent) setError('Failed to fetch follow-ups list.');
+      }
     } finally {
-      setLoading(false);
+      if (reqId === latestFollowupRequestIdRef.current) {
+        if (!silent) setLoading(false);
+      }
     }
   };
 
@@ -101,28 +131,32 @@ const Followups = () => {
     const params = new URLSearchParams(location.search);
     const urlStatus = params.get('status') || params.get('status_filter');
     const urlPriority = params.get('priority') || params.get('priority_filter');
-    if (urlStatus !== null) setStatusFilter(urlStatus);
-    if (urlPriority !== null) setPriorityFilter(urlPriority);
+    if (urlStatus !== null && urlStatus !== '') setStatusFilter(urlStatus);
+    if (urlPriority !== null && urlPriority !== '') setPriorityFilter(urlPriority);
+    isFollowupInitialMount.current = false;
   }, [location.search]);
 
+  // Fetch when filters change
   useEffect(() => {
-    fetchFollowups();
+    fetchFollowups(false);
+  }, [statusFilter, priorityFilter]);
+
+  // Global listeners (without recursive leadStatsUpdated loop)
+  useEffect(() => {
     fetchDropdownData();
 
     const handleAutoRefresh = () => {
-      fetchFollowups();
+      fetchFollowups(true);
     };
 
     window.addEventListener('followupReminderRefresh', handleAutoRefresh);
     window.addEventListener('call-disposition-saved', handleAutoRefresh);
-    window.addEventListener('leadStatsUpdated', handleAutoRefresh);
 
     return () => {
       window.removeEventListener('followupReminderRefresh', handleAutoRefresh);
       window.removeEventListener('call-disposition-saved', handleAutoRefresh);
-      window.removeEventListener('leadStatsUpdated', handleAutoRefresh);
     };
-  }, [statusFilter, priorityFilter, currentUser?.id, currentUser?.employee_id]);
+  }, []);
 
   const handleOpenScheduleModal = () => {
     setFormData({
@@ -290,17 +324,38 @@ const Followups = () => {
 
       <div className="content-card">
         <div className="table-toolbar" style={{ flexWrap: 'wrap', gap: '12px' }}>
-          <div className="search-box">
+          <div className="search-box" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <Search size={18} className="search-icon" />
             <input 
               type="text" 
               placeholder="Search follow-ups by lead name, phone, notes..." 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingRight: search ? '30px' : undefined }}
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#94a3b8',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center'
+                }}
+                title="Clear search"
+              >
+                <X size={15} />
+              </button>
+            )}
           </div>
 
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <select 
               value={statusFilter} 
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -318,6 +373,30 @@ const Followups = () => {
               <option value="">All Priorities</option>
               {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
+
+            {hasActiveFollowupFilters && (
+              <button
+                type="button"
+                onClick={handleClearAllFollowupFilters}
+                className="btn-clear-filters"
+                title="Reset all active filters"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '7px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e1',
+                  backgroundColor: '#f1f5f9',
+                  color: '#475569',
+                  fontSize: '0.82rem',
+                  fontWeight: '700',
+                  cursor: 'pointer'
+                }}
+              >
+                <X size={14} /> Clear
+              </button>
+            )}
           </div>
         </div>
 

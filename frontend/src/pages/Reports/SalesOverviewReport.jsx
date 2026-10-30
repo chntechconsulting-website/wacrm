@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Handshake,
   XCircle,
+  X,
   Calendar,
   Filter,
   RefreshCw,
@@ -33,6 +34,21 @@ const SalesOverviewReport = () => {
   const [selectedSalesperson, setSelectedSalesperson] = useState(0);
   const [selectedSource, setSelectedSource] = useState('All Lead Sources');
   const [dateRange, setDateRange] = useState('Oct 01, 2026 - Oct 31, 2026');
+
+  const hasActiveFilters = Boolean(
+    (selectedTeam && selectedTeam !== 'All Teams') ||
+    (selectedSalesperson && selectedSalesperson !== 0) ||
+    (selectedSource && selectedSource !== 'All Lead Sources')
+  );
+
+  const handleClearFilters = () => {
+    setSelectedTeam('All Teams');
+    setSelectedSalesperson(0);
+    setSelectedSource('All Lead Sources');
+    API.get('/reports/sales-overview', { params: {} })
+      .then(res => { if (res.data) setData(res.data); })
+      .catch(() => {});
+  };
 
   // Interactive Hover states for Chart
   const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -446,6 +462,31 @@ const SalesOverviewReport = () => {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             Apply
           </button>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              className="btn-clear-filters"
+              onClick={handleClearFilters}
+              disabled={loading}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '8px 14px',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                backgroundColor: '#f1f5f9',
+                color: '#475569',
+                fontSize: '0.84rem',
+                fontWeight: '700',
+                cursor: 'pointer'
+              }}
+              title="Reset all active filters"
+            >
+              <X size={14} /> Clear
+            </button>
+          )}
         </div>
       </div>
 

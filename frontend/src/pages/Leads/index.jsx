@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -115,6 +115,44 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   });
 
   const [reinquiryFilter, setReinquiryFilter] = useState(false);
+  const latestLeadReqIdRef = useRef(0);
+  const isInitialMount = useRef(true);
+  const filtersRef = useRef({});
+
+  // Synchronize ref on every render so intervals and callbacks always read active filters
+  filtersRef.current = {
+    search,
+    statusFilter,
+    sourceFilter,
+    productFilter,
+    assignedToFilter,
+    sortOrder,
+    receivedDateFilter,
+    reinquiryFilter,
+    defaultSource,
+    defaultFilter
+  };
+
+  const hasActiveFilters = Boolean(
+    search ||
+    statusFilter ||
+    (sourceFilter && sourceFilter !== defaultSource) ||
+    productFilter ||
+    assignedToFilter ||
+    receivedDateFilter ||
+    reinquiryFilter
+  );
+
+  const handleClearAllFilters = () => {
+    setSearch('');
+    setStatusFilter('');
+    setSourceFilter(defaultSource || '');
+    setProductFilter('');
+    setAssignedToFilter('');
+    setReceivedDateFilter('');
+    setReinquiryFilter(false);
+    setSortOrder('desc');
+  };
 
   const fetchSourceCounts = async () => {
     try {
@@ -147,7 +185,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
     if (urlStatus !== null) setStatusFilter(urlStatus);
     if (urlSource !== null) setSourceFilter(urlSource);
-    else if (defaultSource) setSourceFilter(defaultSource);
+    else if (isInitialMount.current && defaultSource) setSourceFilter(defaultSource);
+    isInitialMount.current = false;
     if (urlAssigned !== null) setAssignedToFilter(urlAssigned);
   }, [location.search, defaultSource]);
 
@@ -358,36 +397,46 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [noteText, setNoteText] = useState('');
 
   const fetchLeads = async (silent = false) => {
+    const reqId = ++latestLeadReqIdRef.current;
     try {
       if (!silent) setLoading(true);
+      const cur = filtersRef.current || {};
       const params = {};
-      if (search) params.search = search;
-      if (statusFilter) params.status_filter = statusFilter;
+      if (cur.search && cur.search.trim()) params.search = cur.search.trim();
+      if (cur.statusFilter) params.status_filter = cur.statusFilter;
 
-      if (reinquiryFilter) {
+      if (cur.reinquiryFilter) {
         params.is_reinquiry_filter = true;
       }
 
-      const effectiveSource = sourceFilter || defaultSource;
-      if (effectiveSource && !reinquiryFilter) params.source_filter = effectiveSource;
-      if (productFilter) params.product_category_filter = productFilter;
+      const effectiveSource = cur.sourceFilter || cur.defaultSource;
+      if (effectiveSource && !cur.reinquiryFilter) params.source_filter = effectiveSource;
+      if (cur.productFilter) params.product_category_filter = cur.productFilter;
 
-      if (sortOrder) params.sort_order = sortOrder;
-      if (receivedDateFilter) params.date_filter = receivedDateFilter;
-      if (assignedToFilter) params.assigned_to_filter = assignedToFilter;
+      if (cur.sortOrder) params.sort_order = cur.sortOrder;
+      if (cur.receivedDateFilter) params.date_filter = cur.receivedDateFilter;
+      if (cur.assignedToFilter) params.assigned_to_filter = cur.assignedToFilter;
 
-      const endpoint = defaultFilter === 'my-leads' ? '/leads/my' : '/leads/';
+      const endpoint = cur.defaultFilter === 'my-leads' ? '/leads/my' : '/leads/';
       const res = await API.get(endpoint, { params });
-      setLeads(res.data.items);
-      setTotal(res.data.total);
-      window.dispatchEvent(new Event('leadStatsUpdated'));
+
+      // Stale response race-condition guard:
+      if (reqId !== latestLeadReqIdRef.current) {
+        return;
+      }
+      setLeads(res.data.items || []);
+      setTotal(res.data.total ?? (res.data.items || []).length);
     } catch (err) {
-      if (!silent) {
-        console.error(err);
-        setError('Failed to fetch leads list.');
+      if (reqId === latestLeadReqIdRef.current) {
+        if (!silent) {
+          console.error(err);
+          setError('Failed to fetch leads list.');
+        }
       }
     } finally {
-      if (!silent) setLoading(false);
+      if (reqId === latestLeadReqIdRef.current) {
+        if (!silent) setLoading(false);
+      }
     }
   };
 
@@ -407,6 +456,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   }, [search, statusFilter, sourceFilter, productFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
 
   // Real-time automatic lead synchronization: poll quietly every 5 seconds so new Meta leads appear automatically
+  // Uses filtersRef.current so polling ALWAYS preserves the user's active filter values!
   useEffect(() => {
     const syncInterval = setInterval(() => {
       fetchLeads(true);
@@ -414,7 +464,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }, 5000);
 
     return () => clearInterval(syncInterval);
-  }, [search, statusFilter, sourceFilter, productFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+  }, []);
 
   const handleOpenCreateModal = () => {
     setFormData({
@@ -579,18 +629,11 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       }
     };
 
-    const handleStatsUpdated = () => {
-      fetchLeads(true);
-      fetchSourceCounts();
-    };
-
     window.addEventListener('openLeadDrawer', handleCustomOpenDrawer);
     window.addEventListener('call-disposition-saved', handleDispositionSaved);
-    window.addEventListener('leadStatsUpdated', handleStatsUpdated);
     return () => {
       window.removeEventListener('openLeadDrawer', handleCustomOpenDrawer);
       window.removeEventListener('call-disposition-saved', handleDispositionSaved);
-      window.removeEventListener('leadStatsUpdated', handleStatsUpdated);
     };
   }, [location.search, selectedLead]);
 
@@ -1254,14 +1297,35 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
           </button>
         </div>
         <div className="table-toolbar" style={{ flexWrap: 'wrap', gap: '12px' }}>
-          <div className="search-box">
+          <div className="search-box" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <Search size={18} className="search-icon" />
             <input 
               type="text" 
               placeholder="Search leads by name, phone, email, or company..." 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              style={{ paddingRight: search ? '30px' : undefined }}
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#94a3b8',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center'
+                }}
+                title="Clear search"
+              >
+                <X size={15} />
+              </button>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1344,6 +1408,31 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 </button>
               )}
             </div>
+
+            {/* Clear All Active Filters */}
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleClearAllFilters}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '7px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e1',
+                  backgroundColor: '#f1f5f9',
+                  color: '#475569',
+                  fontSize: '0.82rem',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Reset all active filters"
+              >
+                <X size={14} /> Clear
+              </button>
+            )}
           </div>
         </div>
 
