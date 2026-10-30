@@ -1,9 +1,13 @@
 from typing import Dict, Any, List, Optional
+import logging
+
 from sqlalchemy.orm import Session
 from models.role import Role, RolePermission
 from models.user import User
 from models.employee import Employee
 from services.permission_catalog import SYSTEM_MODULES, MODULE_KEYS
+
+logger = logging.getLogger(__name__)
 
 def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     """
@@ -412,6 +416,30 @@ def seed_default_roles_if_needed(db: Session):
                 p.can_edit = True
                 p.view_scope = "team" if "MANAGER" in role_obj.name.upper() else "own"
     db.commit()
+
+    # 2b. Grant bulk lead import to Sales Executives.
+    # Bulk import uses the same `leads:create` permission as single lead creation.
+    # Older or partially configured permission matrices can have that flag off,
+    # which made the Import Leads tab fail with
+    # "Forbidden: Operation not permitted for role: SALES_EXECUTIVE".
+    se_role = existing_roles_map.get("SALES_EXECUTIVE")
+    if se_role:
+        se_leads = next(
+            (p for p in se_role.permissions if (p.module or "").strip().lower() == "leads"),
+            None,
+        )
+        if se_leads:
+            repaired_fields = []
+            for field in ("has_access", "can_view", "can_create"):
+                if not getattr(se_leads, field):
+                    setattr(se_leads, field, True)
+                    repaired_fields.append(field)
+            if repaired_fields:
+                db.commit()
+                logger.info(
+                    "[Permissions] Enabled leads import for SALES_EXECUTIVE (%s).",
+                    ", ".join(repaired_fields),
+                )
 
     # 3. Seed Support Manager user 'Kumar' if not existing
     try:
