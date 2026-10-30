@@ -13,18 +13,23 @@ def generate_excel_template() -> io.BytesIO:
     ws.title = "Lead Import Template"
 
     headers = [
-        "Name",
+        "First Name",
+        "Last Name",
         "Phone",
         "WhatsApp Number",
         "Email",
         "Company",
         "Designation",
         "Industry",
-        "City",
+        "Website",
+        "Company Size",
+        "Country",
         "State",
-        "Campaign Name",
+        "City",
+        "Source",
         "Status",
         "Priority",
+        "Campaign Name",
         "Requirement Notes",
         "Assigned To"
     ]
@@ -44,18 +49,23 @@ def generate_excel_template() -> io.BytesIO:
 
     # Add realistic sample row
     sample_row = [
-        "John Doe",
+        "John",
+        "Doe",
         "+91 9876543210",
         "+91 9876543210",
         "john@example.com",
         "Acme Inc",
         "Operations Manager",
         "Manufacturing",
+        "https://acme.example.com",
+        "50-200",
+        "India",
         "Delhi",
         "Delhi",
-        "Summer Campaign",
+        "EXCEL",
         "NEW",
         "HIGH",
+        "Summer Campaign",
         "Interested in 50 user licenses demo",
         "System Administrator"
     ]
@@ -99,19 +109,27 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
     # Extract headers
     raw_headers = [str(cell).strip() if cell is not None else "" for cell in rows[0]]
     
-    # Map header indices flexibly
+    # Map header indices flexibly. Most-specific headers are matched first so
+    # "Company Size" is not captured by "Company" and "First Name"/"Last Name"
+    # are not captured by the generic "Name" column.
     col_indices = {
+        "first_name": -1,
+        "last_name": -1,
         "name": -1,
         "phone": -1,
         "whatsapp_number": -1,
         "email": -1,
         "company": -1,
+        "company_size": -1,
         "designation": -1,
         "industry": -1,
+        "website": -1,
         "city": -1,
         "state": -1,
+        "country": -1,
         "location": -1,
         "campaign_name": -1,
+        "source": -1,
         "status": -1,
         "priority": -1,
         "requirement_notes": -1,
@@ -119,28 +137,46 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
     }
 
     for idx, raw_h in enumerate(raw_headers):
-        h = raw_h.lower().replace("*", "").strip()
-        if "whatsapp" in h or "wa" in h:
+        h = raw_h.lower().replace("*", "").replace("_", " ").strip()
+        h = " ".join(h.split())
+        if not h:
+            continue
+        if "whatsapp" in h or h in ("wa", "wa number", "wa no", "wa.no"):
             col_indices["whatsapp_number"] = idx
-        elif ("phone" in h or "mobile" in h or "contact" in h) and col_indices["phone"] == -1:
-            col_indices["phone"] = idx
-        elif "email" in h:
+        elif "email" in h or "e-mail" in h:
             col_indices["email"] = idx
-        elif ("company" in h or "organization" in h or "org" in h) and "campaign" not in h:
-            col_indices["company"] = idx
+        elif ("company size" in h or "companysize" in h or "employee count" in h
+              or "no of employees" in h or "number of employees" in h):
+            col_indices["company_size"] = idx
+        elif "first" in h and "name" in h:
+            col_indices["first_name"] = idx
+        elif "last" in h and "name" in h:
+            col_indices["last_name"] = idx
+        elif "phone" in h or "mobile" in h or "contact" in h:
+            if col_indices["phone"] == -1:
+                col_indices["phone"] = idx
+        elif "company" in h or "organization" in h or "org" in h:
+            if col_indices["company"] == -1:
+                col_indices["company"] = idx
         elif "designation" in h or "job" in h or "title" in h or "role" in h:
             col_indices["designation"] = idx
         elif "industry" in h or "sector" in h:
             col_indices["industry"] = idx
+        elif "website" in h or "web site" in h or "url" in h:
+            col_indices["website"] = idx
+        elif "country" in h:
+            col_indices["country"] = idx
         elif "city" in h:
             col_indices["city"] = idx
-        elif "state" in h:
+        elif "state" in h or "province" in h:
             col_indices["state"] = idx
-        elif "location" in h:
+        elif "location" in h or "address" in h:
             col_indices["location"] = idx
         elif "campaign" in h:
             col_indices["campaign_name"] = idx
-        elif "status" in h:
+        elif "source" in h or "channel" in h:
+            col_indices["source"] = idx
+        elif "status" in h or "stage" in h:
             col_indices["status"] = idx
         elif "priority" in h or "rating" in h:
             col_indices["priority"] = idx
@@ -178,10 +214,20 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
     duplicate_count = 0
     invalid_count = 0
 
+    def _to_text(value):
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            # Excel stores whole numbers (phone numbers, ids) as floats.
+            return str(int(value)) if value.is_integer() else str(value).strip()
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d")
+        return str(value).strip()
+
     def get_val(row, key):
         idx = col_indices.get(key, -1)
-        if idx != -1 and idx < len(row) and row[idx] is not None:
-            v = str(row[idx]).strip()
+        if idx != -1 and idx < len(row):
+            v = _to_text(row[idx])
             return v if v.lower() != "none" else ""
         return ""
 
@@ -191,17 +237,23 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
 
         total_count += 1
 
+        first_name = get_val(row, "first_name")
+        last_name = get_val(row, "last_name")
         name = get_val(row, "name")
         phone = get_val(row, "phone")
         whatsapp_number = get_val(row, "whatsapp_number") or phone
         email = get_val(row, "email").lower()
         company = get_val(row, "company")
+        company_size = get_val(row, "company_size")
         designation = get_val(row, "designation")
         industry = get_val(row, "industry")
+        website = get_val(row, "website")
         city = get_val(row, "city")
         state = get_val(row, "state")
+        country = get_val(row, "country")
         location = get_val(row, "location")
         campaign_name = get_val(row, "campaign_name")
+        source_raw = get_val(row, "source")
         status_raw = get_val(row, "status")
         priority_raw = get_val(row, "priority").upper()
         requirement_notes = get_val(row, "requirement_notes")
@@ -219,13 +271,21 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
             })
             continue
 
-        # Automatic fallback for Name: use Company name if Name is not specified
+        # Automatic fallback for Name: use First/Last Name, then Company, then Phone
+        raw_name = name
+        if not name:
+            name = f"{first_name} {last_name}".strip()
         if not name:
             if company:
                 name = company
             else:
                 clean_p = phone.replace(" ", "").replace("+91", "")
                 name = f"Lead {clean_p[-5:] if len(clean_p) >= 5 else clean_p}"
+        # Older files only had a single Name column; derive the parts for the form.
+        if raw_name and not first_name and not last_name:
+            parts = raw_name.split(None, 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ""
 
         # Fallback location from city/state
         if not location and (city or state):
@@ -279,16 +339,27 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
         seen_file_phones.add(phone)
         if email: seen_file_emails.add(email)
 
+        # Lead source: keep an explicit value from the sheet, else mark as EXCEL.
+        source_value = (source_raw or "EXCEL").strip().upper() or "EXCEL"
+        if source_value in ["META ADS", "META_ADS"]:
+            source_value = "META"
+        source_value = source_value[:50]
+
         imported_leads.append({
+            "first_name": first_name if first_name else None,
+            "last_name": last_name if last_name else None,
             "name": name,
             "phone": phone,
             "whatsapp_number": whatsapp_number if whatsapp_number else None,
             "email": email if email else None,
             "company": company if company else None,
+            "company_size": company_size if company_size else None,
             "designation": designation if designation else None,
             "industry": industry if industry else None,
+            "website": website if website else None,
             "city": city if city else None,
             "state": state if state else None,
+            "country": country if country else "India",
             "location": location if location else None,
             "campaign_name": campaign_name if campaign_name else None,
             "status": status,
@@ -296,7 +367,7 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
             "rating": rating,
             "requirement_notes": requirement_notes if requirement_notes else None,
             "assigned_to": assigned_to_id,
-            "source": "EXCEL"
+            "source": source_value
         })
 
     return {

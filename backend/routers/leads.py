@@ -565,7 +565,9 @@ async def import_leads_excel(
     reinquiry_count = 0
     now = get_ist_now()
     for lead_data in valid_leads:
-        lead_data["source"] = "EXCEL"
+        # The parser defaults the source to EXCEL; an explicit Source column is kept.
+        if not lead_data.get("source"):
+            lead_data["source"] = "EXCEL"
         # Users without assignment rights may only import leads for themselves.
         # This keeps a sales executive from using the importer to assign leads to
         # arbitrary employees (their view scope is "own" anyway).
