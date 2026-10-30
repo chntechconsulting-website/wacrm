@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -30,6 +31,46 @@ from integrations.ivr.schemas import (
 from integrations.ivr.webhook import handle_incoming_ivr_webhook
 
 router = APIRouter(prefix="/ivr", tags=["IVR Telephony Integration"])
+
+# Throttle expensive Oracle-storage lookups triggered from list responses.
+# { call_id: (last_attempt_epoch, resolved_url_or_None) }
+_RECORDING_LOOKUP_CACHE: Dict[int, tuple] = {}
+_RECORDING_LOOKUP_RETRY_SECONDS = 30
+_RECENT_CALL_MATCH_WINDOW_SECONDS = 30 * 60
+
+
+def _should_attempt_recording_lookup(call: CallLog) -> bool:
+    """
+    Auto-matching hits Oracle Cloud storage over the network. Doing it for every
+    completed call on every list request made /ivr/calls take many seconds, which
+    in turn made call logs take several refreshes to show up. Only attempt it for
+    calls that just ended, and at most once every 30 seconds per call.
+    """
+    now = time.time()
+    cache_key = call.id
+    cached = _RECORDING_LOOKUP_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _RECORDING_LOOKUP_RETRY_SECONDS:
+        return False
+
+    end_time = call.ended_at
+    if not end_time:
+        return False
+    try:
+        if not (0 <= (get_ist_now() - end_time).total_seconds() <= _RECENT_CALL_MATCH_WINDOW_SECONDS):
+            return False
+    except Exception:
+        return False
+
+    # Opportunistically drop stale cache entries to keep the dict bounded.
+    if len(_RECORDING_LOOKUP_CACHE) > 2000:
+        cutoff = now - _RECORDING_LOOKUP_RETRY_SECONDS * 4
+        for key in [k for k, v in _RECORDING_LOOKUP_CACHE.items() if v[0] < cutoff]:
+            _RECORDING_LOOKUP_CACHE.pop(key, None)
+
+    # Claim the slot before the (slow) network call so concurrent requests skip it.
+    _RECORDING_LOOKUP_CACHE[cache_key] = (now, None)
+    return True
+
 
 class CallStatusUpdateRequest(BaseModel):
     call_status: str  # Initiating, Ringing, Connected, Completed, Missed, Busy, Failed
@@ -112,17 +153,6 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     resolved_rec = resolve_recording_url(call.recording_url, db)
     status_upper = (call.call_status or "").upper()
     duration = call.duration_seconds or 0
-
-    # Fallback to automated Oracle Cloud Storage recording matcher if recording_url is missing
-    if not resolved_rec and (duration > 0 or status_upper in ["ANSWERED", "CONNECTED", "COMPLETED"]):
-        from services.doocti_recording_service import DooctiRecordingService
-        try:
-            resolved_rec = DooctiRecordingService.match_recording_for_call(call, db, auto_save=True)
-        except Exception:
-            pass
-
-    raw_rec = str(call.recording_url or "").strip()
-    is_loopback = "127.0.0.1" in raw_rec or "localhost" in raw_rec
     is_connected = status_upper in ["ANSWERED", "CONNECTED", "COMPLETED"]
 
     now_ist = get_ist_now()
@@ -134,6 +164,23 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
             is_recent = 0 <= diff <= 300  # within 5 minutes of call completion
         except Exception:
             pass
+
+    # Fallback to automated Oracle Cloud Storage recording matcher if recording_url is missing.
+    # Only for recently ended calls and throttled per call so listing stays fast.
+    if (
+        not resolved_rec
+        and is_connected
+        and is_recent
+        and _should_attempt_recording_lookup(call)
+    ):
+        from services.doocti_recording_service import DooctiRecordingService
+        try:
+            resolved_rec = DooctiRecordingService.match_recording_for_call(call, db, auto_save=True)
+        except Exception:
+            resolved_rec = None
+
+    raw_rec = str(call.recording_url or "").strip()
+    is_loopback = "127.0.0.1" in raw_rec or "localhost" in raw_rec
 
     if resolved_rec:
         rec_status = "RECORDING_AVAILABLE"

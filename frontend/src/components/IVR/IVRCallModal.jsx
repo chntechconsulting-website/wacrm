@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import API from '../../services/api';
+import { probeAudioDuration, rewindAfterProbe } from '../../utils/audioUtils';
 import { 
   PhoneCall, 
   PhoneOff, 
@@ -545,7 +546,15 @@ const IVRCallModal = ({ lead, customerPhone, isOpen, onClose, onCallStarted, onC
                   <Volume2 size={16} color="#2563eb" />
                   <span>Call Recording Playback</span>
                 </span>
-                <audio controls src={activeCall.recording_url} style={{ width: '100%', height: '36px', borderRadius: '8px' }} />
+                <audio
+                  controls
+                  src={activeCall.recording_url}
+                  preload="metadata"
+                  style={{ width: '100%', height: '36px', borderRadius: '8px' }}
+                  onLoadedMetadata={(e) => probeAudioDuration(e.currentTarget)}
+                  onDurationChange={(e) => rewindAfterProbe(e.currentTarget)}
+                  onTimeUpdate={(e) => rewindAfterProbe(e.currentTarget)}
+                />
               </div>
             )}
 

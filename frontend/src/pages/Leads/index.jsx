@@ -4,6 +4,7 @@ import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import PingoPopupService from '../../services/pingoPopupService';
 import TimePickerSelect from '../../components/Common/TimePickerSelect';
+import { probeAudioDuration, rewindAfterProbe } from '../../utils/audioUtils';
 import { 
   Users, 
   Plus, 
@@ -2552,7 +2553,15 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                             )}
                             {call.recording_url && (
                               <div style={{ marginTop: '8px' }}>
-                                <audio controls src={call.recording_url} style={{ width: '100%', height: '32px' }} />
+                                <audio
+                                  controls
+                                  preload="metadata"
+                                  src={call.recording_url}
+                                  style={{ width: '100%', height: '32px' }}
+                                  onLoadedMetadata={(e) => probeAudioDuration(e.currentTarget)}
+                                  onDurationChange={(e) => rewindAfterProbe(e.currentTarget)}
+                                  onTimeUpdate={(e) => rewindAfterProbe(e.currentTarget)}
+                                />
                               </div>
                             )}
                           </div>

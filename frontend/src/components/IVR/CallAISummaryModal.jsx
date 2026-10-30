@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import API from '../../services/api';
+import { probeAudioDuration, rewindAfterProbe } from '../../utils/audioUtils';
 import { 
   X, 
   Sparkles, 
@@ -194,7 +195,11 @@ const CallAISummaryModal = ({ isOpen, onClose, callLog, onSummaryGenerated }) =>
                 <audio 
                   controls 
                   src={currentCall.recording_url} 
-                  className="ai-native-audio" 
+                  className="ai-native-audio"
+                  preload="metadata"
+                  onLoadedMetadata={(e) => probeAudioDuration(e.currentTarget)}
+                  onDurationChange={(e) => rewindAfterProbe(e.currentTarget)}
+                  onTimeUpdate={(e) => rewindAfterProbe(e.currentTarget)}
                 />
               </div>
             </div>

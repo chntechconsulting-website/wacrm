@@ -27,10 +27,11 @@ import {
   Volume2
 } from 'lucide-react';
 import { formatLocalDateTime } from '../../utils/dateUtils';
+import { isUsableDuration, probeAudioDuration, rewindAfterProbe } from '../../utils/audioUtils';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import './CallLogsPage.css';
 
-const AudioRecordingPlayer = ({ src, logId }) => {
+const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -38,6 +39,8 @@ const AudioRecordingPlayer = ({ src, logId }) => {
   const [isFailed, setIsFailed] = useState(false);
 
   const audioRef = useRef(null);
+  const probedDurationRef = useRef(false);
+  const probePendingRef = useRef(false);
 
   // Reset audio state when src changes
   useEffect(() => {
@@ -46,6 +49,8 @@ const AudioRecordingPlayer = ({ src, logId }) => {
     setIsReady(false);
     setIsFailed(false);
     setAudioDuration(0);
+    probedDurationRef.current = false;
+    probePendingRef.current = false;
 
     if (audioRef.current) {
       audioRef.current.load();
@@ -53,31 +58,70 @@ const AudioRecordingPlayer = ({ src, logId }) => {
   }, [src]);
 
   const formatAudioTime = (seconds) => {
-    if (!seconds || isNaN(seconds) || seconds <= 0) return '0:00';
+    if (!isUsableDuration(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
+  const applyDuration = (dur) => {
+    if (!isUsableDuration(dur)) return false;
+    setAudioDuration(dur);
+    setIsReady(true);
+    setIsFailed(false);
+    return true;
+  };
+
+  // Asterisk/Docti MP3s have no Xing header -> browsers report Infinity/NaN.
+  // Force a scan to the end so the real duration is exposed (see audioUtils).
+  const maybeProbeDuration = () => {
+    const el = audioRef.current;
+    if (!el || probedDurationRef.current) return;
+    probedDurationRef.current = true;
+    probePendingRef.current = true;
+    probeAudioDuration(el);
+  };
+
+  // Once the probe finishes, rewind to the start and use the real duration.
+  const finishProbeIfPossible = () => {
+    const el = audioRef.current;
+    if (!el || !probePendingRef.current) return false;
+    if (!isUsableDuration(el.duration)) return false;
+    probePendingRef.current = false;
+    applyDuration(el.duration);
+    try {
+      el.currentTime = 0;
+    } catch {
+      /* ignore */
+    }
+    setCurrentTime(0);
+    return true;
+  };
+
   const handleLoadedMetadata = () => {
-    if (audioRef.current) {
-      const dur = audioRef.current.duration;
-      if (dur && !isNaN(dur) && isFinite(dur) && dur > 0) {
-        setAudioDuration(dur);
-        setIsReady(true);
-        setIsFailed(false);
-      }
+    if (!audioRef.current) return;
+    setIsReady(true);
+    if (!applyDuration(audioRef.current.duration)) {
+      maybeProbeDuration();
+    }
+  };
+
+  const handleDurationChange = () => {
+    if (!audioRef.current) return;
+    if (finishProbeIfPossible()) return;
+    if (!applyDuration(audioRef.current.duration)) {
+      maybeProbeDuration();
     }
   };
 
   const handleCanPlay = () => {
-    if (audioRef.current) {
-      const dur = audioRef.current.duration;
-      if (dur && !isNaN(dur) && isFinite(dur) && dur > 0) {
-        setAudioDuration(dur);
-      }
-      setIsReady(true);
-      setIsFailed(false);
+    if (!audioRef.current) return;
+    setIsReady(true);
+    setIsFailed(false);
+    if (applyDuration(audioRef.current.duration)) {
+      finishProbeIfPossible();
+    } else {
+      maybeProbeDuration();
     }
   };
 
@@ -93,7 +137,16 @@ const AudioRecordingPlayer = ({ src, logId }) => {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().then(() => {
+      const el = audioRef.current;
+      // If the duration probe left the cursor at the end, rewind first.
+      rewindAfterProbe(el);
+      // Cancel any in-flight probe so it cannot jump back to 0 mid-playback.
+      probePendingRef.current = false;
+      if (el.dataset) delete el.dataset.durationProbe;
+      if (el.currentTime > 1e6) {
+        el.currentTime = 0;
+      }
+      el.play().then(() => {
         setIsPlaying(true);
       }).catch(err => {
         console.warn("Audio playback error:", err);
@@ -102,9 +155,13 @@ const AudioRecordingPlayer = ({ src, logId }) => {
   };
 
   const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
-    }
+    const el = audioRef.current;
+    if (!el) return;
+    // The duration probe temporarily seeks past the end; rewind as soon as the
+    // browser finishes scanning and reports the real duration.
+    rewindAfterProbe(el);
+    if (finishProbeIfPossible()) return;
+    setCurrentTime(el.currentTime);
   };
 
   const handleSeek = (e) => {
@@ -114,6 +171,12 @@ const AudioRecordingPlayer = ({ src, logId }) => {
       setCurrentTime(val);
     }
   };
+
+  // Until the browser reports a duration, fall back to the call's billed
+  // duration so the slider and label remain usable.
+  const effectiveDuration = isUsableDuration(audioDuration)
+    ? audioDuration
+    : (isUsableDuration(Number(fallbackDuration)) ? Number(fallbackDuration) : 0);
 
   if (!src || isFailed) {
     return <span className="no-recording-text">No recording available</span>;
@@ -126,6 +189,7 @@ const AudioRecordingPlayer = ({ src, logId }) => {
         src={src}
         preload="metadata"
         onLoadedMetadata={handleLoadedMetadata}
+        onDurationChange={handleDurationChange}
         onCanPlay={handleCanPlay}
         onTimeUpdate={handleTimeUpdate}
         onEnded={() => {
@@ -150,19 +214,19 @@ const AudioRecordingPlayer = ({ src, logId }) => {
             <input
               type="range"
               min="0"
-              max={audioDuration || 100}
+              max={effectiveDuration || 100}
               step="0.1"
-              value={currentTime}
+              value={Math.min(currentTime, effectiveDuration || 100)}
               onChange={handleSeek}
               className="audio-seek-slider"
               style={{
-                background: `linear-gradient(to right, #2563eb ${audioDuration > 0 ? Math.min(100, Math.max(0, (currentTime / audioDuration) * 100)) : 0}%, #e2e8f0 ${audioDuration > 0 ? Math.min(100, Math.max(0, (currentTime / audioDuration) * 100)) : 0}%)`
+                background: `linear-gradient(to right, #2563eb ${effectiveDuration > 0 ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100)) : 0}%, #e2e8f0 ${effectiveDuration > 0 ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100)) : 0}%)`
               }}
             />
           </div>
 
           <span className="audio-duration-text">
-            {formatAudioTime(currentTime)} / {formatAudioTime(audioDuration)}
+            {formatAudioTime(currentTime)} / {formatAudioTime(effectiveDuration)}
           </span>
         </div>
       ) : (
@@ -325,6 +389,7 @@ const CallLogsPage = () => {
   const fastPollTimerRef = useRef(null);
   const fastPollCountRef = useRef(0);
   const latestCallLogsRequestIdRef = useRef(0);
+  const callLogsInFlightCountRef = useRef(0);
   const isCallLogsInitialMount = useRef(true);
   const callLogsFiltersRef = useRef({});
 
@@ -340,6 +405,13 @@ const CallLogsPage = () => {
   };
 
   const fetchCallLogs = async (silent = false) => {
+    // Never stack background polls on top of each other. A slow /ivr/calls
+    // request used to be superseded every 4s, so its response was always
+    // discarded and the new call log never appeared until a manual refresh.
+    if (silent && callLogsInFlightCountRef.current > 0) {
+      return null;
+    }
+    callLogsInFlightCountRef.current += 1;
     const reqId = ++latestCallLogsRequestIdRef.current;
     try {
       if (!silent) setLoading(true);
@@ -374,6 +446,7 @@ const CallLogsPage = () => {
       }
       return [];
     } finally {
+      callLogsInFlightCountRef.current = Math.max(0, callLogsInFlightCountRef.current - 1);
       if (reqId === latestCallLogsRequestIdRef.current) {
         if (!silent) setLoading(false);
       }
@@ -530,11 +603,14 @@ const CallLogsPage = () => {
       fastPollCountRef.current += 1;
       const logs = await fetchCallLogs(true);
 
+      // Request skipped because another fetch is still in flight - keep polling.
+      if (!logs) return;
+
       // Check if there are any recent calls still waiting for recordings
-      const hasPendingCalls = (logs || []).some(log => {
+      const hasPendingCalls = logs.some(log => {
         const isRecRecent = log.started_at || log.created_at;
         const diffMs = isRecRecent ? (Date.now() - new Date(isRecRecent).getTime()) : 0;
-        const isRecent = diffMs < 180000; // within last 3 minutes
+        const isRecent = diffMs < 600000; // within last 10 minutes
         const recStatus = String(log.recording_status || '').toUpperCase();
         const callStatus = String(log.call_status || '').toUpperCase();
         const isProcessing = recStatus.includes('PROCESSING');
@@ -542,8 +618,9 @@ const CallLogsPage = () => {
         return isRecent && (isProcessing || (!log.recording_url && isConnected));
       });
 
-      // Stop fast polling once all recent calls have resolved or after 60s (30 ticks)
-      if (!hasPendingCalls || fastPollCountRef.current >= 30) {
+      // Keep polling for at least ~20s even if the row has not been created yet,
+      // then stop once all recent calls have resolved (max 3 minutes).
+      if ((fastPollCountRef.current >= 10 && !hasPendingCalls) || fastPollCountRef.current >= 90) {
         if (fastPollTimerRef.current) {
           clearInterval(fastPollTimerRef.current);
           fastPollTimerRef.current = null;
@@ -580,6 +657,8 @@ const CallLogsPage = () => {
 
     // Continuous auto-polling every 4 seconds as a background fallback
     const timer = setInterval(() => {
+      // Fast polling already refreshes every 2s right after a call ends.
+      if (fastPollTimerRef.current) return;
       fetchCallLogs(true);
     }, 4000);
 
@@ -1106,7 +1185,14 @@ const CallLogsPage = () => {
                           const isProcessing = recStatus.includes('PROCESSING');
                           
                           if (log.recording_url) {
-                            return <AudioRecordingPlayer key={log.id} src={log.recording_url} logId={log.id} />;
+                            return (
+                              <AudioRecordingPlayer
+                                key={log.id}
+                                src={log.recording_url}
+                                logId={log.id}
+                                fallbackDuration={log.duration_seconds}
+                              />
+                            );
                           }
                           if (isProcessing) {
                             return (

@@ -21,7 +21,11 @@ DEFAULT_RECORDING_BASE_URL = (
 
 # In-memory bucket listing cache: { "date_str": (timestamp, [recordings]) }
 _BUCKET_LISTING_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-CACHE_TTL_SECONDS = 60.0  # 1-minute TTL for fast consecutive lookups
+CACHE_TTL_SECONDS = 30.0  # short TTL so freshly uploaded recordings are picked up quickly
+
+# In-memory URL existence cache: { "url": (timestamp, exists) }
+_URL_EXISTS_CACHE: Dict[str, Tuple[float, bool]] = {}
+URL_EXISTS_TTL_SECONDS = 45.0
 
 
 class DooctiRecordingService:
@@ -147,6 +151,39 @@ class DooctiRecordingService:
         return recordings
 
     @classmethod
+    def url_exists(cls, url: str, min_size: int = 500) -> bool:
+        """
+        Verifies that a recording object actually exists (and is not an empty stub)
+        before we persist it on a CallLog. Prevents dead "0:00 / 0:00" players.
+        """
+        now = time.time()
+        cached = _URL_EXISTS_CACHE.get(url)
+        if cached and (now - cached[0]) < URL_EXISTS_TTL_SECONDS:
+            return cached[1]
+
+        exists = False
+        headers = {"User-Agent": "WACRM-RecordingResolver/1.0"}
+        try:
+            req = urllib.request.Request(url, headers=headers, method="HEAD")
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                length = int(resp.headers.get("Content-Length") or 0)
+                exists = 200 <= int(getattr(resp, "status", 200)) < 300 and length >= min_size
+        except Exception:
+            # Some object stores reject HEAD; retry with a 1-byte ranged GET.
+            try:
+                ranged_headers = dict(headers)
+                ranged_headers["Range"] = "bytes=0-0"
+                req = urllib.request.Request(url, headers=ranged_headers)
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                    length = int(resp.headers.get("Content-Range", "").split("/")[-1] or 0)
+                    exists = 200 <= int(getattr(resp, "status", 200)) < 300 and length >= min_size
+            except Exception:
+                exists = False
+
+        _URL_EXISTS_CACHE[url] = (now, exists)
+        return exists
+
+    @classmethod
     def match_recording_for_call(
         cls,
         call: CallLog,
@@ -173,13 +210,16 @@ class DooctiRecordingService:
                 if path.endswith(".wav"):
                     path = path[:-4] + ".mp3"
                 resolved = f"{target_base}{path}"
-                call.recording_url = resolved
-                if auto_save:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                return resolved
+                # Only keep the rewrite when the object really exists; otherwise
+                # fall through to the bucket listing which can find the right key.
+                if cls.url_exists(resolved):
+                    call.recording_url = resolved
+                    if auto_save:
+                        try:
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+                    return resolved
 
         # 3. Only attempt bucket resolution for calls that were connected / completed or have positive duration
         st_upper = (call.call_status or "").upper()
@@ -198,13 +238,17 @@ class DooctiRecordingService:
 
         if is_asterisk_uid:
             direct_url = f"{target_base}/{date_str}/{prov_id}.mp3"
-            call.recording_url = direct_url
-            if auto_save:
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
-            return direct_url
+            # Only persist the direct URL when the object really exists; otherwise
+            # fall through to the bucket listing (Asterisk may name the file with
+            # the answered leg's uniqueid instead of the caller leg's).
+            if cls.url_exists(direct_url):
+                call.recording_url = direct_url
+                if auto_save:
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                return direct_url
 
         # 5. Search Oracle Object Storage bucket for the call date
         dates_to_search = [date_str]
@@ -231,24 +275,33 @@ class DooctiRecordingService:
         best_candidate: Optional[Dict[str, Any]] = None
         best_score = float("inf")
 
-        for cand in recordings:
-            if cand["size"] < 500:
-                continue
-            cand_dt = cand.get("dt_ist")
-            if not cand_dt:
-                continue
+        # An exact filename/uniqueid match is authoritative - use it directly.
+        if prov_id:
+            for cand in recordings:
+                if cand.get("uniqueid") == prov_id and cand.get("size", 0) >= 500:
+                    best_candidate = cand
+                    best_score = 0.0
+                    break
 
-            time_diff = abs((cand_dt - target_dt).total_seconds())
-            if time_diff > 900:  # 15 minutes max difference
-                continue
+        if not best_candidate:
+            for cand in recordings:
+                if cand["size"] < 500:
+                    continue
+                cand_dt = cand.get("dt_ist")
+                if not cand_dt:
+                    continue
 
-            # Weight score by time proximity and audio size correlation
-            size_diff = abs(cand["size"] - expected_size)
-            score = time_diff + (size_diff / 800.0)
+                time_diff = abs((cand_dt - target_dt).total_seconds())
+                if time_diff > 900:  # 15 minutes max difference
+                    continue
 
-            if score < best_score:
-                best_score = score
-                best_candidate = cand
+                # Weight score by time proximity and audio size correlation
+                size_diff = abs(cand["size"] - expected_size)
+                score = time_diff + (size_diff / 800.0)
+
+                if score < best_score:
+                    best_score = score
+                    best_candidate = cand
 
         if best_candidate:
             matched_url = best_candidate["url"]
@@ -298,7 +351,11 @@ class DooctiRecordingService:
         calls = (
             db.query(CallLog)
             .filter(
-                CallLog.recording_url.is_(None),
+                or_(
+                    CallLog.recording_url.is_(None),
+                    CallLog.recording_url.ilike("%127.0.0.1%"),
+                    CallLog.recording_url.ilike("%localhost%"),
+                ),
                 CallLog.created_at >= since_date,
                 or_(
                     CallLog.duration_seconds > 0,
@@ -334,3 +391,89 @@ class DooctiRecordingService:
             "total_inspected": len(calls),
             "updated_calls": updated_calls,
         }
+
+    @classmethod
+    def sync_recent_missing_recordings(
+        cls,
+        db: Session,
+        minutes_back: int = 60,
+        limit: int = 25,
+    ) -> int:
+        """
+        Links recordings for calls that finished recently. Intended to run from
+        the background scheduler so recordings appear without the user having to
+        refresh the Call Logs page several times.
+        """
+        since = get_ist_now() - datetime.timedelta(minutes=minutes_back)
+        base_url = cls.get_configured_base_url(db)
+
+        calls = (
+            db.query(CallLog)
+            .filter(
+                or_(
+                    CallLog.recording_url.is_(None),
+                    CallLog.recording_url.ilike("%127.0.0.1%"),
+                    CallLog.recording_url.ilike("%localhost%"),
+                ),
+                CallLog.ended_at.isnot(None),
+                or_(CallLog.created_at >= since, CallLog.ended_at >= since),
+                or_(
+                    CallLog.duration_seconds > 0,
+                    CallLog.call_status.in_(["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"]),
+                ),
+            )
+            .order_by(desc(CallLog.id))
+            .limit(limit)
+            .all()
+        )
+
+        matched_count = 0
+        for call in calls:
+            try:
+                if cls.match_recording_for_call(call, db, base_url=base_url, auto_save=True):
+                    matched_count += 1
+            except Exception as exc:
+                logger.warning(
+                    f"[DooctiRecording] Background match failed for Call ID={call.id}: {exc}"
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        if matched_count:
+            logger.info(
+                f"🎯 [DooctiRecording] Background sync linked {matched_count} "
+                f"recording(s) out of {len(calls)} recent call(s)."
+            )
+        return matched_count
+
+
+def _run_recent_recording_sync(minutes_back: int) -> int:
+    """Runs one scheduler iteration with its own short-lived DB session."""
+    from database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return DooctiRecordingService.sync_recent_missing_recordings(
+            db, minutes_back=minutes_back
+        )
+    finally:
+        db.close()
+
+
+async def start_recording_sync_scheduler(interval_seconds: int = 20, minutes_back: int = 60):
+    """
+    Periodically auto-links DooCTI recordings for recently completed calls.
+    Runs the blocking HTTP/DB work in a worker thread.
+    """
+    import asyncio
+
+    logger.info("Call recording auto-link scheduler started.")
+    while True:
+        try:
+            await asyncio.to_thread(_run_recent_recording_sync, minutes_back)
+        except Exception as exc:
+            logger.warning(f"[DooctiRecording] Scheduler iteration failed: {exc}")
+        await asyncio.sleep(interval_seconds)
+

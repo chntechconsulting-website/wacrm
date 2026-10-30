@@ -410,6 +410,15 @@ def startup_db_client():
     except Exception as ex:
         print(f"Failed to start follow-up reminder scheduler: {ex}")
 
+    # Launch DooCTI recording auto-link scheduler (links freshly uploaded recordings)
+    try:
+        import asyncio
+        from services.doocti_recording_service import start_recording_sync_scheduler
+        asyncio.create_task(start_recording_sync_scheduler(interval_seconds=20, minutes_back=60))
+        print("Call recording auto-link scheduler launched.")
+    except Exception as ex:
+        print(f"Failed to start call recording auto-link scheduler: {ex}")
+
     # Seed initial Admin, Manager, and Employee users if not existing
     db = SessionLocal()
     try:

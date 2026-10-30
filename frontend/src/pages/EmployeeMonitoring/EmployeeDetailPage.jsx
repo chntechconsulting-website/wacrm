@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import CallAISummaryModal from '../../components/IVR/CallAISummaryModal';
+import { probeAudioDuration, rewindAfterProbe } from '../../utils/audioUtils';
 import { 
   Users, 
   PhoneCall, 
@@ -405,7 +406,15 @@ const EmployeeDetailPage = () => {
                       <td style={{ padding: '10px', color: '#64748b' }}>{new Date(c.created_at).toLocaleString()}</td>
                       <td style={{ padding: '10px' }}>
                         {c.duration_seconds > 0 && c.recording_url ? (
-                          <audio controls preload="metadata" src={c.recording_url} style={{ height: '30px', maxWidth: '160px' }} />
+                          <audio
+                            controls
+                            preload="metadata"
+                            src={c.recording_url}
+                            style={{ height: '30px', maxWidth: '160px' }}
+                            onLoadedMetadata={(e) => probeAudioDuration(e.currentTarget)}
+                            onDurationChange={(e) => rewindAfterProbe(e.currentTarget)}
+                            onTimeUpdate={(e) => rewindAfterProbe(e.currentTarget)}
+                          />
                         ) : (
                           <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>No recording</span>
                         )}
