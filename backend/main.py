@@ -419,6 +419,15 @@ def startup_db_client():
     except Exception as ex:
         print(f"Failed to start call recording auto-link scheduler: {ex}")
 
+    # Launch DooCTI call-session reconciler (closes sessions that never received a CDR)
+    try:
+        import asyncio
+        from services.call_sync_service import start_call_reconciler
+        asyncio.create_task(start_call_reconciler(interval_seconds=60, stale_after_minutes=30))
+        print("Call session reconciler launched.")
+    except Exception as ex:
+        print(f"Failed to start call session reconciler: {ex}")
+
     # Seed initial Admin, Manager, and Employee users if not existing
     db = SessionLocal()
     try:

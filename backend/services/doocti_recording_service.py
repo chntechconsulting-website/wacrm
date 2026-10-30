@@ -27,6 +27,17 @@ CACHE_TTL_SECONDS = 30.0  # short TTL so freshly uploaded recordings are picked 
 _URL_EXISTS_CACHE: Dict[str, Tuple[float, bool]] = {}
 URL_EXISTS_TTL_SECONDS = 45.0
 
+# In-memory audio duration cache: { "url": (timestamp, duration_seconds|None) }
+_AUDIO_DURATION_CACHE: Dict[str, Tuple[float, Optional[int]]] = {}
+AUDIO_DURATION_TTL_SECONDS = 3600.0
+
+# MPEG audio Layer III bitrate tables (kbit/s), indexed by the 4-bit bitrate index.
+_MPEG_LAYER3_BITRATES = {
+    1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],   # MPEG 1
+    2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],       # MPEG 2
+    25: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],      # MPEG 2.5
+}
+
 
 class DooctiRecordingService:
     """
@@ -182,6 +193,205 @@ class DooctiRecordingService:
 
         _URL_EXISTS_CACHE[url] = (now, exists)
         return exists
+
+    @classmethod
+    def _parse_mpeg_duration(cls, header: bytes, total_size: int) -> Optional[int]:
+        """
+        Derives the playback length of an MPEG audio file from its first frame header
+        plus the object size. DooCTI recordings carry no Xing/VBRI duration header, so
+        the frame header (bitrate + sample rate) is the authoritative source:
+            duration = (audio_bytes * 8) / bitrate_bps
+        Returns an integer number of seconds, or None when the data is not MPEG audio.
+        """
+        if not header or total_size <= 0:
+            return None
+
+        start = -1
+        for i in range(0, max(0, len(header) - 3)):
+            if header[i] == 0xFF and (header[i + 1] & 0xE0) == 0xE0:
+                start = i
+                break
+        if start < 0:
+            return None
+
+        b1 = header[start + 1]
+        b2 = header[start + 2]
+        version_bits = (b1 >> 3) & 0x03
+        layer_bits = (b1 >> 1) & 0x03
+        bitrate_idx = (b2 >> 4) & 0x0F
+        sample_idx = (b2 >> 2) & 0x03
+
+        # Layer III only (recording files are MP3). 0b01 == Layer III.
+        if layer_bits != 0x01:
+            return None
+        if version_bits == 0x03:
+            version = 1
+        elif version_bits == 0x02:
+            version = 2
+        elif version_bits == 0x00:
+            version = 25
+        else:
+            return None
+        if bitrate_idx in (0, 15) or sample_idx == 3:
+            return None
+
+        bitrate_kbps = _MPEG_LAYER3_BITRATES[version][bitrate_idx]
+        if not bitrate_kbps:
+            return None
+
+        audio_bytes = max(0, int(total_size) - start)
+        seconds = (audio_bytes * 8.0) / (bitrate_kbps * 1000.0)
+        if seconds <= 0:
+            return None
+        return int(round(seconds))
+
+    @classmethod
+    def resolve_audio_duration(cls, url: Optional[str], timeout: float = 6.0) -> Optional[int]:
+        """
+        Returns the real duration (seconds) of a recording object.
+        Uses a HEAD request for the exact object size and a 4 KB ranged GET for the
+        first MPEG frame header. Results are cached in memory.
+        """
+        clean_url = str(url or "").strip()
+        if not clean_url:
+            return None
+
+        now = time.time()
+        cached = _AUDIO_DURATION_CACHE.get(clean_url)
+        if cached and (now - cached[0]) < AUDIO_DURATION_TTL_SECONDS:
+            return cached[1]
+
+        duration: Optional[int] = None
+        headers = {"User-Agent": "WACRM-RecordingResolver/1.0"}
+        try:
+            total_size = 0
+            try:
+                req = urllib.request.Request(clean_url, headers=headers, method="HEAD")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    total_size = int(resp.headers.get("Content-Length") or 0)
+            except Exception:
+                total_size = 0
+
+            ranged = dict(headers)
+            ranged["Range"] = "bytes=0-4095"
+            req = urllib.request.Request(clean_url, headers=ranged)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                head_bytes = resp.read(4096)
+                if not total_size:
+                    content_range = resp.headers.get("Content-Range") or ""
+                    if "/" in content_range:
+                        try:
+                            total_size = int(content_range.rsplit("/", 1)[-1])
+                        except ValueError:
+                            total_size = 0
+                if not total_size:
+                    total_size = int(resp.headers.get("Content-Length") or 0)
+
+            if total_size >= 500:
+                duration = cls._parse_mpeg_duration(head_bytes, total_size)
+        except Exception as exc:
+            logger.debug(f"[DooctiRecording] Could not resolve audio duration for {clean_url}: {exc}")
+            duration = None
+
+        _AUDIO_DURATION_CACHE[clean_url] = (now, duration)
+        return duration
+
+    @classmethod
+    def claim_unambiguous_recording(
+        cls,
+        call: CallLog,
+        db: Session,
+        base_url: Optional[str] = None,
+        window_before: int = 90,
+        window_after: int = 180,
+    ) -> Optional[str]:
+        """
+        Finds the ONE recording that belongs to a call that was never finalised by a
+        CDR (browser closed, hangup message lost, webhook never delivered).
+
+        Recording keys are named after the PBX uniqueid, whose epoch is the call start
+        time, so a narrow window around ``started_at`` is a reliable join. Only a
+        single, unused candidate is ever claimed: if the window is ambiguous nothing
+        is linked rather than attaching somebody else's audio.
+        """
+        base_url = (base_url or cls.get_configured_base_url(db)).rstrip("/")
+        target_dt = call.started_at or call.created_at
+        if not isinstance(target_dt, datetime.datetime):
+            return None
+        if target_dt.tzinfo:
+            target_dt = target_dt.astimezone(IST_TIMEZONE).replace(tzinfo=None)
+
+        dates = [target_dt.strftime("%Y-%m-%d")]
+        if target_dt.hour == 0 and target_dt.minute < 15:
+            dates.append((target_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
+
+        candidates: List[Dict[str, Any]] = []
+        for d in dates:
+            for cand in cls.fetch_bucket_recordings_for_date(d, base_url):
+                if cand.get("size", 0) < 500:
+                    continue
+                cand_dt = cand.get("dt_ist")
+                if not cand_dt:
+                    continue
+                diff = (cand_dt - target_dt).total_seconds()
+                if -window_before <= diff <= window_after:
+                    candidates.append(cand)
+
+        if len(candidates) != 1:
+            return None
+
+        cand = candidates[0]
+        cand_url = cand.get("url")
+        cand_uid = cand.get("uniqueid")
+        cand_dt = cand.get("dt_ist")
+        if not cand_url:
+            return None
+
+        # If another call session started at almost the same moment, the audio cannot
+        # be attributed unambiguously - leave it unlinked rather than guessing.
+        if cand_dt:
+            sibling = (
+                db.query(CallLog.id)
+                .filter(
+                    CallLog.id != call.id,
+                    or_(
+                        and_(
+                            CallLog.started_at.isnot(None),
+                            CallLog.started_at >= cand_dt - datetime.timedelta(seconds=window_before),
+                            CallLog.started_at <= cand_dt + datetime.timedelta(seconds=window_after),
+                        ),
+                        and_(
+                            CallLog.started_at.is_(None),
+                            CallLog.created_at >= cand_dt - datetime.timedelta(seconds=window_before),
+                            CallLog.created_at <= cand_dt + datetime.timedelta(seconds=window_after),
+                        ),
+                    ),
+                )
+                .first()
+            )
+            if sibling:
+                return None
+
+        # Never steal a recording that is already attached to another call.
+        used_url = (
+            db.query(CallLog.id)
+            .filter(CallLog.recording_url == cand_url, CallLog.id != call.id)
+            .first()
+        )
+        if used_url:
+            return None
+        if cand_uid:
+            used_uid = (
+                db.query(CallLog.id)
+                .filter(CallLog.provider_call_id == cand_uid, CallLog.id != call.id)
+                .first()
+            )
+            if used_uid:
+                return None
+
+        if not cls.url_exists(cand_url):
+            return None
+        return cand_url
 
     @classmethod
     def match_recording_for_call(

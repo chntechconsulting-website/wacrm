@@ -542,8 +542,17 @@ const DooctiInAppDialer = () => {
     if (activeCall && !['COMPLETED', 'NO_ANSWER', 'BUSY', 'FAILED'].includes(activeCall.callStatus)) {
       pollTimer = setInterval(async () => {
         try {
-          const res = await API.get('/ivr/calls?limit=1');
-          const latest = res.data?.items?.[0];
+          const sessionForPoll = activeSessionRef.current;
+          const focusPhone = String(sessionForPoll?.customerPhone || activeCall.number || '').replace(/[^0-9]/g, '');
+          if (!focusPhone) return;
+          // Query by the dialed/caller number: a global "latest call" lookup misses this
+          // session whenever another agent logs a call in the meantime.
+          const res = await API.get(`/ivr/calls?limit=10&search=${encodeURIComponent(focusPhone)}`);
+          const items = res.data?.items || [];
+          const latest = items.find((it) => {
+            const ph = String(it.customer_phone || it.to_number || it.from_number || '');
+            return ph.includes(focusPhone);
+          });
           if (!latest) return;
 
           const session = activeSessionRef.current;
@@ -791,9 +800,9 @@ const DooctiInAppDialer = () => {
       if (current && current.callStatus === 'CONNECTING' && !wasAnswered) {
         console.warn('[Doocti] 30s elapsed with no telephony progress signal for call:', session?.callId);
         setDialerNotice({
-          type: 'warning',
-          title: 'No Call Progress Detected',
-          message: 'Doocti WebPhone has not reported progress yet. If the call is not dialing, verify: 1) Agent status in Doocti WebPhone is "Online" (Green) and not Paused, 2) Microphone access is allowed.'
+          type: 'info',
+          title: 'Waiting for Call Progress',
+          message: 'DooCTI does not report the answer/connect event to the CRM, so this panel stays at "Connecting" while the call is live in the DooCTI phone. The real duration and final status are recorded automatically from the provider CDR when the call ends. If nothing is dialing, check: 1) Agent status in DooCTI is "Online" (Green) and not Paused, 2) Microphone access is allowed.'
         });
       }
     }, 30000);
@@ -909,7 +918,11 @@ const DooctiInAppDialer = () => {
       finalStatus = 'MISSED';
       talkDuration = 0;
     } else if (!wasAnswered) {
-      finalStatus = isDirectionInbound ? 'MISSED' : 'NO_ANSWER';
+      // DooCTI never reports an answer/connect event to the parent page, so an outbound
+      // call can be genuinely connected even though the CRM saw no progress signal.
+      // Do not invent NO_ANSWER: send a neutral terminal marker and let the backend
+      // resolve the real outcome (status/duration) from the CDR + recording artifact.
+      finalStatus = 'ENDED';
       talkDuration = 0;
     } else {
       finalStatus = 'COMPLETED';

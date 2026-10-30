@@ -31,6 +31,12 @@ ADMIN_EXTENSION = ""
 AGENT_EXTENSIONS: List[str] = []
 ALL_EXTENSIONS: List[str] = []
 
+# A call in one of these states is still in flight and may legitimately be completed
+# by a later event (CDR, recording delivery, hangup). A call in a terminal state must
+# never be re-used for a different phone call.
+ACTIVE_CALL_STATUSES: List[str] = ["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]
+TERMINAL_CALL_STATUSES: List[str] = ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"]
+
 # -------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------
@@ -692,7 +698,8 @@ async def push_doocti_call_log(
     # Pre-lookup existing log by provider_call_id for idempotent updates / delayed recording delivery
     existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first() if call_id else None
 
-    # Pre-lookup active or recently completed call if call_id is an Asterisk PBX uniqueid and initial call was logged via in-app session
+    # Pre-lookup active call if call_id is an Asterisk PBX uniqueid and the initial
+    # session was logged with a synthetic CRM id (in-app originate / inbound ring).
     if not existing_log:
         raw_cust = extract_string_val(
             raw_data.get("phone_number") or raw_data.get("customer_number") or 
@@ -701,6 +708,11 @@ async def push_doocti_call_log(
         )
         clean_cust = clean_phone(raw_cust)
         if clean_cust and len(clean_cust) >= 6:
+            # Only ever adopt a call that is STILL ACTIVE and started recently.
+            # Matching a finished call from an earlier session is how a new CDR used to
+            # inherit another call's answered_at/duration (e.g. a 20:20 call receiving
+            # the 12:44 answer timestamp of a previous call to the same number).
+            active_cutoff = get_ist_now() - datetime.timedelta(hours=4)
             existing_log = (
                 db.query(CallLog)
                 .filter(
@@ -708,17 +720,25 @@ async def push_doocti_call_log(
                         CallLog.to_number.like(f"%{clean_cust}%"),
                         CallLog.from_number.like(f"%{clean_cust}%"),
                     ),
+                    CallLog.call_status.in_(ACTIVE_CALL_STATUSES),
                     or_(
-                        CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
-                        and_(
-                            CallLog.call_status.in_(["COMPLETED", "ANSWERED", "NO_ANSWER"]),
-                            CallLog.recording_url.is_(None)
-                        )
+                        and_(CallLog.started_at.isnot(None), CallLog.started_at >= active_cutoff),
+                        and_(CallLog.started_at.is_(None), CallLog.created_at >= active_cutoff),
+                    ),
+                    or_(
+                        CallLog.provider_call_id.is_(None),
+                        CallLog.provider_call_id.like("doocti_%"),
+                        CallLog.provider_call_id.like("call_%"),
                     ),
                 )
                 .order_by(desc(CallLog.id))
                 .first()
             )
+            if existing_log:
+                logger.info(
+                    f"🔁 [DOOCTI CDR] Correlated event to active CallLog ID={existing_log.id} "
+                    f"(provider_call_id='{existing_log.provider_call_id}') for phone={clean_cust}."
+                )
 
     # 2. Agent & Station extraction (handling both scalar and dict values)
     agent_name = extract_string_val(
@@ -839,9 +859,12 @@ async def push_doocti_call_log(
         dur_sec = existing_log.duration_seconds
 
     # 7. Timestamp parsing (Indian Standard Time Asia/Kolkata)
-    started_at = parse_doocti_time(raw_data.get("start_time") or raw_data.get("started_at")) or (existing_log.started_at if existing_log else None)
-    answered_at = parse_doocti_time(raw_data.get("answer_time") or raw_data.get("answered_at")) or (existing_log.answered_at if existing_log else None)
-    ended_at = parse_doocti_time(raw_data.get("end_time") or raw_data.get("ended_at")) or (existing_log.ended_at if existing_log else None)
+    payload_start = parse_doocti_time(raw_data.get("start_time") or raw_data.get("started_at"))
+    payload_answer = parse_doocti_time(raw_data.get("answer_time") or raw_data.get("answered_at"))
+    payload_end = parse_doocti_time(raw_data.get("end_time") or raw_data.get("ended_at"))
+    started_at = payload_start or (existing_log.started_at if existing_log else None)
+    answered_at = payload_answer or (existing_log.answered_at if existing_log else None)
+    ended_at = payload_end or (existing_log.ended_at if existing_log else None)
     now_ist = get_ist_now()
     if not ended_at:
         ended_at = now_ist
@@ -864,21 +887,48 @@ async def push_doocti_call_log(
     was_previously_answered = bool(existing_log and (existing_log.answered_at or ((existing_log.call_status or '').upper() in ["ANSWERED", "CONNECTED"] and existing_log.duration_seconds and existing_log.duration_seconds > 0)))
 
     # 9. Call Status normalization
-    has_explicit_status = any(raw_data.get(k) for k in ["status", "call_status", "disposition", "call_state"])
-    if not has_explicit_status and existing_log:
-        status_str = existing_log.call_status or "COMPLETED"
-        raw_status = status_str
-    else:
-        raw_status = str(
-            raw_data.get("status") or 
-            raw_data.get("call_status") or 
-            raw_data.get("disposition") or 
-            raw_data.get("call_state") or 
-            "COMPLETED"
-        ).strip()
-    raw_upper = raw_status.upper()
+    # DooCTI's webphone only posts two events to the parent page ("Ringing" and
+    # "hangup"); the answer time, duration, final status and recording arrive later via
+    # the CDR webhook / Oracle recording artifact. Those payloads frequently carry NO
+    # status field. A payload without a status must never be re-interpreted against the
+    # stored status: doing that sent a real CDR for a CONNECTING row straight back into
+    # the CONNECTING branch, which reset duration to 0 and cleared ended_at, leaving the
+    # call stuck at "CONNECTING" forever.
+    explicit_status_raw = str(
+        raw_data.get("status") or 
+        raw_data.get("call_status") or 
+        raw_data.get("disposition") or 
+        raw_data.get("call_state") or 
+        ""
+    ).strip()
+    has_explicit_status = bool(explicit_status_raw)
+    has_explicit_end_time = payload_end is not None
 
-    if any(k in raw_upper for k in ["RINGING", "RING", "INCOMING"]):
+    raw_status = explicit_status_raw or str(existing_log.call_status if existing_log else "COMPLETED")
+    raw_upper = raw_status.upper()
+    status_str = raw_upper
+
+    answered_evidence = bool(
+        dur_sec > 0
+        or payload_answer is not None
+        or rec_url
+        or (existing_log and (existing_log.duration_seconds or 0) > 0)
+    )
+
+    if not has_explicit_status:
+        # A payload without a status is only allowed to close a call when it carries a
+        # terminal marker (duration / end time / answer time / recording). Anything else
+        # leaves an in-flight call in flight instead of guessing.
+        terminal_marker = bool(has_explicit_duration or has_explicit_end_time or payload_answer or rec_url)
+        if answered_evidence:
+            status_str = "COMPLETED"
+        elif terminal_marker:
+            status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
+        elif existing_log:
+            status_str = (existing_log.call_status or "COMPLETED").upper()
+        else:
+            status_str = "MISSED" if call_dir == "INBOUND" else "NO_ANSWER"
+    elif any(k in raw_upper for k in ["RINGING", "RING", "INCOMING"]):
         status_str = "RINGING"
         dur_sec = 0
         answered_at = None
@@ -955,6 +1005,33 @@ async def push_doocti_call_log(
             answered_at = None
     else:
         status_str = raw_upper or ("RINGING" if call_dir == "INBOUND" and dur_sec == 0 else "COMPLETED")
+
+    # 9b. Recover the real talk time when the provider sent no duration.
+    # A CDR / recording-delivery event may prove the call connected (recording present)
+    # without carrying "duration". DooCTI MP3s have no Xing header, so the length is
+    # derived from the first frame header + object size instead of being left at 0s.
+    if status_str in ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"] and dur_sec <= 0 and rec_url:
+        try:
+            from services.doocti_recording_service import DooctiRecordingService
+            derived_duration = DooctiRecordingService.resolve_audio_duration(rec_url)
+            if derived_duration and derived_duration > 0:
+                dur_sec = int(derived_duration)
+                logger.info(
+                    f"🎧 [DOOCTI CDR] Derived duration {dur_sec}s from recording artifact "
+                    f"for uniqueid='{call_id}' ({rec_url})"
+                )
+        except Exception as dur_err:
+            logger.debug(f"[DOOCTI CDR] Duration derivation failed for {rec_url}: {dur_err}")
+
+    # 9c. Keep the timeline internally consistent for a connected call:
+    #     answered_at = ended_at - talk_duration, started_at never after answered_at.
+    if status_str in ["COMPLETED", "COMPLETE"] and dur_sec > 0:
+        if not ended_at:
+            ended_at = now_ist
+        if not answered_at:
+            answered_at = ended_at - datetime.timedelta(seconds=dur_sec)
+        if not payload_start and not (existing_log and existing_log.started_at):
+            started_at = answered_at
 
     # 9. Compile Notes early (to preserve original provider status & allow lead categorization)
     notes_parts = []
@@ -1092,11 +1169,13 @@ async def push_doocti_call_log(
         existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
 
     # Cross-provider & PBX duplicate detection:
-    # 1. Same phone + currently active call (RINGING, CONNECTING, ANSWERED, INITIATED) within past 4 hours.
-    #    When an agent answers and speaks for >4 minutes (e.g. 5, 10, 30 mins), the initial record
-    #    might have been created with a synthetic ID (e.g. doocti_1282_phone_timestamp) while the CDR
-    #    webhook arrives with the PBX uniqueid (e.g. 1792669919.123839191) at call completion.
-    #    Matching active calls by customer number connects the CDR to the active session regardless of duration.
+    # 1. Same phone + currently active call within the past 4 hours.
+    #    The initial row is created with a synthetic ID (doocti_<ext>_<phone>_<ts>) by the
+    #    originate proxy / inbound ring handler, while the terminating CDR arrives with
+    #    the real PBX uniqueid (e.g. 1792669919.123839191). Matching the *active* row by
+    #    customer number connects the CDR to that session.
+    #    Only synthetic rows are candidates: a row that already owns a different real
+    #    PBX uniqueid belongs to another call and must never be merged into.
     if not existing_log and clean_target:
         four_hours_ago = (started_at or now_ist) - datetime.timedelta(hours=4)
         active_match = (
@@ -1106,14 +1185,16 @@ async def push_doocti_call_log(
                     CallLog.to_number.like(f"%{clean_target}%"),
                     CallLog.from_number.like(f"%{clean_target}%"),
                 ),
+                CallLog.call_status.in_(ACTIVE_CALL_STATUSES),
                 or_(
-                    CallLog.call_status.in_(["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]),
-                    and_(
-                        CallLog.call_status.in_(["COMPLETED", "ANSWERED", "NO_ANSWER"]),
-                        CallLog.recording_url.is_(None)
-                    )
+                    and_(CallLog.started_at.isnot(None), CallLog.started_at >= four_hours_ago),
+                    and_(CallLog.started_at.is_(None), CallLog.created_at >= four_hours_ago),
                 ),
-                CallLog.created_at >= four_hours_ago,
+                or_(
+                    CallLog.provider_call_id.is_(None),
+                    CallLog.provider_call_id.like("doocti_%"),
+                    CallLog.provider_call_id.like("call_%"),
+                ),
             )
             .order_by(desc(CallLog.id))
             .first()
@@ -1127,9 +1208,11 @@ async def push_doocti_call_log(
             )
 
     # 2. Same phone + time window matching:
-    #    Accommodates calls of any duration (up to 4 hours) by checking both started_at and created_at.
+    #    Handles the window between the hangup event and the delayed CDR/recording where
+    #    the CRM row is already terminal but still carries a synthetic provider id.
+    #    Again: only synthetic rows may be adopted, so two distinct calls to the same
+    #    number never collapse into one record.
     if not existing_log and clean_target and started_at:
-        # Window spans from started_at minus 10 minutes to started_at plus max(dur_sec + 300, 600) seconds
         margin_sec = max(dur_sec + 600, 1800)
         window_start = started_at - datetime.timedelta(minutes=10)
         window_end = started_at + datetime.timedelta(seconds=margin_sec)
@@ -1143,8 +1226,14 @@ async def push_doocti_call_log(
                 or_(
                     and_(CallLog.started_at >= window_start, CallLog.started_at <= window_end),
                     and_(CallLog.created_at >= window_start, CallLog.created_at <= window_end),
+                    and_(CallLog.ended_at.isnot(None), CallLog.ended_at >= window_start, CallLog.ended_at <= window_end),
                 ),
                 CallLog.call_direction == call_dir,
+                or_(
+                    CallLog.provider_call_id.is_(None),
+                    CallLog.provider_call_id.like("doocti_%"),
+                    CallLog.provider_call_id.like("call_%"),
+                ),
             )
             .order_by(desc(CallLog.created_at))
             .first()
@@ -1171,7 +1260,25 @@ async def push_doocti_call_log(
         )
 
         if not has_explicit_status:
-            logger.info(f"Preserving existing status '{curr_status}' (no explicit status in payload) for CallLog ID={existing_log.id}")
+            # Derived outcome (CDR / delayed recording delivery without a status field).
+            # Apply the terminal status we derived from evidence, but never downgrade a
+            # call that is already known to have been answered.
+            if status_str in TERMINAL_CALL_STATUSES:
+                if has_prior_answer and status_str in ["NO_ANSWER", "MISSED", "BUSY", "FAILED"]:
+                    logger.info(
+                        f"🛡️ [DOOCTI CDR] Keeping answered/completed state for CallLog ID={existing_log.id} "
+                        f"(status='{curr_status}', dur={existing_log.duration_seconds}s), ignoring derived '{status_str}'"
+                    )
+                else:
+                    existing_log.call_status = status_str
+                    logger.info(
+                        f"🧾 [DOOCTI CDR] Derived terminal status '{status_str}' from CDR evidence "
+                        f"for CallLog ID={existing_log.id} (was '{curr_status}')"
+                    )
+            else:
+                logger.info(
+                    f"No terminal evidence in payload; keeping '{curr_status}' for CallLog ID={existing_log.id}"
+                )
         elif curr_status in ["ANSWERED", "CONNECTED"] and status_str in ["RINGING", "CONNECTING"]:
             logger.info(f"Preserving active status '{curr_status}', ignoring stale '{status_str}' for CallLog ID={existing_log.id}")
         elif has_prior_answer and status_str in ["NO_ANSWER", "NO ANSWER", "MISSED", "BUSY", "FAILED"]:
@@ -1220,6 +1327,12 @@ async def push_doocti_call_log(
             conflict = db.query(CallLog).filter(CallLog.provider_call_id == call_id, CallLog.id != existing_log.id).first()
             if not conflict:
                 existing_log.provider_call_id = call_id
+        # Keep the DID side of the record correct once the CDR tells us which line was used.
+        if matched_did:
+            if call_dir == "INBOUND" and not is_did_number(existing_log.to_number, configured_dids):
+                existing_log.to_number = matched_did
+            elif call_dir == "OUTBOUND" and not existing_log.from_number:
+                existing_log.from_number = matched_did
         if started_at and not existing_log.started_at:
             existing_log.started_at = started_at
         if answered_at and not existing_log.answered_at:
@@ -1230,8 +1343,20 @@ async def push_doocti_call_log(
             existing_log.answered_at = None
             existing_log.duration_seconds = 0
 
-        if has_explicit_status and (status_str in ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"] or has_prior_answer):
-            existing_log.ended_at = ended_at or now_ist
+        # Terminal events must always close the row, even when the provider omits the
+        # status field (CDR / delayed recording delivery).
+        if status_str in TERMINAL_CALL_STATUSES or has_prior_answer:
+            if ended_at or has_explicit_status or has_prior_answer or answered_evidence or payload_end:
+                existing_log.ended_at = ended_at or now_ist
+
+        # A connected call needs a coherent timeline: answered_at = ended_at - duration.
+        if (
+            (existing_log.call_status or "").upper() in ["COMPLETED", "COMPLETE"]
+            and (existing_log.duration_seconds or 0) > 0
+            and not existing_log.answered_at
+        ):
+            anchor_end = existing_log.ended_at or ended_at or now_ist
+            existing_log.answered_at = anchor_end - datetime.timedelta(seconds=int(existing_log.duration_seconds))
 
         if combined_notes and combined_notes not in (existing_log.notes or ""):
             existing_log.notes = f"{existing_log.notes or ''}\n{combined_notes}".strip()
@@ -1344,8 +1469,8 @@ async def push_doocti_call_log(
         "employee_id": resolved_emp_id,
         "lead_id": resolved_lead_id,
         "product_category": call_entry.product_category or lead_product_cat or "UNCLASSIFIED",
-        "call_status": status_str,
-        "duration": dur_sec,
+        "call_status": call_entry.call_status or status_str,
+        "duration": call_entry.duration_seconds or 0,
         "recording_path": call_entry.recording_url
     }
 
