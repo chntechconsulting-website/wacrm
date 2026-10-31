@@ -679,6 +679,12 @@ class DooctiRecordingService:
                     continue
                 candidate = extract_recording_url(row)
                 if not candidate:
+                    raw_location = str(row.get("record_location") or "").strip()
+                    if raw_location.startswith("/") and " " not in raw_location:
+                        # DooCTI sometimes stores a path; the iframe resolves it
+                        # against its own host before playing.
+                        candidate = dialer.rstrip("/") + raw_location
+                if not candidate:
                     continue
                 if cls.is_definitely_empty_recording(candidate):
                     logger.info(
