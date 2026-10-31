@@ -6,6 +6,7 @@ from datetime import datetime
 
 from models.lead import Lead
 from models.employee import Employee
+from utils.phone import normalize_email, normalize_phone
 
 def generate_excel_template() -> io.BytesIO:
     wb = openpyxl.Workbook()
@@ -200,10 +201,11 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
             emp_map[emp.email.strip().lower()] = emp.id
         emp_map[str(emp.id)] = emp.id
 
-    # Get existing phone & email sets from DB for fast duplicate detection
-    existing_phones = set(p[0].strip() for p in db.query(Lead.phone).all() if p[0])
-    existing_emails = set(e[0].strip().lower() for e in db.query(Lead.email).all() if e[0])
-
+    # Keys used to detect duplicate rows *inside the uploaded file*.  Phone
+    # numbers are compared after normalization so "+91 98765 43210" and
+    # "9876543210" are recognized as the same lead.  Emails are only used when
+    # they are valid addresses, so placeholders like "-" or "N/A" do not mark
+    # every row after the first as a duplicate.
     seen_file_phones = set()
     seen_file_emails = set()
 
@@ -271,6 +273,19 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
             })
             continue
 
+        # A lead must have a usable mobile number.  This also guarantees that
+        # empty/garbage values can never participate in duplicate matching.
+        if len(normalize_phone(phone)) < 7:
+            invalid_count += 1
+            invalid_rows.append({
+                "row_index": row_idx,
+                "name": name or company or "(Empty)",
+                "phone": phone,
+                "email": email,
+                "reason": "Invalid Phone number (minimum 7 digits required)"
+            })
+            continue
+
         # Automatic fallback for Name: use First/Last Name, then Company, then Phone
         raw_name = name
         if not name:
@@ -291,9 +306,14 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
         if not location and (city or state):
             location = f"{city}, {state}".strip(", ")
 
-        # Check duplicate inside the same uploaded file
-        is_file_dup_phone = phone in seen_file_phones
-        is_file_dup_email = bool(email and email in seen_file_emails)
+        # Check duplicate inside the same uploaded file (normalized keys).
+        # `phone_key` falls back to the raw text for unusual identifiers so a
+        # repeated non-numeric value is still caught.
+        phone_key = normalize_phone(phone) or phone.strip().lower()
+        email_key = normalize_email(email)
+
+        is_file_dup_phone = bool(phone_key) and phone_key in seen_file_phones
+        is_file_dup_email = bool(email_key) and email_key in seen_file_emails
 
         if is_file_dup_phone or is_file_dup_email:
             duplicate_count += 1
@@ -309,9 +329,6 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
                 "reason": ", ".join(dup_reason)
             })
             continue
-
-        # Check if matches existing CRM lead to track as Re-Inquiry
-        is_db_match = (phone in existing_phones) or bool(email and email in existing_emails)
 
         # Resolve assigned employee
         assigned_to_id = None
@@ -336,8 +353,10 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
             rating = "Cold"
 
         # Add to valid list
-        seen_file_phones.add(phone)
-        if email: seen_file_emails.add(email)
+        if phone_key:
+            seen_file_phones.add(phone_key)
+        if email_key:
+            seen_file_emails.add(email_key)
 
         # Lead source: keep an explicit value from the sheet, else mark as EXCEL.
         source_value = (source_raw or "EXCEL").strip().upper() or "EXCEL"

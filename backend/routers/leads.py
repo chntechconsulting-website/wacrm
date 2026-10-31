@@ -564,6 +564,10 @@ async def import_leads_excel(
     created_count = 0
     reinquiry_count = 0
     now = get_ist_now()
+    # Every lead created by this import. They are excluded from duplicate
+    # matching so that a row can never be classified as a re-inquiry of a row
+    # created moments earlier in the same file.
+    created_lead_ids = set()
     for lead_data in valid_leads:
         # The parser defaults the source to EXCEL; an explicit Source column is kept.
         if not lead_data.get("source"):
@@ -580,12 +584,14 @@ async def import_leads_excel(
             enquiry_data=lead_data,
             creator_emp_id=creator_id,
             creator_name=creator_name,
-            commit=False
+            commit=False,
+            exclude_lead_ids=created_lead_ids
         )
         if is_reinquiry:
             reinquiry_count += 1
         else:
             created_count += 1
+            created_lead_ids.add(lead.id)
             assigned_emp_id = lead_data.get("assigned_to")
             if assigned_emp_id:
                 asgn = LeadAssignment(

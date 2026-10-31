@@ -8,6 +8,24 @@ import logging
 
 logger = logging.getLogger("phone_utils")
 
+# Pragmatic email validation used for duplicate detection.  A value must look
+# like a real address before it is allowed to match an existing lead; strings
+# such as "", "-", "N/A", "None" or a stray "@" are treated as "no email".
+EMAIL_REGEX = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+def normalize_email(email: Optional[Any]) -> str:
+    """
+    Return a trimmed, lowercase email address when it is valid.
+    Returns "" for empty or malformed values so they can never trigger a
+    duplicate/re-inquiry match.
+    """
+    if not email:
+        return ""
+    clean = str(email).strip().lower()
+    if not clean or len(clean) > 254:
+        return ""
+    return clean if EMAIL_REGEX.match(clean) else ""
+
 def normalize_phone(phone: Optional[Any]) -> str:
     """
     Standardize Indian and international phone numbers into a clean 10-digit format
@@ -49,11 +67,19 @@ def sql_strip_phone(column):
     expr = func.replace(expr, ".", "")
     return expr
 
-def find_existing_lead_by_phone(db: Session, raw_phone: Optional[Any]) -> Optional[Lead]:
+def find_existing_lead_by_phone(
+    db: Session,
+    raw_phone: Optional[Any],
+    exclude_lead_ids: Optional[Any] = None
+) -> Optional[Lead]:
     """
     Robust database search for an existing Lead using normalized phone numbers.
     Handles any spacing or prefix formatting (+91, 0, spaces, dashes) in both
     the incoming query and the database columns (phone, whatsapp_number).
+
+    ``exclude_lead_ids`` lets a caller ignore leads that were created in the
+    current batch (e.g. earlier rows of the same Excel import), so a file can
+    never re-classify its own freshly-created rows as re-inquiries.
     """
     clean = normalize_phone(raw_phone)
     if not clean or len(clean) < 7:
@@ -63,12 +89,15 @@ def find_existing_lead_by_phone(db: Session, raw_phone: Optional[Any]) -> Option
     clean_lead_wa = sql_strip_phone(Lead.whatsapp_number)
 
     # 1. SQL query using stripped columns to find candidates
-    candidates = db.query(Lead).filter(
+    query = db.query(Lead).filter(
         or_(
             clean_lead_phone.like(f"%{clean}%"),
             clean_lead_wa.like(f"%{clean}%")
         )
-    ).order_by(desc(Lead.id)).all()
+    )
+    if exclude_lead_ids:
+        query = query.filter(~Lead.id.in_(list(exclude_lead_ids)))
+    candidates = query.order_by(desc(Lead.id)).all()
 
     # 2. Strict python verification to guarantee exact 10-digit match
     for lead in candidates:

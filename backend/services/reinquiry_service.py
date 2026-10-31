@@ -10,6 +10,7 @@ from models.customer import Customer
 from models.activity import LeadActivity
 
 from utils.timezone import get_ist_now
+from utils.phone import normalize_email
 
 logger = logging.getLogger("reinquiry_service")
 
@@ -46,20 +47,30 @@ class ReInquiryService:
     def find_existing_lead(
         db: Session,
         phone: Optional[str] = None,
-        email: Optional[str] = None
+        email: Optional[str] = None,
+        exclude_lead_ids: Optional[Any] = None
     ) -> Optional[Lead]:
         """
         Searches for an existing lead or customer.
-        Primary matching key: Phone number.
-        Secondary matching key: Email address (when available).
+
+        Matching rules (all exact, never fuzzy):
+        - Phone: normalized digits only, matched against the lead's phone and
+          whatsapp number. Requires at least 7 digits, so empty/short values
+          can never match.
+        - Email: only a syntactically valid address is used, compared
+          case-insensitively. Blank/placeholder emails never match.
+
+        ``exclude_lead_ids`` skips leads created earlier in the same import
+        batch so an upload cannot turn its own rows into re-inquiries.
         """
         clean_phone = ReInquiryService.normalize_phone(phone)
-        clean_email = (email or "").strip().lower()
+        clean_email = normalize_email(email)
+        excluded = set(exclude_lead_ids or [])
 
         # 1. Primary Match: Phone number
         if clean_phone and len(clean_phone) >= 7:
             from utils.phone import find_existing_lead_by_phone, find_existing_customer_by_phone
-            matched = find_existing_lead_by_phone(db, phone)
+            matched = find_existing_lead_by_phone(db, phone, exclude_lead_ids=excluded)
             if matched:
                 logger.info(f"Re-Inquiry match by PHONE: incoming '{phone}' matched Lead #{matched.id} ('{matched.phone}').")
                 return matched
@@ -69,17 +80,20 @@ class ReInquiryService:
             if matched_cust:
                 if matched_cust.converted_from_lead:
                     lead = db.query(Lead).filter(Lead.id == matched_cust.converted_from_lead).first()
-                    if lead:
+                    if lead and lead.id not in excluded:
                         logger.info(f"Re-Inquiry match by CUSTOMER PHONE: Customer #{matched_cust.id} linked to Lead #{lead.id}.")
                         return lead
-                elif matched_cust.lead:
+                elif matched_cust.lead and matched_cust.lead.id not in excluded:
                     return matched_cust.lead
 
-        # 2. Secondary Match: Email address
-        if clean_email and "@" in clean_email:
-            email_lead = db.query(Lead).filter(
-                func.lower(Lead.email) == clean_email
-            ).order_by(Lead.id.desc()).first()
+        # 2. Secondary Match: Email address (valid addresses only)
+        if clean_email:
+            email_query = db.query(Lead).filter(
+                func.lower(func.trim(Lead.email)) == clean_email
+            )
+            if excluded:
+                email_query = email_query.filter(~Lead.id.in_(list(excluded)))
+            email_lead = email_query.order_by(Lead.id.desc()).first()
 
             if email_lead:
                 logger.info(f"Re-Inquiry match by EMAIL: incoming '{email}' matched Lead #{email_lead.id}.")
@@ -87,15 +101,15 @@ class ReInquiryService:
 
             # Check Customer email
             cust = db.query(Customer).filter(
-                func.lower(Customer.email) == clean_email
+                func.lower(func.trim(Customer.email)) == clean_email
             ).first()
             if cust:
                 if cust.converted_from_lead:
                     lead = db.query(Lead).filter(Lead.id == cust.converted_from_lead).first()
-                    if lead:
+                    if lead and lead.id not in excluded:
                         logger.info(f"Re-Inquiry match by CUSTOMER EMAIL: Customer #{cust.id} linked to Lead #{lead.id}.")
                         return lead
-                elif cust.lead:
+                elif cust.lead and cust.lead.id not in excluded:
                     return cust.lead
 
         return None
@@ -106,7 +120,8 @@ class ReInquiryService:
         enquiry_data: Dict[str, Any],
         creator_emp_id: Optional[int] = None,
         creator_name: Optional[str] = None,
-        commit: bool = True
+        commit: bool = True,
+        exclude_lead_ids: Optional[Any] = None
     ) -> Tuple[Lead, bool, LeadEnquiry]:
         """
         Processes an incoming enquiry.
@@ -122,7 +137,12 @@ class ReInquiryService:
             src = "META"
 
         now = get_ist_now()
-        existing_lead = ReInquiryService.find_existing_lead(db, phone=raw_phone, email=raw_email)
+        existing_lead = ReInquiryService.find_existing_lead(
+            db,
+            phone=raw_phone,
+            email=raw_email,
+            exclude_lead_ids=exclude_lead_ids
+        )
 
         if existing_lead:
             # =========================================================================
