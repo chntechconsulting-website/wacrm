@@ -7,7 +7,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_, desc
+from sqlalchemy import or_, and_, desc, func
 
 from models.call_log import CallLog
 from models.integration import IntegrationConfig
@@ -314,6 +314,8 @@ class DooctiRecordingService:
         single, unused candidate is ever claimed: if the window is ambiguous nothing
         is linked rather than attaching somebody else's audio.
         """
+        if str(call.provider or "").upper() in ("MOBILE_SIM", "DIRECT_DIAL"):
+            return None
         base_url = (base_url or cls.get_configured_base_url(db)).rstrip("/")
         target_dt = call.started_at or call.created_at
         if not isinstance(target_dt, datetime.datetime):
@@ -410,6 +412,14 @@ class DooctiRecordingService:
         curr_rec = str(call.recording_url or "").strip()
         if curr_rec and "127.0.0.1" not in curr_rec and "localhost" not in curr_rec:
             return curr_rec
+
+        # Mobile SIM / direct-dial calls are recorded, if at all, by the device's
+        # own dialer and uploaded as an authorised file. They must never be
+        # matched against the DooCTI Oracle bucket by phone/time heuristics:
+        # doing so could attach somebody else's PBX recording.
+        provider_upper = str(call.provider or "").upper()
+        if provider_upper in ("MOBILE_SIM", "DIRECT_DIAL"):
+            return None
 
         # 2. Existing loopback URL (127.0.0.1/audio/...) -> normalize to Oracle Cloud storage
         target_base = (base_url or cls.get_configured_base_url(db)).rstrip("/")
@@ -571,6 +581,11 @@ class DooctiRecordingService:
                     CallLog.duration_seconds > 0,
                     CallLog.call_status.in_(["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"]),
                 ),
+                # Mobile SIM calls never have DooCTI bucket recordings.
+                or_(
+                    CallLog.provider.is_(None),
+                    func.upper(CallLog.provider).notin_(["MOBILE_SIM", "DIRECT_DIAL"]),
+                ),
             )
             .order_by(desc(CallLog.id))
             .limit(limit)
@@ -630,6 +645,11 @@ class DooctiRecordingService:
                 or_(
                     CallLog.duration_seconds > 0,
                     CallLog.call_status.in_(["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"]),
+                ),
+                # Mobile SIM calls never have DooCTI bucket recordings.
+                or_(
+                    CallLog.provider.is_(None),
+                    func.upper(CallLog.provider).notin_(["MOBILE_SIM", "DIRECT_DIAL"]),
                 ),
             )
             .order_by(desc(CallLog.id))

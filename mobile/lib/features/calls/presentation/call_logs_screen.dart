@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/doocti_call_service.dart';
+import '../../../core/services/mobile_recording_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
@@ -21,13 +23,198 @@ class CallLogsScreen extends StatefulWidget {
   State<CallLogsScreen> createState() => _CallLogsScreenState();
 }
 
-class _CallLogsScreenState extends State<CallLogsScreen> {
+class _CallLogsScreenState extends State<CallLogsScreen>
+    with WidgetsBindingObserver {
+  bool _handlingSharedRecording = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CallsProvider>().fetchCalls();
+    WidgetsBinding.instance.addObserver(this);
+    MobileRecordingService.setSharedHandler(
+      (_) => _maybeHandleSharedRecording(),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await context.read<CallsProvider>().fetchCalls();
+      if (mounted) _maybeHandleSharedRecording();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    MobileRecordingService.setSharedHandler(null);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _maybeHandleSharedRecording();
+    }
+  }
+
+  /// Offers a recording shared into WACRM from the OEM dialer / file manager.
+  Future<void> _maybeHandleSharedRecording() async {
+    if (_handlingSharedRecording || !mounted) return;
+    _handlingSharedRecording = true;
+    try {
+      final shared = await MobileRecordingService.consumeShared();
+      if (shared == null || !mounted) return;
+
+      final provider = context.read<CallsProvider>();
+      var mobileCalls = provider.calls
+          .where((call) => call.isMobileSim)
+          .take(12)
+          .toList();
+      if (mobileCalls.isEmpty) {
+        await provider.fetchCalls(showLoading: false);
+        if (!mounted) return;
+        mobileCalls = provider.calls
+            .where((call) => call.isMobileSim)
+            .take(12)
+            .toList();
+      }
+      if (mobileCalls.isEmpty) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text(
+              'Recording received',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            content: const Text(
+              'No Mobile SIM call logs were found to attach this recording to. '
+              'Make a call first, then share the recording again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      final callId = await showModalBottomSheet<int>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Attach shared recording',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textMain,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${shared.name} (${shared.sizeLabel}) — choose the Mobile SIM '
+                  'call it belongs to.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 360),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: mobileCalls.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, index) {
+                      final call = mobileCalls[index];
+                      return Material(
+                        color: AppColors.background,
+                        borderRadius: BorderRadius.circular(14),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => Navigator.pop(ctx, call.id),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.sim_card_rounded,
+                                  size: 18,
+                                  color: Color(0xFF059669),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        call.leadName ?? call.customerNumber,
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${call.customerNumber} • '
+                                        '${DateFormatter.formatDateTime(call.createdAt)}',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: AppColors.textMuted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (callId == null || !mounted) return;
+
+      final uploaded = await MobileRecordingService.attachToCall(
+        context,
+        callId: callId,
+        recording: shared,
+      );
+      if (uploaded && mounted) {
+        await provider.fetchCalls(showLoading: false);
+      }
+    } finally {
+      _handlingSharedRecording = false;
+    }
+  }
+
+  Future<void> _attachRecording(int callId) async {
+    final uploaded = await MobileRecordingService.attachToCall(
+      context,
+      callId: callId,
+    );
+    if (uploaded && mounted) {
+      await context.read<CallsProvider>().fetchCalls(showLoading: false);
+    }
   }
 
   void _callNumber(String phone, {int? leadId, String? contactName}) {
@@ -53,7 +240,9 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setModalState) {
           return Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            ),
             child: Container(
               decoration: const BoxDecoration(
                 color: AppColors.card,
@@ -78,7 +267,11 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
                     const SizedBox(height: 16),
                     const Text(
                       'Log Phone Call into CRM',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textMain),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textMain,
+                      ),
                     ),
                     const SizedBox(height: 14),
                     WacrmTextField(
@@ -95,15 +288,31 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Call Status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                              const Text(
+                                'Call Status',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                               const SizedBox(height: 6),
                               DropdownButtonFormField<String>(
                                 value: callStatus,
-                                items: ['ANSWERED', 'MISSED', 'BUSY', 'NO_ANSWER'].map((s) {
-                                  return DropdownMenuItem(value: s, child: Text(s));
-                                }).toList(),
+                                items:
+                                    [
+                                      'ANSWERED',
+                                      'MISSED',
+                                      'BUSY',
+                                      'NO_ANSWER',
+                                    ].map((s) {
+                                      return DropdownMenuItem(
+                                        value: s,
+                                        child: Text(s),
+                                      );
+                                    }).toList(),
                                 onChanged: (val) {
-                                  if (val != null) setModalState(() => callStatus = val);
+                                  if (val != null)
+                                    setModalState(() => callStatus = val);
                                 },
                               ),
                             ],
@@ -123,7 +332,8 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
                     WacrmTextField(
                       controller: notesController,
                       label: 'Call Discussion Summary',
-                      hintText: 'Discussed client requirements, scheduled demo...',
+                      hintText:
+                          'Discussed client requirements, scheduled demo...',
                       maxLines: 2,
                     ),
                     const SizedBox(height: 20),
@@ -135,10 +345,13 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
                         if (phoneController.text.trim().isEmpty) return;
 
                         setModalState(() => isSubmitting = true);
-                        final success = await context.read<CallsProvider>().logManualCall(
+                        final success = await context
+                            .read<CallsProvider>()
+                            .logManualCall(
                               customerNumber: phoneController.text.trim(),
                               callStatus: callStatus,
-                              durationSeconds: int.tryParse(durationController.text) ?? 60,
+                              durationSeconds:
+                                  int.tryParse(durationController.text) ?? 60,
                               notes: notesController.text.trim(),
                             );
                         setModalState(() => isSubmitting = false);
@@ -154,6 +367,40 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _recordingAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF5),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFD1FAE5)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: const Color(0xFF059669)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF047857),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -186,122 +433,171 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
         backgroundColor: AppColors.primary,
         foregroundColor: AppColors.white,
         icon: const Icon(Icons.add_call),
-        label: const Text('Log Call', style: TextStyle(fontWeight: FontWeight.w700)),
+        label: const Text(
+          'Log Call',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
         onPressed: _showLogManualCallDialog,
       ),
       body: provider.isLoading && calls.isEmpty
           ? const LoadingIndicator(message: 'Loading call records...')
           : provider.errorMessage != null && calls.isEmpty
-              ? ErrorView(
-                  message: provider.errorMessage!,
-                  onRetry: () => provider.fetchCalls(),
-                )
-              : calls.isEmpty
-                  ? EmptyState(
-                      title: 'No Call Logs Found',
-                      subtitle: 'Calls via DooCTI, mobile SIM or manual phone calls will be logged here.',
-                      pingoPose: PingoPoses.inspect,
-                      actionLabel: 'Log Call',
-                      onAction: _showLogManualCallDialog,
-                    )
-                  : RefreshIndicator(
-                      color: AppColors.primary,
-                      onRefresh: () => provider.fetchCalls(showLoading: false),
-                      child: ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-                        itemCount: calls.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final call = calls[index];
-                          final isAnswered = call.callStatus == 'ANSWERED' || call.callStatus == 'COMPLETED';
+          ? ErrorView(
+              message: provider.errorMessage!,
+              onRetry: () => provider.fetchCalls(),
+            )
+          : calls.isEmpty
+          ? EmptyState(
+              title: 'No Call Logs Found',
+              subtitle: 'Calls via DooCTI, mobile SIM or manual phone calls will be logged here.',
+              pingoPose: PingoPoses.inspect,
+              actionLabel: 'Log Call',
+              onAction: _showLogManualCallDialog,
+            )
+          : RefreshIndicator(
+              color: AppColors.primary,
+              onRefresh: () => provider.fetchCalls(showLoading: false),
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                itemCount: calls.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final call = calls[index];
+                  final isAnswered =
+                      call.callStatus == 'ANSWERED' ||
+                      call.callStatus == 'COMPLETED';
 
-                          return WacrmCard(
-                            padding: const EdgeInsets.all(14),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: isAnswered ? AppColors.successLight : AppColors.dangerLight,
-                                    borderRadius: BorderRadius.circular(10),
+                  return WacrmCard(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: isAnswered
+                                ? AppColors.successLight
+                                : AppColors.dangerLight,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            call.callType == 'INBOUND'
+                                ? Icons.call_received_rounded
+                                : Icons.call_made_rounded,
+                            color: isAnswered
+                                ? AppColors.success
+                                : AppColors.danger,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      call.leadName ?? call.customerNumber,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.textMain,
+                                      ),
+                                    ),
                                   ),
-                                  child: Icon(
-                                    call.callType == 'INBOUND'
-                                        ? Icons.call_received_rounded
-                                        : Icons.call_made_rounded,
-                                    color: isAnswered ? AppColors.success : AppColors.danger,
-                                    size: 20,
-                                  ),
+                                  WacrmBadge.status(call.callStatus),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                '${call.customerNumber} • ${call.formattedDuration}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textMuted,
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              call.leadName ?? call.customerNumber,
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w700,
-                                                color: AppColors.textMain,
-                                              ),
-                                            ),
-                                          ),
-                                          WacrmBadge.status(call.callStatus),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        '${call.customerNumber} • ${call.formattedDuration}',
-                                        style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        DateFormatter.formatDateTime(call.createdAt),
-                                        style: const TextStyle(fontSize: 11, color: AppColors.textLight),
-                                      ),
-                                      if (call.isMobileSim) ...[
-                                        const SizedBox(height: 4),
-                                        Row(
-                                          children: [
-                                            const Icon(
-                                              Icons.sim_card_rounded,
-                                              size: 11,
-                                              color: Color(0xFF059669),
-                                            ),
-                                            const SizedBox(width: 4),
-                                            Flexible(
-                                              child: Text(
-                                                '${call.simLabel ?? 'Mobile SIM'}'
-                                                '${call.hasRecording ? ' • Recording linked' : ' • Recording unavailable'}',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 10.5,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: Color(0xFF059669),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                DateFormatter.formatDateTime(call.createdAt),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textLight,
+                                ),
+                              ),
+                              if (call.isMobileSim) ...[
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.sim_card_rounded,
+                                      size: 11,
+                                      color: Color(0xFF059669),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        '${call.simLabel ?? 'Mobile SIM'}'
+                                        '${call.hasRecording ? ' • Recording attached' : ' • Recording unavailable'}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF059669),
                                         ),
-                                      ],
-                                    ],
-                                  ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                IconButton(
-                                  icon: const Icon(Icons.phone_rounded, color: AppColors.primary, size: 20),
-                                  onPressed: () => _callNumber(call.customerNumber, leadId: call.leadId, contactName: call.leadName),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 4,
+                                  children: [
+                                    if (call.hasRecording)
+                                      _recordingAction(
+                                        icon: Icons.play_arrow_rounded,
+                                        label: 'Play',
+                                        onTap: () =>
+                                            MobileRecordingService.play(
+                                              context,
+                                              call.id,
+                                            ),
+                                      ),
+                                    _recordingAction(
+                                      icon: call.hasRecording
+                                          ? Icons.swap_horiz_rounded
+                                          : Icons.upload_file_rounded,
+                                      label: call.hasRecording
+                                          ? 'Replace'
+                                          : 'Attach recording',
+                                      onTap: () => _attachRecording(call.id),
+                                    ),
+                                  ],
                                 ),
                               ],
-                            ),
-                          );
-                        },
-                      ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.phone_rounded,
+                            color: AppColors.primary,
+                            size: 20,
+                          ),
+                          onPressed: () => _callNumber(
+                            call.customerNumber,
+                            leadId: call.leadId,
+                            contactName: call.leadName,
+                          ),
+                        ),
+                      ],
                     ),
+                  );
+                },
+              ),
+            ),
     );
   }
 }

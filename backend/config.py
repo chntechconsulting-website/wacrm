@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     IVR_BASE_URL: str = os.getenv("IVR_BASE_URL", "")
 
     UPLOAD_DIR: str = "uploads"
+    # Public origin used to turn stored media paths such as
+    # /uploads/recordings/... into absolute URLs for the web and mobile apps.
+    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "https://www.wapluscrm.in")
 
     class Config:
         case_sensitive = True

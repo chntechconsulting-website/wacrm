@@ -54,6 +54,17 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!--
+              Lets an employee share a call-recording file from the OEM dialer
+              recorder / file manager into WACRM. The app only stores the file
+              the user explicitly shares; it never captures call audio itself.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="audio/*"/>
+            </intent-filter>
         </activity>
         <meta-data
             android:name="flutterEmbedding"

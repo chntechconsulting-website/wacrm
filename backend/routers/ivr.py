@@ -2,8 +2,20 @@ import os
 import json
 import re
 import time
+import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
+from pathlib import Path
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, and_, func, case
@@ -38,6 +50,88 @@ router = APIRouter(prefix="/ivr", tags=["IVR Telephony Integration"])
 _RECORDING_LOOKUP_CACHE: Dict[int, tuple] = {}
 _RECORDING_LOOKUP_RETRY_SECONDS = 30
 _RECENT_CALL_MATCH_WINDOW_SECONDS = 30 * 60
+
+# Mobile SIM recordings are uploaded by the employee from the OEM dialer
+# recorder (file picker or Android share sheet). The CRM never captures call
+# audio itself, so this endpoint only accepts an already-authorised file.
+MAX_RECORDING_BYTES = 25 * 1024 * 1024
+_RECORDING_MANAGED_PREFIX = "recordings"
+_RECORDING_EXTENSIONS = {
+    ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".amr", ".3gp",
+    ".caf", ".webm", ".mp4",
+}
+_RECORDING_MIME_TYPES = {
+    "audio/mpeg", "audio/mp3", "audio/mp4", "audio/m4a", "audio/aac",
+    "audio/x-aac", "audio/wav", "audio/x-wav", "audio/wave", "audio/ogg",
+    "audio/opus", "audio/amr", "audio/3gpp", "audio/3gpp2", "audio/caf",
+    "audio/webm", "video/3gpp",
+}
+
+
+def _absolute_media_url(raw_url: Optional[str]) -> Optional[str]:
+    """Turns a locally stored /uploads/... path into a public absolute URL."""
+    if not raw_url:
+        return None
+    value = str(raw_url).strip()
+    if not value:
+        return None
+    if value.startswith("/"):
+        base = (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+        return f"{base}{value}" if base else value
+    return value
+
+
+def _looks_like_audio(head: bytes) -> bool:
+    """Cheap signature check so an arbitrary file cannot be stored as audio."""
+    if len(head) < 12:
+        return False
+    if head.startswith(b"ID3"):
+        return True
+    # MPEG/AAC ADTS frame sync
+    if head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        return True
+    if head.startswith(b"RIFF") and head[8:12] == b"WAVE":
+        return True
+    if head[4:8] == b"ftyp":
+        return True
+    if head.startswith(b"OggS"):
+        return True
+    if head.startswith(b"#!AMR"):
+        return True
+    if head.startswith(b"FORM") and head[8:12] in (b"AIFF", b"AIFC"):
+        return True
+    if head.startswith(b"\x1aE\xdf\xa3"):
+        return True
+    if head.startswith(b"caff"):
+        return True
+    return False
+
+
+def _safe_recording_extension(filename: Optional[str], content_type: Optional[str]) -> Optional[str]:
+    ext = Path(filename or "").suffix.lower()
+    if ext in _RECORDING_EXTENSIONS:
+        return ext
+    mime = (content_type or "").split(";")[0].strip().lower()
+    mapping = {
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/m4a": ".m4a",
+        "audio/aac": ".aac",
+        "audio/x-aac": ".aac",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+        "audio/wave": ".wav",
+        "audio/ogg": ".ogg",
+        "audio/opus": ".opus",
+        "audio/amr": ".amr",
+        "audio/3gpp": ".3gp",
+        "video/3gpp": ".3gp",
+        "audio/3gpp2": ".3gp",
+        "audio/caf": ".caf",
+        "audio/webm": ".webm",
+    }
+    return mapping.get(mime)
 
 
 def _should_attempt_recording_lookup(call: CallLog) -> bool:
@@ -164,7 +258,7 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
             cust_phone = raw_to or (call.lead.phone if call.lead else "")
             emp_phone = raw_from or (call.employee.phone if call.employee else "")
 
-    resolved_rec = resolve_recording_url(call.recording_url, db)
+    resolved_rec = _absolute_media_url(resolve_recording_url(call.recording_url, db))
     status_upper = (call.call_status or "").upper()
     duration = call.duration_seconds or 0
     is_connected = status_upper in ["ANSWERED", "CONNECTED", "COMPLETED"]
@@ -549,6 +643,140 @@ def log_manual_call_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to log call: {str(e)}")
+
+
+@router.post("/calls/{call_id}/recording", response_model=CallLogResponse)
+async def upload_mobile_call_recording(
+    call_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Attaches an employee-supplied recording to a Mobile SIM / direct-dial call.
+
+    The CRM never records cellular audio itself. The file is expected to come
+    from the device's own dialer (OEM call-recording feature), selected through
+    the Android file picker or share sheet. A file is only linked after it has
+    been size-checked and its audio signature verified.
+    """
+    if call_id.isdigit():
+        call = db.query(CallLog).filter(CallLog.id == int(call_id)).first()
+    else:
+        call = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+
+    if not call:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Call log record '{call_id}' not found.",
+        )
+
+    authorized_emp_ids = get_authorized_call_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if call.employee_id is None or call.employee_id not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: you cannot attach a recording to this call.",
+            )
+
+    provider_upper = str(call.provider or "").upper()
+    if provider_upper not in ("MOBILE_SIM", "DIRECT_DIAL"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Recordings can only be attached to Mobile SIM or direct-dial "
+                "calls. DooCTI recordings are resolved automatically."
+            ),
+        )
+
+    ext = _safe_recording_extension(file.filename, file.content_type)
+    if not ext:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unsupported recording format. Use MP3, M4A, AAC, WAV, OGG, "
+                "OPUS, AMR, 3GP, CAF, WEBM or MP4."
+            ),
+        )
+
+    upload_root = (Path(settings.UPLOAD_DIR) / _RECORDING_MANAGED_PREFIX).resolve()
+    target_dir = (upload_root / str(call.id)).resolve()
+    if upload_root not in target_dir.parents:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid call id.")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{uuid.uuid4().hex}{ext}"
+
+    total = 0
+    head = b""
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_RECORDING_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Recording is larger than the 25 MB limit.",
+                    )
+                if len(head) < 12:
+                    head += chunk[: 12 - len(head)]
+                out.write(chunk)
+
+        if total < 1024:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Recording file is empty or too small to be valid audio.",
+            )
+        if not _looks_like_audio(head):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected file is not a supported audio recording.",
+            )
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to store recording: {exc}",
+        )
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    # Replace a previously attached managed file; never touch external URLs.
+    old_url = str(call.recording_url or "")
+    marker = "/uploads/"
+    marker_index = old_url.find(marker)
+    if marker_index >= 0:
+        old_rel = old_url[marker_index + len(marker):]
+        old_path = (Path(settings.UPLOAD_DIR) / old_rel).resolve()
+        upload_root = (Path(settings.UPLOAD_DIR) / _RECORDING_MANAGED_PREFIX).resolve()
+        if upload_root in old_path.parents and old_path.is_file():
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
+
+    call.recording_url = f"/uploads/{_RECORDING_MANAGED_PREFIX}/{call.id}/{target.name}"
+    try:
+        db.commit()
+        db.refresh(call)
+    except Exception as exc:
+        db.rollback()
+        target.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save recording link: {exc}",
+        )
+
+    return build_call_log_response(call, db)
+
 
 @router.post("/calls/{call_id}/ai-summary", response_model=CallLogResponse)
 def generate_call_ai_summary(
@@ -1063,7 +1291,7 @@ def stream_call_recording(
                 detail="Access denied: You do not have permission to access this call recording."
             )
 
-    rec_url = resolve_recording_url(call.recording_url, db)
+    rec_url = _absolute_media_url(resolve_recording_url(call.recording_url, db))
     if not rec_url and ((call.duration_seconds and call.duration_seconds > 0) or (call.call_status or "").upper() in ["ANSWERED", "CONNECTED", "COMPLETED"]):
         from services.doocti_recording_service import DooctiRecordingService
         try:

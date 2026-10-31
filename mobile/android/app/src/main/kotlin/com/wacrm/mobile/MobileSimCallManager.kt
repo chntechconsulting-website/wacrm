@@ -6,11 +6,14 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.CallLog
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
@@ -22,6 +25,8 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,9 +57,16 @@ class MobileSimCallManager(
         private const val PREFS = "wacrm_mobile_sim_call"
         private const val KEY_PENDING_RESULT = "pending_result"
         private const val KEY_ACTIVE_CALL = "active_call"
+        private const val KEY_SHARED_RECORDING = "shared_recording"
         private const val FINALIZE_DELAY_MS = 1_200L
         private const val OFFHOOK_WATCHDOG_MS = 120_000L
         private const val STALE_ACTIVE_CALL_MS = 24 * 60 * 60 * 1000L
+        private const val PICK_RECORDING_REQUEST_CODE = 4918
+        private const val MAX_RECORDING_BYTES = 25L * 1024 * 1024
+        private val RECORDING_EXTENSIONS = setOf(
+            ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".amr",
+            ".3gp", ".caf", ".webm", ".mp4",
+        )
     }
 
     private val channel = MethodChannel(messenger, CHANNEL)
@@ -62,6 +74,9 @@ class MobileSimCallManager(
     private val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var pendingRecordingPickResult: MethodChannel.Result? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var playbackTimeout: Runnable? = null
 
     private var activeCall: ActiveCall? = null
     private var phoneStateListener: PhoneStateListener? = null
@@ -106,6 +121,10 @@ class MobileSimCallManager(
             "openAppSettings" -> openAppSettings(result)
             "consumePendingResult" -> consumePendingResult(result)
             "clearPendingResult" -> clearPendingResult(call, result)
+            "pickRecordingFile" -> pickRecordingFile(result)
+            "consumeSharedRecordingFile" -> consumeSharedRecordingFile(result)
+            "playRecording" -> playRecording(call, result)
+            "stopRecordingPlayback" -> stopRecordingPlayback(result)
             else -> result.notImplemented()
         }
     }
@@ -125,9 +144,73 @@ class MobileSimCallManager(
         unregisterCallStateListener()
         cancelWatchdog()
         cancelFinalize()
+        releaseMediaPlayer()
         handler.removeCallbacksAndMessages(null)
         channel.setMethodCallHandler(null)
         pendingPermissionResult = null
+        pendingRecordingPickResult = null
+    }
+
+    /**
+     * Receives the file selected in the system document picker. The file is
+     * copied into the app cache immediately, so the returned content URI does
+     * not have to stay readable for the lifetime of the upload.
+     */
+    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode != PICK_RECORDING_REQUEST_CODE) return false
+        val pending = pendingRecordingPickResult ?: return true
+        pendingRecordingPickResult = null
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            pending.success(null)
+            return true
+        }
+        try {
+            pending.success(copyRecordingToCache(uri))
+        } catch (error: Exception) {
+            pending.error("RECORDING_PICK_FAILED", error.message, null)
+        }
+        return true
+    }
+
+    /**
+     * Handles "Share -> WACRM" from the OEM recorder / file manager. The shared
+     * audio file is cached and offered to the user as an attachable recording.
+     */
+    @Suppress("DEPRECATION")
+    fun handleShareIntent(intent: Intent?): Boolean {
+        if (intent == null) return false
+        val action = intent.action
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
+            return false
+        }
+        val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (action == Intent.ACTION_SEND_MULTIPLE) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)?.firstOrNull()
+            } else {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            }
+        } else {
+            if (action == Intent.ACTION_SEND_MULTIPLE) {
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.firstOrNull()
+            } else {
+                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+        }
+        if (uri == null) return false
+        return try {
+            val info = copyRecordingToCache(uri)
+            prefs.edit()
+                .putString(KEY_SHARED_RECORDING, JSONObject(info).toString())
+                .apply()
+            try {
+                channel.invokeMethod("recordingShared", info)
+            } catch (_: Exception) {
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     // ------------------------------------------------------------------
@@ -199,6 +282,290 @@ class MobileSimCallManager(
         } catch (error: Exception) {
             result.error("SETTINGS_FAILED", error.message, null)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Authorised recording import / playback
+    // ------------------------------------------------------------------
+
+    private fun pickRecordingFile(result: MethodChannel.Result) {
+        if (pendingRecordingPickResult != null) {
+            result.error("PICK_IN_PROGRESS", "A recording picker is already open.", null)
+            return
+        }
+        pendingRecordingPickResult = result
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(
+                    "audio/mpeg", "audio/mp4", "audio/aac", "audio/wav",
+                    "audio/ogg", "audio/opus", "audio/amr", "audio/3gpp",
+                ),
+            )
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            activity.startActivityForResult(intent, PICK_RECORDING_REQUEST_CODE)
+        } catch (error: Exception) {
+            pendingRecordingPickResult = null
+            result.error("PICKER_UNAVAILABLE", error.message, null)
+        }
+    }
+
+    private fun copyRecordingToCache(uri: Uri): Map<String, Any> {
+        val resolver = activity.contentResolver
+        var displayName = "recording"
+        var reportedSize = -1L
+        resolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                    displayName = cursor.getString(nameIndex) ?: displayName
+                }
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                    reportedSize = cursor.getLong(sizeIndex)
+                }
+            }
+        }
+        if (reportedSize > MAX_RECORDING_BYTES) {
+            throw IllegalArgumentException("Recording is larger than the 25 MB limit.")
+        }
+
+        val mimeType = resolver.getType(uri).orEmpty()
+        var extension = displayName.substringAfterLast('.', "").lowercase()
+        if (extension.isNotEmpty()) extension = ".$extension"
+        if (extension !in RECORDING_EXTENSIONS) {
+            extension = extensionForMime(mimeType).orEmpty()
+        }
+        if (extension.isEmpty()) {
+            throw IllegalArgumentException(
+                "Unsupported recording format. Use MP3, M4A, AAC, WAV, OGG, " +
+                    "OPUS, AMR, 3GP, CAF, WEBM or MP4.",
+            )
+        }
+
+        val directory = File(activity.cacheDir, "recording_uploads").apply { mkdirs() }
+        val safeBase = displayName
+            .substringBeforeLast('.', displayName)
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .take(40)
+            .ifBlank { "recording" }
+        val target = File(directory, "${System.currentTimeMillis()}_$safeBase$extension")
+
+        var total = 0L
+        try {
+            val input = resolver.openInputStream(uri)
+                ?: throw IllegalArgumentException("Could not read the selected file.")
+            input.use { source ->
+                FileOutputStream(target).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read <= 0) break
+                        total += read
+                        if (total > MAX_RECORDING_BYTES) {
+                            throw IllegalArgumentException(
+                                "Recording is larger than the 25 MB limit.",
+                            )
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            target.delete()
+            throw error
+        }
+
+        if (total < 1024) {
+            target.delete()
+            throw IllegalArgumentException("The selected file is empty or too small.")
+        }
+
+        val durationMs = try {
+            verifyPlayableAudio(target)
+        } catch (error: Exception) {
+            target.delete()
+            throw IllegalArgumentException(
+                error.message ?: "The selected file is not a playable audio recording.",
+            )
+        }
+
+        return mapOf(
+            "path" to target.absolutePath,
+            "name" to displayName,
+            "size" to total,
+            "mimeType" to mimeType,
+            "durationMs" to durationMs,
+        )
+    }
+
+    /**
+     * Confirms the picked file decodes as audio before it is uploaded. A valid
+     * extension alone is not enough: the CRM must never mark a call as recorded
+     * because of a renamed or corrupt file.
+     */
+    private fun verifyPlayableAudio(file: File): Long {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            val hasAudio = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO,
+            )
+            if (hasAudio != null && hasAudio.equals("no", ignoreCase = true)) {
+                throw IllegalArgumentException("The selected file has no audio track.")
+            }
+            val duration = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_DURATION,
+            )?.toLongOrNull() ?: 0L
+            if (duration <= 0L) {
+                throw IllegalArgumentException(
+                    "The selected file could not be decoded as playable audio.",
+                )
+            }
+            return duration
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun extensionForMime(mimeType: String): String? {
+        return when (mimeType.substringBefore(';').trim().lowercase()) {
+            "audio/mpeg", "audio/mp3" -> ".mp3"
+            "audio/mp4", "audio/m4a", "audio/x-m4a" -> ".m4a"
+            "audio/aac", "audio/x-aac" -> ".aac"
+            "audio/wav", "audio/x-wav", "audio/wave" -> ".wav"
+            "audio/ogg" -> ".ogg"
+            "audio/opus" -> ".opus"
+            "audio/amr" -> ".amr"
+            "audio/3gpp", "video/3gpp", "audio/3gpp2" -> ".3gp"
+            "audio/caf", "audio/x-caf" -> ".caf"
+            "audio/webm" -> ".webm"
+            else -> null
+        }
+    }
+
+    private fun consumeSharedRecordingFile(result: MethodChannel.Result) {
+        val raw = prefs.getString(KEY_SHARED_RECORDING, null)
+        if (raw.isNullOrBlank()) {
+            result.success(null)
+            return
+        }
+        prefs.edit().remove(KEY_SHARED_RECORDING).apply()
+        try {
+            val json = JSONObject(raw)
+            val path = json.optString("path")
+            val file = File(path)
+            if (!file.isFile) {
+                result.success(null)
+                return
+            }
+            result.success(
+                mapOf(
+                    "path" to file.absolutePath,
+                    "name" to json.optString("name", file.name),
+                    "size" to file.length(),
+                    "mimeType" to json.optString("mimeType", "audio/*"),
+                ),
+            )
+        } catch (_: Exception) {
+            result.success(null)
+        }
+    }
+
+    private fun playRecording(call: MethodCall, result: MethodChannel.Result) {
+        val url = call.argument<String>("url")?.trim().orEmpty()
+        if (url.isEmpty()) {
+            result.error("INVALID_URL", "A recording URL is required.", null)
+            return
+        }
+        val token = call.argument<String>("token")
+        releaseMediaPlayer()
+
+        var finished = false
+        fun complete(errorCode: String? = null, message: String? = null) {
+            if (finished) return
+            finished = true
+            playbackTimeout?.let { handler.removeCallbacks(it) }
+            playbackTimeout = null
+            if (errorCode != null) {
+                result.error(errorCode, message, null)
+            } else {
+                result.success(true)
+            }
+        }
+
+        try {
+            val player = MediaPlayer()
+            mediaPlayer = player
+            val headers = if (token.isNullOrBlank()) {
+                emptyMap()
+            } else {
+                mapOf("Authorization" to "Bearer $token")
+            }
+            player.setDataSource(activity, Uri.parse(url), headers)
+            player.setOnPreparedListener {
+                it.start()
+                complete()
+            }
+            player.setOnCompletionListener { releaseMediaPlayer() }
+            player.setOnErrorListener { _, what, extra ->
+                releaseMediaPlayer()
+                complete(
+                    "PLAYBACK_FAILED",
+                    "Unable to play this recording ($what/$extra).",
+                )
+                true
+            }
+            player.prepareAsync()
+
+            val timeout = Runnable {
+                releaseMediaPlayer()
+                complete("PLAYBACK_TIMEOUT", "Recording playback timed out.")
+            }
+            playbackTimeout = timeout
+            handler.postDelayed(timeout, 20_000L)
+        } catch (error: Exception) {
+            releaseMediaPlayer()
+            complete("PLAYBACK_FAILED", error.message ?: "Unable to play recording.")
+        }
+    }
+
+    private fun stopRecordingPlayback(result: MethodChannel.Result) {
+        releaseMediaPlayer()
+        result.success(true)
+    }
+
+    private fun releaseMediaPlayer() {
+        playbackTimeout?.let { handler.removeCallbacks(it) }
+        playbackTimeout = null
+        mediaPlayer?.let { player ->
+            try {
+                if (player.isPlaying) player.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                player.reset()
+            } catch (_: Exception) {
+            }
+            try {
+                player.release()
+            } catch (_: Exception) {
+            }
+        }
+        mediaPlayer = null
     }
 
     // ------------------------------------------------------------------

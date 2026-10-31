@@ -310,6 +310,57 @@ class MobileSimCallService {
     }
   }
 
+  /// Opens the Android document picker for an audio file. Returns null when
+  /// the employee cancels.
+  static Future<Map<String, dynamic>?> pickRecordingFile() async {
+    final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'pickRecordingFile',
+    );
+    if (response == null || response.isEmpty) return null;
+    return Map<String, dynamic>.from(response);
+  }
+
+  /// Returns an audio file shared into WACRM from the OEM recorder or file
+  /// manager, then clears it so the same file is not offered twice.
+  static Future<Map<String, dynamic>?> consumeSharedRecordingFile() async {
+    final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'consumeSharedRecordingFile',
+    );
+    if (response == null || response.isEmpty) return null;
+    return Map<String, dynamic>.from(response);
+  }
+
+  /// Called when Android delivers a shared recording while the app is open.
+  static void setSharedRecordingHandler(
+    void Function(Map<String, dynamic> recording)? handler,
+  ) {
+    if (handler == null) {
+      _channel.setMethodCallHandler(null);
+      return;
+    }
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'recordingShared' && call.arguments is Map) {
+        handler(Map<String, dynamic>.from(call.arguments as Map));
+      }
+      return null;
+    });
+  }
+
+  /// Plays an authenticated recording through the device's media player.
+  static Future<void> playRecording({
+    required String url,
+    required String token,
+  }) async {
+    await _channel.invokeMethod<bool>('playRecording', {
+      'url': url,
+      'token': token,
+    });
+  }
+
+  static Future<void> stopRecordingPlayback() async {
+    await _channel.invokeMethod<bool>('stopRecordingPlayback');
+  }
+
   static String newCallId() {
     final random = Random.secure();
     final suffix = random.nextInt(1 << 32).toRadixString(16).padLeft(8, '0');

@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+
 import 'package:http/http.dart' as http;
+
 import 'api_exceptions.dart';
 import 'token_storage.dart';
 
@@ -18,9 +20,7 @@ class ApiClient {
   OnUnauthorizedCallback? onUnauthorized;
 
   Future<Map<String, String>> _getHeaders({bool isMultipart = false}) async {
-    final headers = <String, String>{
-      'Accept': 'application/json',
-    };
+    final headers = <String, String>{'Accept': 'application/json'};
     if (!isMultipart) {
       headers['Content-Type'] = 'application/json';
     }
@@ -40,7 +40,8 @@ class ApiClient {
   }) {
     final statusCode = response.statusCode;
     final requestUrl = url ?? response.request?.url.toString() ?? '';
-    final isExcludedFromLogout = isLoginEndpoint ||
+    final isExcludedFromLogout =
+        isLoginEndpoint ||
         requestUrl.contains('/auth/login') ||
         requestUrl.contains('/auth/token') ||
         requestUrl.contains('/doocti/') ||
@@ -96,7 +97,10 @@ class ApiClient {
     }
   }
 
-  Future<dynamic> get(String url, {Map<String, dynamic>? queryParameters}) async {
+  Future<dynamic> get(
+    String url, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
     try {
       Uri uri = Uri.parse(url);
       if (queryParameters != null && queryParameters.isNotEmpty) {
@@ -110,7 +114,9 @@ class ApiClient {
       }
 
       final headers = await _getHeaders();
-      final response = await _httpClient.get(uri, headers: headers).timeout(_timeout);
+      final response = await _httpClient
+          .get(uri, headers: headers)
+          .timeout(_timeout);
       return _processResponse(response, url: url);
     } on SocketException {
       throw NetworkException();
@@ -125,7 +131,8 @@ class ApiClient {
     try {
       final uri = Uri.parse(url);
       final headers = await _getHeaders();
-      final isLogin = url.contains('/auth/login') || url.contains('/auth/token');
+      final isLogin =
+          url.contains('/auth/login') || url.contains('/auth/token');
 
       final encodedBody = body != null ? jsonEncode(body) : null;
       final response = await _httpClient
@@ -133,6 +140,38 @@ class ApiClient {
           .timeout(_timeout);
 
       return _processResponse(response, isLoginEndpoint: isLogin, url: url);
+    } on SocketException {
+      throw NetworkException();
+    } on http.ClientException {
+      throw NetworkException();
+    } on TimeoutException {
+      throw TimeoutException();
+    }
+  }
+
+  /// Uploads a local file as multipart/form-data (used for authorised call
+  /// recordings). The bearer token is sent in the header, not the URL.
+  Future<dynamic> postMultipart(
+    String url, {
+    required File file,
+    String field = 'file',
+    Map<String, String>? fields,
+  }) async {
+    try {
+      final uri = Uri.parse(url);
+      final headers = await _getHeaders(isMultipart: true);
+      final request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(headers);
+      if (fields != null && fields.isNotEmpty) {
+        request.fields.addAll(fields);
+      }
+      request.files.add(await http.MultipartFile.fromPath(field, file.path));
+
+      final streamed = await _httpClient
+          .send(request)
+          .timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed);
+      return _processResponse(response, url: url);
     } on SocketException {
       throw NetworkException();
     } on http.ClientException {
@@ -166,7 +205,9 @@ class ApiClient {
     try {
       final uri = Uri.parse(url);
       final headers = await _getHeaders();
-      final response = await _httpClient.delete(uri, headers: headers).timeout(_timeout);
+      final response = await _httpClient
+          .delete(uri, headers: headers)
+          .timeout(_timeout);
       return _processResponse(response, url: url);
     } on SocketException {
       throw NetworkException();
@@ -181,13 +222,18 @@ class ApiClient {
     try {
       final uri = Uri.parse(url);
       final headers = await _getHeaders();
-      final response = await _httpClient.get(uri, headers: headers).timeout(const Duration(seconds: 40));
+      final response = await _httpClient
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 40));
 
       if (response.statusCode == 200) {
         return response.bodyBytes;
       } else {
         _processResponse(response, url: url);
-        throw ApiException('Failed to download document', statusCode: response.statusCode);
+        throw ApiException(
+          'Failed to download document',
+          statusCode: response.statusCode,
+        );
       }
     } on SocketException {
       throw NetworkException();
