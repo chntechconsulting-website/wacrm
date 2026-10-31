@@ -439,6 +439,15 @@ async def startup_db_client():
     except Exception as ex:
         print(f"Failed to start call session reconciler: {ex}")
 
+    # Launch DooCTI CDR reconciliation (corrects ring-time shown as talk time)
+    try:
+        import asyncio
+        from services.call_sync_service import start_cdr_reconcile_scheduler
+        asyncio.create_task(start_cdr_reconcile_scheduler(interval_seconds=1800, days_back=7))
+        print("CDR reconciliation scheduler launched.")
+    except Exception as ex:
+        print(f"Failed to start CDR reconciliation scheduler: {ex}")
+
     # Seed initial Admin, Manager, and Employee users if not existing
     db = SessionLocal()
     try:

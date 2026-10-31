@@ -21,7 +21,7 @@ provider's own status/duration when it finally arrives.
 
 import datetime
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, asc, desc, or_
 
@@ -231,6 +231,245 @@ def recover_terminal_calls_with_recordings(
         "dry_run": dry_run,
         "calls": recovered,
     }
+
+
+UNANSWERED_CDR_STATUSES = {
+    "NOANSWER",
+    "NO ANSWER",
+    "NO_ANSWER",
+    "MISSED",
+    "BUSY",
+    "FAILED",
+    "CANCEL",
+    "CANCELLED",
+    "CANCELED",
+    "ABANDON",
+    "ABANDONED",
+}
+
+_ZERO_ANSWER_TIMES = {
+    "",
+    "0000-00-00 00:00:00",
+    "0000-00-00",
+    "0000-00-00T00:00:00",
+    "null",
+    "none",
+}
+
+
+def _hms_to_seconds(value) -> Optional[int]:
+    """Parses DooCTI's ``HH:MM:SS`` talk time (also accepts plain seconds)."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    parts = text.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        nums = [int(float(p)) for p in parts]
+    except (TypeError, ValueError):
+        return None
+    if len(nums) == 3:
+        return nums[0] * 3600 + nums[1] * 60 + nums[2]
+    return nums[0] * 60 + nums[1]
+
+
+def _parse_cdr_datetime(value) -> Optional[datetime.datetime]:
+    text = str(value or "").strip()
+    if text.lower() in _ZERO_ANSWER_TIMES:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(text[:19], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _cdr_says_unanswered(row: Dict[str, Any]) -> bool:
+    """
+    True only when DooCTI's own CDR says the call never connected.
+
+    Requires BOTH a non-answered status and a zero talk time. If either signal
+    is missing or ambiguous the row is left alone.
+    """
+    status = (
+        str(row.get("status") or "").strip().upper().replace("_", " ").replace("-", " ")
+    )
+    if status not in UNANSWERED_CDR_STATUSES:
+        return False
+
+    talk = _hms_to_seconds(row.get("talk_times"))
+    if talk is None:
+        talk = _hms_to_seconds(row.get("talk_time"))
+    if talk is None or talk > 0:
+        return False
+
+    answer_raw = str(row.get("answer_time") or "").strip()
+    if answer_raw and answer_raw.lower() not in _ZERO_ANSWER_TIMES:
+        return False
+    return True
+
+
+def reconcile_unanswered_calls_with_cdr(
+    db,
+    days_back: int = 7,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """
+    Corrects call rows whose CRM duration is really ring time.
+
+    DooCTI's CDR is authoritative: when it reports an unanswered status with
+    ``talk_times = 00:00:00`` and no answer time, the call never connected, so
+    the CRM must not show a 43s / 74s "conversation". Matching is always by the
+    exact provider uniqueid.
+
+    A row that already holds real audio (or a positive recording duration) is
+    never downgraded: proof of audio outranks a contradictory status string.
+    Nothing is deleted, and only ``call_status`` / ``duration_seconds`` /
+    ``answered_at`` / ``ended_at`` are touched.
+    """
+    cdr = DooctiRecordingService.fetch_authoritative_call_log(db, days_back=days_back)
+    if not cdr:
+        return {
+            "status": "skipped",
+            "reason": "No DooCTI CDR data (credentials missing or provider unavailable).",
+            "inspected": 0,
+            "updated": 0,
+            "calls": [],
+        }
+
+    since = get_ist_now() - datetime.timedelta(days=days_back)
+    rows = (
+        db.query(CallLog)
+        .filter(
+            CallLog.created_at >= since,
+            CallLog.provider_call_id.isnot(None),
+            CallLog.provider.ilike("%DOOCTI%"),
+        )
+        .order_by(desc(CallLog.id))
+        .limit(2000)
+        .all()
+    )
+
+    updated: List[Dict[str, Any]] = []
+    for call in rows:
+        prov_id = str(call.provider_call_id or "").strip()
+        cdr_row = cdr.get(prov_id)
+        if not cdr_row or not _cdr_says_unanswered(cdr_row):
+            continue
+
+        # Audio is proof of a connected call; never contradict it.
+        if str(call.recording_url or "").strip():
+            continue
+        if int(call.recording_duration_seconds or 0) > 0:
+            continue
+
+        direction = str(call.call_direction or "").upper()
+        new_status = "MISSED" if direction == "INBOUND" else "NO_ANSWER"
+        new_duration = 0
+        ended_at = _parse_cdr_datetime(cdr_row.get("end_time")) or call.ended_at
+
+        already_correct = (
+            str(call.call_status or "").upper() == new_status
+            and int(call.duration_seconds or 0) == 0
+            and call.answered_at is None
+        )
+        if already_correct:
+            continue
+
+        change = {
+            "call_log_id": call.id,
+            "provider_call_id": prov_id,
+            "phone": call.to_number or call.from_number,
+            "direction": direction,
+            "previous_status": call.call_status,
+            "previous_duration": int(call.duration_seconds or 0),
+            "call_status": new_status,
+            "duration": new_duration,
+            "provider_status": cdr_row.get("status"),
+            "provider_talk_time": cdr_row.get("talk_times"),
+            "provider_billsec": cdr_row.get("billsec"),
+        }
+        updated.append(change)
+        if dry_run:
+            continue
+
+        call.call_status = new_status
+        call.duration_seconds = new_duration
+        call.answered_at = None
+        if ended_at:
+            call.ended_at = ended_at
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                f"[CallSync] CDR reconcile commit failed for CallLog ID={call.id}: {exc}"
+            )
+            updated.pop()
+            continue
+        logger.info(
+            f"📞 [CallSync] CDR reconcile: CallLog ID={call.id} "
+            f"uniqueid={prov_id} {change['previous_status']}/"
+            f"{change['previous_duration']}s -> {new_status}/0s "
+            f"(DooCTI {cdr_row.get('status')}, talk {cdr_row.get('talk_times')})."
+        )
+
+    return {
+        "status": "success",
+        "inspected": len(rows),
+        "updated": len(updated),
+        "dry_run": dry_run,
+        "calls": updated,
+    }
+
+
+def _run_cdr_reconciler(days_back: int) -> Dict[str, Any]:
+    """Runs one CDR reconciliation pass with its own short-lived DB session."""
+    from database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return reconcile_unanswered_calls_with_cdr(db, days_back=days_back)
+    finally:
+        db.close()
+
+
+async def start_cdr_reconcile_scheduler(
+    interval_seconds: int = 1800,
+    days_back: int = 7,
+):
+    """
+    Periodically aligns recent call status/duration with DooCTI's CDR report.
+
+    Runs on a slow cadence because it is a correction pass, not a live feed.
+    The first pass happens on startup so ring-time rows are fixed immediately
+    after a deploy.
+    """
+    import asyncio
+
+    logger.info(
+        f"CDR reconciliation scheduler started (last {days_back} day(s), "
+        f"every {interval_seconds}s)."
+    )
+    while True:
+        try:
+            result = await asyncio.to_thread(_run_cdr_reconciler, days_back)
+            if result.get("updated"):
+                logger.info(
+                    f"📞 [CallSync] CDR reconciliation corrected "
+                    f"{result['updated']} call(s)."
+                )
+        except Exception as exc:
+            logger.warning(f"[CallSync] CDR reconciliation failed: {exc}")
+        await asyncio.sleep(interval_seconds)
 
 
 def _run_reconciler(stale_after_minutes: int) -> Dict[str, Any]:

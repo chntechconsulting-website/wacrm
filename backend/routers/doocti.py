@@ -23,6 +23,7 @@ from services.doocti_recording_service import (
     extract_recording_metadata,
     extract_recording_url,
 )
+from services.call_sync_service import reconcile_unanswered_calls_with_cdr
 
 logger = logging.getLogger(__name__)
 
@@ -628,6 +629,23 @@ def doocti_sync_recordings_alias(
     db: Session = Depends(get_db)
 ):
     return DooctiRecordingService.sync_all_missing_recordings(db=db, days_back=days)
+
+
+@router.api_route("/reconcile-calls", methods=["GET", "POST"])
+@router.api_route("/reconcile-calls/", methods=["GET", "POST"])
+def doocti_reconcile_calls(
+    days: int = Query(7, ge=1, le=90),
+    dry_run: bool = Query(False),
+    db: Session = Depends(get_db)
+):
+    """
+    Aligns recent call status/duration with DooCTI's authoritative CDR report.
+
+    Ring time is not talk time: an unanswered call that rang for 53s must show
+    Missed / No Answer with 0s, not a 53s conversation. Only exact uniqueids
+    are matched and nothing is deleted.
+    """
+    return reconcile_unanswered_calls_with_cdr(db=db, days_back=days, dry_run=dry_run)
 
 # -------------------------------------------------------------
 # 4. Call Log Push API (DooCTI Push Call Log)

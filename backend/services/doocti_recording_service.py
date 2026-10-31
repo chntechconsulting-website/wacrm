@@ -641,6 +641,131 @@ class DooctiRecordingService:
                         return rows
         return []
 
+    @staticmethod
+    def _portal_base_url(cfg: Dict[str, Any], claims: Dict[str, Any]) -> str:
+        """Tenant portal host (the one that serves ``CallLogfetch``)."""
+        portal = str(cfg.get("portal_url") or "").strip()
+        if not portal:
+            portal = str(
+                claims.get("http://api.doocti.com/claims/portal_domain") or ""
+            ).strip()
+        if portal and not portal.startswith(("http://", "https://")):
+            portal = "https://" + portal
+        return portal.rstrip("/")
+
+    @classmethod
+    def fetch_authoritative_call_log(
+        cls,
+        db: Session,
+        days_back: int = 7,
+        page_size: int = 500,
+        max_pages_per_day: int = 20,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Reads DooCTI's own CDR report (``/CallLogfetch``) and returns
+        ``{uniqueid: row}``.
+
+        This is the same report DooCTI's UI shows, so it is the authority on
+        whether a call was answered and how long it talked. The join is always
+        the exact uniqueid; phone numbers are never used to match rows here.
+        """
+        cfg = cls._get_provider_api_config(db)
+        token, claims = cls._provider_access_token(cfg)
+        if not token:
+            logger.info(
+                "[DooctiRecording] CDR reconciliation skipped: no DooCTI API "
+                "credentials configured."
+            )
+            return {}
+
+        portal = cls._portal_base_url(cfg, claims)
+        if not portal:
+            logger.info(
+                "[DooctiRecording] CDR reconciliation skipped: no portal host."
+            )
+            return {}
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "WACRM-CDRReconciler/1.0",
+        }
+
+        today = get_ist_now().date()
+        rows_by_id: Dict[str, Dict[str, Any]] = {}
+        for offset in range(max(0, days_back - 1), -1, -1):
+            day = today - datetime.timedelta(days=offset)
+            day_str = day.strftime("%Y-%m-%d")
+            seen_today = 0
+            for page in range(max_pages_per_day):
+                payload = {
+                    "from_call_date": f"{day_str} 00:00:00",
+                    "to_call_date": f"{day_str} 23:59:59",
+                    "phone": "",
+                    "list_id": "",
+                    "campaign": "",
+                    "queue": "",
+                    "agent": "",
+                    "call_type": "",
+                    "status": "",
+                    "take": page_size,
+                    "skip": page * page_size,
+                    "station": "",
+                    "dispo_status": "",
+                    "descending": False,
+                    "did_number": "",
+                    "uniqueid": "",
+                    "template_name": "",
+                    "team_user": "",
+                    "operator": "",
+                    "value": "",
+                    "Durationtype": "",
+                    "answerStatus": "",
+                    "team": "",
+                }
+                try:
+                    req = urllib.request.Request(
+                        f"{portal}/CallLogfetch",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers=headers,
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=20.0) as resp:
+                        result = json.loads(
+                            resp.read().decode("utf-8", errors="ignore") or "{}"
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        f"[DooctiRecording] CallLogfetch failed for {day_str}: {exc}"
+                    )
+                    break
+
+                rows = cls._extract_calllog_rows(result)
+                for row in rows:
+                    uid = str(
+                        row.get("uniqueid") or row.get("Uniqueid") or ""
+                    ).strip()
+                    if uid:
+                        rows_by_id[uid] = row
+                seen_today += len(rows)
+                total = 0
+                if isinstance(result, dict):
+                    try:
+                        total = int(result.get("total") or 0)
+                    except (TypeError, ValueError):
+                        total = 0
+                if not rows or len(rows) < page_size:
+                    break
+                if total and seen_today >= total:
+                    break
+
+        logger.info(
+            f"[DooctiRecording] Fetched {len(rows_by_id)} DooCTI CDR row(s) "
+            f"for the last {days_back} day(s)."
+        )
+        return rows_by_id
+
     @classmethod
     def _resolve_via_dialer_calllog(
         cls,

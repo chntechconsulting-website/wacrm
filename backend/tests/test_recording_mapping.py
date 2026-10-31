@@ -42,6 +42,7 @@ from services.doocti_recording_service import (
     extract_recording_metadata,
     extract_recording_url,
 )
+from services.call_sync_service import reconcile_unanswered_calls_with_cdr
 from utils.timezone import get_ist_now
 
 DID = "07969671855"
@@ -580,6 +581,125 @@ class TestLegacyRepair(RecordingTestBase):
         self.assertIsNone(call.recording_id)
         # The call row itself is never deleted.
         self.assertIsNotNone(call)
+
+
+class TestCdrReconciliation(RecordingTestBase):
+    def _reconcile(self, cdr, **kwargs):
+        db = self.db()
+        try:
+            with mock.patch.object(
+                DooctiRecordingService,
+                "fetch_authoritative_call_log",
+                lambda session, days_back=7: cdr,
+            ):
+                return reconcile_unanswered_calls_with_cdr(db, **kwargs)
+        finally:
+            db.close()
+
+    def test_ring_time_is_downgraded_to_no_answer(self):
+        call_id = "1793430582.132549293"
+        self.add_call(
+            call_id,
+            call_status="COMPLETED",
+            duration_seconds=53,
+            answered_at=get_ist_now() - datetime.timedelta(minutes=9),
+            to_number="9339693406",
+        )
+        result = self._reconcile(
+            {
+                call_id: {
+                    "uniqueid": call_id,
+                    "status": "NOANSWER",
+                    "talk_times": "00:00:00",
+                    "answer_time": "0000-00-00 00:00:00",
+                    "billsec": 53,
+                }
+            }
+        )
+        self.assertEqual(result["updated"], 1)
+        call = self.get_call(call_id)
+        self.assertEqual(call.call_status, "NO_ANSWER")
+        self.assertEqual(call.duration_seconds, 0)
+        self.assertIsNone(call.answered_at)
+
+    def test_inbound_unanswered_becomes_missed(self):
+        call_id = "1793430699.132554729"
+        self.add_call(
+            call_id,
+            call_status="COMPLETED",
+            duration_seconds=74,
+            call_direction="INBOUND",
+        )
+        result = self._reconcile(
+            {
+                call_id: {
+                    "uniqueid": call_id,
+                    "status": "NOANSWER",
+                    "talk_times": "00:00:00",
+                    "answer_time": "0000-00-00 00:00:00",
+                }
+            }
+        )
+        self.assertEqual(result["updated"], 1)
+        call = self.get_call(call_id)
+        self.assertEqual(call.call_status, "MISSED")
+        self.assertEqual(call.duration_seconds, 0)
+
+    def test_answered_call_is_never_downgraded(self):
+        call_id = "1793429561.132488193"
+        self.add_call(call_id, call_status="COMPLETED", duration_seconds=132)
+        result = self._reconcile(
+            {
+                call_id: {
+                    "uniqueid": call_id,
+                    "status": "COMPLETE",
+                    "talk_times": "00:02:12",
+                    "answer_time": "2026-10-31 12:23:00",
+                }
+            }
+        )
+        self.assertEqual(result["updated"], 0)
+        call = self.get_call(call_id)
+        self.assertEqual(call.call_status, "COMPLETED")
+        self.assertEqual(call.duration_seconds, 132)
+
+    def test_call_with_real_recording_is_not_downgraded(self):
+        call_id = "1793429108.132463793"
+        self.add_call(
+            call_id,
+            call_status="COMPLETED",
+            duration_seconds=37,
+            recording_url=storage_url(call_id),
+        )
+        result = self._reconcile(
+            {
+                call_id: {
+                    "uniqueid": call_id,
+                    "status": "NOANSWER",
+                    "talk_times": "00:00:00",
+                    "answer_time": "0000-00-00 00:00:00",
+                }
+            }
+        )
+        self.assertEqual(result["updated"], 0)
+        call = self.get_call(call_id)
+        self.assertEqual(call.call_status, "COMPLETED")
+        self.assertEqual(call.duration_seconds, 37)
+
+    def test_unknown_uniqueid_is_untouched(self):
+        call_id = "1793333301.131253599"
+        self.add_call(call_id, call_status="COMPLETED", duration_seconds=42)
+        result = self._reconcile(
+            {
+                "1793333301.131253600": {
+                    "uniqueid": "1793333301.131253600",
+                    "status": "NOANSWER",
+                    "talk_times": "00:00:00",
+                }
+            }
+        )
+        self.assertEqual(result["updated"], 0)
+        self.assertEqual(self.get_call(call_id).duration_seconds, 42)
 
 
 class TestWebhookCallBatches(RecordingTestBase):
