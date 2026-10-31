@@ -41,7 +41,11 @@ class CallLogModel {
       id: json['id'] ?? 0,
       leadId: json['lead_id'],
       leadName: json['lead_name'] ?? json['customer_name'],
-      customerNumber: json['customer_number'] ?? json['phone'] ?? '',
+      customerNumber:
+          json['customer_number'] ??
+          json['customer_phone'] ??
+          json['phone'] ??
+          '',
       callType: (json['call_direction'] ?? json['call_type'] ?? 'OUTBOUND')
           .toString()
           .toUpperCase(),

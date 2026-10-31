@@ -217,7 +217,7 @@ class MobileSimCallService {
   static Future<Map<String, dynamic>> startCall({
     required String phone,
     required String callId,
-    required int leadId,
+    int? leadId,
     String? contactName,
     SimAccount? sim,
   }) async {

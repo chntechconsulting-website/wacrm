@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/services/doocti_call_service.dart';
+import '../../../core/utils/phone_utils.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/loading_indicator.dart';
@@ -1086,7 +1087,14 @@ class _LeadsListScreenState extends State<LeadsListScreen> {
                   children: [
                     // Circular Call Button
                     InkWell(
-                      onTap: () => _callNumber(lead.phone, leadId: lead.id, contactName: lead.name),
+                      onTap: () => _callNumber(
+                        PhoneUtils.firstDialable([
+                          lead.phone,
+                          lead.whatsappNumber,
+                        ]),
+                        leadId: lead.id,
+                        contactName: lead.name,
+                      ),
                       borderRadius: BorderRadius.circular(18),
                       child: Container(
                         width: 34,

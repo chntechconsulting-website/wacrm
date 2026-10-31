@@ -12,6 +12,7 @@ import '../../../core/widgets/wacrm_button.dart';
 import '../../../core/widgets/wacrm_card.dart';
 import '../../../core/widgets/wacrm_text_field.dart';
 import '../providers/calls_provider.dart';
+import 'dialer_screen.dart';
 
 class CallLogsScreen extends StatefulWidget {
   const CallLogsScreen({super.key});
@@ -167,6 +168,14 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
       appBar: AppBar(
         title: const Text('Call Logs & Telephony'),
         actions: [
+          IconButton(
+            tooltip: 'Dial pad',
+            icon: const Icon(Icons.dialpad_rounded),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DialerScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             onPressed: () => provider.fetchCalls(),

@@ -271,9 +271,13 @@ class MobileSimCallManager(
     // ------------------------------------------------------------------
 
     private fun startCall(call: MethodCall, result: MethodChannel.Result) {
-        val phone = call.argument<String>("phone")?.trim().orEmpty()
-        if (phone.isEmpty()) {
-            result.error("INVALID_NUMBER", "A customer phone number is required.", null)
+        val phone = sanitizeDialNumber(call.argument<String>("phone").orEmpty())
+        if (phone.replace("+", "").length < 3) {
+            result.error(
+                "INVALID_NUMBER",
+                "Enter a valid phone number with at least 3 digits.",
+                null,
+            )
             return
         }
         if (!hasPermission(Manifest.permission.CALL_PHONE)) {
@@ -571,6 +575,33 @@ class MobileSimCallManager(
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Converts a CRM-stored number into a dial-safe string. Leads are often
+     * saved as "+91 98765 43210" or "+91-98765-43210"; ACTION_CALL rejects
+     * spaces and separators, which surfaced as "Invalid phone number".
+     * Keeps one leading '+', digits, and USSD '*'/'#' characters.
+     */
+    private fun sanitizeDialNumber(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+
+        val builder = StringBuilder()
+        for ((index, ch) in trimmed.withIndex()) {
+            val digit = Character.digit(ch, 10)
+            when {
+                digit >= 0 -> builder.append(('0'.code + digit).toChar())
+                ch == '*' || ch == '#' -> builder.append(ch)
+                ch == '+' && index == 0 -> builder.append(ch)
+            }
+        }
+
+        var value = builder.toString()
+        if (value.startsWith("00")) {
+            value = "+" + value.substring(2)
+        }
+        return value
     }
 
     private fun numbersMatch(deviceNumber: String?, customerNumber: String): Boolean {

@@ -6,6 +6,7 @@ import '../../features/activities/presentation/activities_screen.dart';
 import '../../features/auth/presentation/profile_screen.dart';
 import '../../features/auth/providers/auth_provider.dart';
 import '../../features/calls/presentation/call_logs_screen.dart';
+import '../../features/calls/presentation/dialer_screen.dart';
 import '../../features/customers/presentation/customers_list_screen.dart';
 import '../../features/deals/presentation/deals_list_screen.dart';
 import '../../features/field_visits/presentation/field_visits_list_screen.dart';
@@ -251,6 +252,12 @@ class WacrmDrawer extends StatelessWidget {
                   label: 'Call Logs',
                   color: AppColors.accent,
                   onTap: () => _navigateToScreen(context, const CallLogsScreen()),
+                ),
+                _buildDrawerTile(
+                  icon: Icons.dialpad_rounded,
+                  label: 'Dial Pad',
+                  color: const Color(0xFF10B981),
+                  onTap: () => _navigateToScreen(context, const DialerScreen()),
                 ),
                 _buildDrawerTile(
                   icon: Icons.add_location_alt_rounded,

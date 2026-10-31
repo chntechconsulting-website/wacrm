@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../constants/app_colors.dart';
+import '../utils/phone_utils.dart';
 import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
 
@@ -19,10 +20,15 @@ class DooctiCallService {
     int? leadId,
     String? contactName,
   }) async {
-    final cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleanPhone.isEmpty) {
+    final cleanPhone = PhoneUtils.normalize(phone);
+    if (cleanPhone.replaceAll('+', '').length < 3) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid phone number')),
+        const SnackBar(
+          content: Text(
+            'No valid phone number saved for this contact. '
+            'Update the number or use the dial pad.',
+          ),
+        ),
       );
       return;
     }
