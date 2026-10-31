@@ -15,7 +15,7 @@ from models import Lead, LeadActivity, Customer, Employee, CallLog, Followup
 from models.lead import LeadAssignment
 from models.user import User
 from models.integration import IntegrationConfig
-from services.auth import get_current_user
+from services.auth import get_current_user, require_roles
 from utils.timezone import get_ist_now, IST_TIMEZONE
 from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
 from services.doocti_recording_service import (
@@ -2060,6 +2060,21 @@ def get_doocti_telephony_config(db: Session = Depends(get_db)):
         "status": "success",
         **cfg
     }
+
+@router.get("/recording-status")
+def get_doocti_recording_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(["ADMIN", "MANAGER"])),
+):
+    """
+    Reports whether the optional DooCTI recording API credentials work.
+    Never returns the credential itself.
+    """
+    return {
+        "status": "success",
+        **DooctiRecordingService.provider_credentials_status(db),
+    }
+
 
 @router.put("/config")
 def update_doocti_telephony_config(

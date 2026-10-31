@@ -56,6 +56,7 @@ const IntegrationsPage = () => {
   });
   const [showSecrets, setShowSecrets] = useState({});
   const [savingConfig, setSavingConfig] = useState(false);
+  const [testingRecordingApi, setTestingRecordingApi] = useState(false);
   const [copiedField, setCopiedField] = useState(null);
 
   // Audit Logs state
@@ -637,6 +638,31 @@ const IntegrationsPage = () => {
     const randomKey = 'wacrm_site_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
     handleConfigChange('api_key', randomKey);
     showToast('success', 'New Website API Key generated! Click Save to apply.');
+  };
+
+  const handleTestRecordingApi = async () => {
+    try {
+      setTestingRecordingApi(true);
+      // Save the fields first so the test uses what is on screen.
+      await API.put('/doocti/config', {
+        portal_url: modalState.config.portal_url,
+        recording_api_url: modalState.config.recording_api_url,
+        recording_api_username: modalState.config.recording_api_username,
+        recording_api_password: modalState.config.recording_api_password,
+        recording_api_token: modalState.config.recording_api_token
+      });
+      const res = await API.get('/doocti/recording-status');
+      if (res.data?.login_ok) {
+        const tenant = res.data?.tenant_code ? ` (tenant: ${res.data.tenant_code})` : '';
+        showToast('success', `DooCTI recording API connected${tenant}.`);
+      } else {
+        showToast('error', res.data?.message || 'DooCTI recording API is not connected.');
+      }
+    } catch (err) {
+      showToast('error', `Recording API test failed: ${err.response?.data?.detail || err.message}`);
+    } finally {
+      setTestingRecordingApi(false);
+    }
   };
 
   // Save Config
@@ -1255,11 +1281,30 @@ const IntegrationsPage = () => {
                             </div>
                           </div>
 
-                          {modalState.config.recording_api_configured ? (
-                            <div style={{ fontSize: '0.75rem', color: '#065f46', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '8px 10px' }}>
-                              Recording API is configured. Missing call audio is resolved automatically.
-                            </div>
-                          ) : null}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '4px' }}>
+                            <button
+                              type="button"
+                              onClick={handleTestRecordingApi}
+                              disabled={testingRecordingApi}
+                              style={{
+                                padding: '7px 14px',
+                                borderRadius: '8px',
+                                border: '1px solid #bfdbfe',
+                                backgroundColor: '#eff6ff',
+                                color: '#1d4ed8',
+                                fontSize: '0.78rem',
+                                fontWeight: '600',
+                                cursor: testingRecordingApi ? 'wait' : 'pointer'
+                              }}
+                            >
+                              {testingRecordingApi ? 'Testing…' : 'Test Recording API'}
+                            </button>
+                            {modalState.config.recording_api_configured ? (
+                              <span style={{ fontSize: '0.75rem', color: '#065f46' }}>
+                                Recording API is configured. Missing call audio is resolved automatically.
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
 
                         <div className="form-group">

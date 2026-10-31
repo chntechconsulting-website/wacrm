@@ -504,6 +504,60 @@ class DooctiRecordingService:
         return None, {}
 
     @classmethod
+    def provider_credentials_status(cls, db: Session) -> Dict[str, Any]:
+        """
+        Non-secret status of the optional DooCTI recording API credentials.
+        Used by the admin screen so a wrong password is visible immediately.
+        """
+        cfg = cls._get_provider_api_config(db)
+        has_credentials = bool(
+            cfg.get("token") or (cfg.get("username") and cfg.get("password"))
+        )
+        if not has_credentials:
+            return {
+                "configured": False,
+                "login_ok": False,
+                "message": "No DooCTI recording API credentials configured.",
+            }
+
+        token, claims = cls._provider_access_token(cfg)
+        if not token:
+            return {
+                "configured": True,
+                "login_ok": False,
+                "message": "DooCTI login failed. Check the username/password or token.",
+            }
+
+        def host(value: str) -> Optional[str]:
+            clean = str(value or "").strip()
+            if not clean:
+                return None
+            if not clean.startswith(("http://", "https://")):
+                clean = "https://" + clean
+            try:
+                return urllib.parse.urlsplit(clean).hostname
+            except Exception:
+                return None
+
+        dialer = cfg.get("dialer_url") or claims.get(
+            "http://api.doocti.com/claims/dialer_domain"
+        )
+        portal = cfg.get("portal_url") or claims.get(
+            "http://api.doocti.com/claims/portal_domain"
+        )
+        tenant = cfg.get("tenant_code") or claims.get(
+            "http://api.doocti.com/claims/tenant_code"
+        )
+        return {
+            "configured": True,
+            "login_ok": True,
+            "tenant_code": str(tenant or "").strip() or None,
+            "dialer_host": host(dialer),
+            "portal_host": host(portal),
+            "message": "Connected to DooCTI.",
+        }
+
+    @classmethod
     def _provider_extension_candidates(
         cls, call: CallLog, cfg: Dict[str, Any]
     ) -> List[str]:
