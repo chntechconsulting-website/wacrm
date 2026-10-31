@@ -686,6 +686,81 @@ class TestCdrReconciliation(RecordingTestBase):
         self.assertEqual(call.call_status, "COMPLETED")
         self.assertEqual(call.duration_seconds, 37)
 
+    def test_loopback_placeholder_is_cleared_and_downgraded(self):
+        call_id = "1793430582.132549999"
+        self.add_call(
+            call_id,
+            call_status="COMPLETED",
+            duration_seconds=53,
+            recording_url=f"http://127.0.0.1/audio/2026-10-31/{call_id}.wav",
+            recording_id=call_id,
+        )
+        resolved = storage_url(call_id)
+        db = self.db()
+        try:
+            with mock.patch.object(
+                DooctiRecordingService,
+                "fetch_authoritative_call_log",
+                lambda session, days_back=7: {
+                    call_id: {
+                        "uniqueid": call_id,
+                        "status": "NOANSWER",
+                        "talk_times": "00:00:00",
+                        "answer_time": "0000-00-00 00:00:00",
+                    }
+                },
+            ), mock.patch.object(
+                DooctiRecordingService,
+                "is_definitely_empty_recording",
+                lambda url, **kwargs: url == resolved,
+            ):
+                result = reconcile_unanswered_calls_with_cdr(db)
+        finally:
+            db.close()
+
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(result["cleared_placeholders"], 1)
+        call = self.get_call(call_id)
+        self.assertEqual(call.call_status, "NO_ANSWER")
+        self.assertEqual(call.duration_seconds, 0)
+        self.assertIsNone(call.recording_url)
+        self.assertIsNone(call.recording_id)
+
+    def test_loopback_real_audio_keeps_call_completed(self):
+        call_id = "1793429561.132488888"
+        self.add_call(
+            call_id,
+            call_status="COMPLETED",
+            duration_seconds=132,
+            recording_url=f"http://127.0.0.1/audio/2026-10-31/{call_id}.wav",
+        )
+        db = self.db()
+        try:
+            with mock.patch.object(
+                DooctiRecordingService,
+                "fetch_authoritative_call_log",
+                lambda session, days_back=7: {
+                    call_id: {
+                        "uniqueid": call_id,
+                        "status": "NOANSWER",
+                        "talk_times": "00:00:00",
+                    }
+                },
+            ), mock.patch.object(
+                DooctiRecordingService,
+                "is_definitely_empty_recording",
+                lambda url, **kwargs: False,
+            ):
+                result = reconcile_unanswered_calls_with_cdr(db)
+        finally:
+            db.close()
+
+        self.assertEqual(result["updated"], 0)
+        self.assertEqual(result["has_audio"], 1)
+        call = self.get_call(call_id)
+        self.assertEqual(call.call_status, "COMPLETED")
+        self.assertEqual(call.duration_seconds, 132)
+
     def test_unknown_uniqueid_is_untouched(self):
         call_id = "1793333301.131253599"
         self.add_call(call_id, call_status="COMPLETED", duration_seconds=42)

@@ -366,7 +366,9 @@ def reconcile_unanswered_calls_with_cdr(
         "already_answered": 0,
         "has_audio": 0,
         "already_correct": 0,
+        "cleared_placeholders": 0,
     }
+    base_url = DooctiRecordingService.get_configured_base_url(db)
     skipped: List[Dict[str, Any]] = []
     for call in rows:
         prov_id = str(call.provider_call_id or "").strip()
@@ -385,17 +387,33 @@ def reconcile_unanswered_calls_with_cdr(
                 })
             continue
 
-        # Audio is proof of a connected call; never contradict it.
-        if str(call.recording_url or "").strip():
-            stats["has_audio"] += 1
-            if len(skipped) < 10:
-                skipped.append({
-                    "provider_call_id": prov_id,
-                    "reason": "call_has_recording",
-                    "recording_url": call.recording_url,
-                })
-            continue
-        if int(call.recording_duration_seconds or 0) > 0:
+        # Audio is proof of a connected call; never contradict it. A stored link
+        # is only proof when the object actually contains audio: DooCTI writes a
+        # 144-byte header-only MP3 for unanswered attempts.
+        cleared_placeholder = False
+        stored_url = str(call.recording_url or "").strip()
+        if stored_url:
+            audio_url = DooctiRecordingService.canonical_storage_url(
+                stored_url, base_url
+            )
+            is_stub = (
+                audio_url.startswith(("http://", "https://"))
+                and DooctiRecordingService.is_configured_storage_url(audio_url, base_url)
+                and DooctiRecordingService.is_definitely_empty_recording(audio_url)
+            )
+            if not is_stub:
+                stats["has_audio"] += 1
+                if len(skipped) < 10:
+                    skipped.append({
+                        "provider_call_id": prov_id,
+                        "reason": "call_has_recording",
+                        "recording_url": stored_url,
+                    })
+                continue
+            # Release the dead link only (the file and the call row stay).
+            cleared_placeholder = True
+            stats["cleared_placeholders"] += 1
+        if int(call.recording_duration_seconds or 0) > 0 and not cleared_placeholder:
             stats["has_audio"] += 1
             continue
 
@@ -409,7 +427,7 @@ def reconcile_unanswered_calls_with_cdr(
             and int(call.duration_seconds or 0) == 0
             and call.answered_at is None
         )
-        if already_correct:
+        if already_correct and not cleared_placeholder:
             stats["already_correct"] += 1
             continue
 
@@ -425,6 +443,7 @@ def reconcile_unanswered_calls_with_cdr(
             "provider_status": cdr_row.get("status"),
             "provider_talk_time": cdr_row.get("talk_times"),
             "provider_billsec": cdr_row.get("billsec"),
+            "cleared_placeholder_recording": cleared_placeholder,
         }
         updated.append(change)
         if dry_run:
@@ -435,6 +454,12 @@ def reconcile_unanswered_calls_with_cdr(
         call.answered_at = None
         if ended_at:
             call.ended_at = ended_at
+        if cleared_placeholder:
+            call.recording_url = None
+            call.recording_id = None
+            call.recording_duration_seconds = None
+            call.recording_source = None
+            call.recording_attached_at = None
         try:
             db.commit()
         except Exception as exc:

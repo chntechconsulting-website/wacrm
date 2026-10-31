@@ -309,6 +309,31 @@ class DooctiRecordingService:
         return exists
 
     @classmethod
+    def canonical_storage_url(
+        cls, url: Optional[str], base_url: Optional[str]
+    ) -> str:
+        """
+        Resolves a loopback path stored by the PBX (``http://127.0.0.1/audio/...``)
+        onto the configured bucket, exactly as the call-log reader does.
+
+        Returns the URL unchanged when it is already absolute and not loopback.
+        """
+        text = str(url or "").strip()
+        if not text:
+            return ""
+        lowered = text.lower()
+        if "127.0.0.1" not in lowered and "localhost" not in lowered:
+            return text
+        base = str(base_url or "").strip().rstrip("/")
+        if not base:
+            return text
+        match = re.search(r"https?://[^/]+(?:/audio)?(/.*)", text)
+        if not match:
+            return text
+        path = re.sub(r"\.wav$", ".mp3", match.group(1), flags=re.IGNORECASE)
+        return base + "/" + path.lstrip("/")
+
+    @classmethod
     def is_configured_storage_url(cls, url: Optional[str], base_url: Optional[str]) -> bool:
         """True when *url* lives on the configured recording bucket host."""
         clean = str(url or "").strip()
@@ -1313,7 +1338,10 @@ class DooctiRecordingService:
 
         released = 0
         for call in calls:
-            url = str(call.recording_url or "").strip()
+            raw = str(call.recording_url or "").strip()
+            # Loopback paths written by the PBX (http://127.0.0.1/audio/...)
+            # resolve to the configured bucket, exactly as the reader does.
+            url = cls.canonical_storage_url(raw, base_url)
             if not url or not cls.is_configured_storage_url(url, base_url):
                 continue
             if not cls.is_definitely_empty_recording(url):
