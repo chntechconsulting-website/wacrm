@@ -21,6 +21,7 @@ from utils.phone import normalize_phone, find_existing_lead_by_phone, find_exist
 from services.doocti_recording_service import (
     DooctiRecordingService,
     extract_recording_metadata,
+    extract_recording_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,13 @@ def get_doocti_config(db: Session) -> Dict[str, Any]:
         "api_url": (data.get("api_url") or "").strip() or "https://beta3-app.doocti.com/",
         "account_id": (data.get("account_id") or "").strip() or "chntechnolog",
         "recording_base_url": data.get("recording_base_url", "https://bmxrx2cviyka.compat.objectstorage.ap-mumbai-1.oraclecloud.com/doocti/cti_chntechnolog_20261009"),
-        "secret_token": data.get("secret_token")
+        "secret_token": data.get("secret_token"),
+        "portal_url": data.get("portal_url"),
+        # Never expose the credential itself; only whether the resolver is armed.
+        "recording_api_configured": bool(
+            data.get("recording_api_token")
+            or (data.get("recording_api_username") and data.get("recording_api_password"))
+        ),
     }
 
 def clean_phone(phone: Optional[Any]) -> str:
@@ -310,6 +317,8 @@ class DooctiCallLogPayload(BaseModel):
     end_time: Optional[Any] = None
     duration: Optional[Any] = None
     recording_path: Optional[str] = None
+    # DooCTI's own call-log field name (used by the portal and iframe player).
+    record_location: Optional[str] = None
 
     # Alternative / backward-compatible aliases:
     call_id: Optional[str] = None
@@ -863,11 +872,7 @@ async def push_doocti_call_log(
     # 4b. REJECT GHOST CALLS: Prevent self-extension loop, empty phone numbers, or invalid internal loops
     # ONLY reject if it is a NEW call (no existing CallLog matches this uniqueid/call_id)
     # AND never reject if recording is supplied (delayed recording delivery event from PBX)
-    has_rec_in_payload = bool(
-        raw_data.get("recording_path") or 
-        raw_data.get("recording_url") or 
-        raw_data.get("recording")
-    )
+    has_rec_in_payload = bool(extract_recording_url(raw_data))
     if not existing_log and not has_rec_in_payload:
         if (
             not clean_target or 
@@ -918,12 +923,21 @@ async def push_doocti_call_log(
         started_at = ended_at - datetime.timedelta(seconds=dur_sec) if dur_sec > 0 else ended_at
 
     # 8. Recording path / URL
-    rec_url = str(
-        raw_data.get("recording_path") or 
-        raw_data.get("recording_url") or 
-        raw_data.get("recording") or 
-        ""
-    ).strip() or None
+    # DooCTI names this field `record_location` in its call-log API (which also
+    # backs the iframe). Older payloads used recording_path/recording_url.
+    rec_url = extract_recording_url(raw_data)
+
+    # Never persist a header-only placeholder from the Oracle bucket: it would
+    # render as a dead 0:00 player. Only *confirmed* stubs are dropped; an
+    # unverifiable URL is still trusted so a real upload cannot be lost.
+    if rec_url and DooctiRecordingService.is_configured_storage_url(
+        rec_url, doocti_cfg.get("recording_base_url")
+    ) and DooctiRecordingService.is_definitely_empty_recording(rec_url):
+        logger.info(
+            f"⏳ [DOOCTI CDR] Ignoring empty placeholder recording object "
+            f"for uniqueid='{call_id}': {rec_url}"
+        )
+        rec_url = None
 
     recording_id, recording_duration = extract_recording_metadata(raw_data, rec_url)
 
@@ -2009,6 +2023,12 @@ def disconnect_doocti_call(
 # -------------------------------------------------------------
 # 7. Integration Telephony Configuration APIs
 # -------------------------------------------------------------
+def _is_masked_secret(value: Any) -> bool:
+    """True when the admin UI submitted a stored secret back as a mask."""
+    text = str(value or "")
+    return "••••" in text or text.strip() == "***REDACTED***"
+
+
 class DooctiConfigUpdatePayload(BaseModel):
     model_config = {"extra": "ignore"}
     did_numbers: Optional[List[str]] = None
@@ -2020,6 +2040,14 @@ class DooctiConfigUpdatePayload(BaseModel):
     recording_base_url: Optional[str] = None
     secret_token: Optional[str] = None
     webhook_url: Optional[str] = None
+    # Optional DooCTI portal API credentials. When present, recordings that are
+    # missing from the bucket (or are 144-byte placeholders) are resolved through
+    # DooCTI's own recordingUrl endpoint.
+    portal_url: Optional[str] = None
+    recording_api_url: Optional[str] = None
+    recording_api_username: Optional[str] = None
+    recording_api_password: Optional[str] = None
+    recording_api_token: Optional[str] = None
 
 @router.get("/config")
 def get_doocti_telephony_config(db: Session = Depends(get_db)):
@@ -2075,8 +2103,24 @@ def update_doocti_telephony_config(
         data["account_id"] = payload.account_id
     if payload.recording_base_url is not None:
         data["recording_base_url"] = str(payload.recording_base_url).strip().rstrip('/')
-    if payload.secret_token is not None:
+    # The admin UI renders stored secrets masked (••••). Saving the form again
+    # must not overwrite the real credential with the mask.
+    if payload.secret_token is not None and not _is_masked_secret(payload.secret_token):
         data["secret_token"] = payload.secret_token
+    if payload.portal_url is not None:
+        data["portal_url"] = str(payload.portal_url).strip().rstrip('/')
+    if payload.recording_api_url is not None:
+        data["recording_api_url"] = str(payload.recording_api_url).strip().rstrip('/')
+    if payload.recording_api_username is not None:
+        data["recording_api_username"] = str(payload.recording_api_username).strip()
+    if payload.recording_api_password is not None and not _is_masked_secret(
+        payload.recording_api_password
+    ):
+        data["recording_api_password"] = payload.recording_api_password
+    if payload.recording_api_token is not None and not _is_masked_secret(
+        payload.recording_api_token
+    ):
+        data["recording_api_token"] = payload.recording_api_token
     if payload.webhook_url is not None:
         data["webhook_url"] = payload.webhook_url
         cfg_row.webhook_url = payload.webhook_url

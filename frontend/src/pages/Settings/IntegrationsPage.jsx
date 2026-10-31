@@ -317,6 +317,8 @@ const IntegrationsPage = () => {
               ...prev.config,
               api_url: res.data.api_url || prev.config.api_url || '',
               account_id: res.data.account_id || prev.config.account_id || '',
+              portal_url: res.data.portal_url || prev.config.portal_url || '',
+              recording_api_configured: Boolean(res.data.recording_api_configured),
               extension_mapping: res.data.extension_mapping || prev.config.extension_mapping || {},
               admin_extension: res.data.admin_extension || prev.config.admin_extension || '',
               agent_extensions: res.data.agent_extensions || prev.config.agent_extensions || []
@@ -612,6 +614,8 @@ const IntegrationsPage = () => {
                 ...curr.config,
                 api_url: res.data.api_url || curr.config.api_url || '',
                 account_id: res.data.account_id || curr.config.account_id || '',
+                portal_url: res.data.portal_url || curr.config.portal_url || '',
+                recording_api_configured: Boolean(res.data.recording_api_configured),
                 extension_mapping: res.data.extension_mapping || curr.config.extension_mapping || {}
               }
             }));
@@ -654,7 +658,12 @@ const IntegrationsPage = () => {
             agent_extensions: modalState.config.agent_extensions || (typeof modalState.config.extensions === 'string' ? modalState.config.extensions.split(',').map(s => s.trim()) : modalState.config.extensions),
             did_numbers: typeof modalState.config.phone_number === 'string' ? modalState.config.phone_number.split(',').map(s => s.trim()) : modalState.config.did_numbers,
             api_url: modalState.config.api_url,
-            account_id: modalState.config.account_id
+            account_id: modalState.config.account_id,
+            portal_url: modalState.config.portal_url,
+            recording_api_url: modalState.config.recording_api_url,
+            recording_api_username: modalState.config.recording_api_username,
+            recording_api_password: modalState.config.recording_api_password,
+            recording_api_token: modalState.config.recording_api_token
           });
         } catch (subErr) {
           console.warn('Secondary Doocti config sync notice:', subErr);
@@ -1170,6 +1179,87 @@ const IntegrationsPage = () => {
                             onChange={(e) => handleConfigChange('account_id', e.target.value)}
                             placeholder="e.g. chntechnolog"
                           />
+                        </div>
+
+                        {/* Optional DooCTI recording API (used when a call has no usable audio in storage) */}
+                        <div style={{ marginTop: '18px', borderTop: '1px solid #e2e8f0', paddingTop: '16px', marginBottom: '16px' }}>
+                          <h4 style={{ fontSize: '0.9rem', fontWeight: '700', color: '#0f172a', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <PhoneCall size={15} style={{ color: '#2563eb' }} />
+                            <span>Doocti Recording API (Optional)</span>
+                          </h4>
+                          <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0 0 12px 0' }}>
+                            Some calls have no playable audio file in cloud storage. When these portal credentials
+                            are set, WA!CRM asks DooCTI for the recording of that exact call ID instead.
+                          </p>
+
+                          <div className="form-group">
+                            <label>Portal API Base URL</label>
+                            <input
+                              type="text"
+                              value={modalState.config.recording_api_url || ''}
+                              onChange={(e) => handleConfigChange('recording_api_url', e.target.value)}
+                              placeholder="https://api-v2.doocti.com"
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>Tenant Portal URL (Optional)</label>
+                            <input
+                              type="text"
+                              value={modalState.config.portal_url || ''}
+                              onChange={(e) => handleConfigChange('portal_url', e.target.value)}
+                              placeholder="Leave blank to detect from the login response"
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>Doocti Username</label>
+                            <input
+                              type="text"
+                              value={modalState.config.recording_api_username || ''}
+                              onChange={(e) => handleConfigChange('recording_api_username', e.target.value)}
+                              placeholder="Your DooCTI portal login (agent/admin)"
+                              autoComplete="off"
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>Doocti Password</label>
+                            <div className="secret-input-wrapper">
+                              <input
+                                type={showSecrets.recording_api_password ? 'text' : 'password'}
+                                value={modalState.config.recording_api_password || ''}
+                                onChange={(e) => handleConfigChange('recording_api_password', e.target.value)}
+                                placeholder="Stored securely; leave unchanged to keep the saved password"
+                                autoComplete="new-password"
+                              />
+                              <button type="button" className="toggle-secret-btn" onClick={() => toggleSecretVisibility('recording_api_password')}>
+                                {showSecrets.recording_api_password ? <EyeOff size={16} /> : <Eye size={16} />}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="form-group">
+                            <label>Access Token (Alternative to Username / Password)</label>
+                            <div className="secret-input-wrapper">
+                              <input
+                                type={showSecrets.recording_api_token ? 'text' : 'password'}
+                                value={modalState.config.recording_api_token || ''}
+                                onChange={(e) => handleConfigChange('recording_api_token', e.target.value)}
+                                placeholder="Optional pre-issued Bearer token"
+                                autoComplete="new-password"
+                              />
+                              <button type="button" className="toggle-secret-btn" onClick={() => toggleSecretVisibility('recording_api_token')}>
+                                {showSecrets.recording_api_token ? <EyeOff size={16} /> : <Eye size={16} />}
+                              </button>
+                            </div>
+                          </div>
+
+                          {modalState.config.recording_api_configured ? (
+                            <div style={{ fontSize: '0.75rem', color: '#065f46', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '8px 10px' }}>
+                              Recording API is configured. Missing call audio is resolved automatically.
+                            </div>
+                          ) : null}
                         </div>
 
                         <div className="form-group">

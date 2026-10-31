@@ -37,6 +37,7 @@ from routers.ivr import build_call_log_response
 from services.doocti_recording_service import (
     DooctiRecordingService,
     extract_recording_metadata,
+    extract_recording_url,
 )
 from utils.timezone import get_ist_now
 
@@ -105,6 +106,18 @@ class RecordingTestBase(unittest.TestCase):
                 DooctiRecordingService,
                 "url_exists",
                 lambda url, min_size=500: False,
+            ),
+            # Stub detection is a network probe; default to "not a stub" and let
+            # individual tests override it.
+            mock.patch.object(
+                DooctiRecordingService,
+                "is_definitely_empty_recording",
+                lambda url, min_size=500, timeout=4.0: False,
+            ),
+            mock.patch.object(
+                DooctiRecordingService,
+                "resolve_audio_duration",
+                lambda url, timeout=6.0: None,
             ),
         ]
         for patcher in cls._patchers:
@@ -226,6 +239,40 @@ class TestRecordingIdentityHelpers(RecordingTestBase):
         )
         self.assertEqual(rec_id, "1793333301.999")
         self.assertIsNone(duration)
+
+    def test_extract_recording_url_accepts_doocti_field_names(self):
+        # `record_location` is the field DooCTI's own portal/iframe reads.
+        self.assertEqual(
+            extract_recording_url(
+                {"record_location": "https://media.doocti.com/rec/1793333301.1.mp3"}
+            ),
+            "https://media.doocti.com/rec/1793333301.1.mp3",
+        )
+        self.assertEqual(
+            extract_recording_url(
+                {"recording_path": "https://storage.example.com/a.mp3"}
+            ),
+            "https://storage.example.com/a.mp3",
+        )
+        self.assertEqual(
+            extract_recording_url(
+                {"recording_url": "//storage.example.com/a.mp3"}
+            ),
+            "https://storage.example.com/a.mp3",
+        )
+
+    def test_extract_recording_url_ignores_unrendered_placeholders(self):
+        for value in (
+            "{{record_location}}",
+            "%record_location%",
+            "$record_location",
+            "",
+            "N/A",
+            "not-a-url",
+        ):
+            self.assertIsNone(
+                extract_recording_url({"record_location": value}), value
+            )
 
 
 class TestExactRecordingMatching(RecordingTestBase):
@@ -564,6 +611,103 @@ class TestWebhookCallBatches(RecordingTestBase):
         self.assertEqual(
             self.get_call(call_id).recording_url, storage_url(call_id)
         )
+
+    def test_record_location_webhook_links_exact_call(self):
+        call_id = "1793333602.131200021"
+        media_url = f"https://media.doocti.com/rec/{call_id}.mp3"
+
+        self.post_cdr(
+            {
+                "uniqueid": call_id,
+                "caller": EXTENSION,
+                "destination": "9876500098",
+                "status": "COMPLETED",
+                "duration": 55,
+                # DooCTI's own call-log field name.
+                "record_location": media_url,
+            }
+        )
+
+        call = self.get_call(call_id)
+        self.assertEqual(call.recording_url, media_url)
+        self.assertEqual(call.recording_id, call_id)
+        self.assertEqual(self.count_calls(call_id), 1)
+
+        # A duplicate delivery keeps the same single link.
+        self.post_cdr({"uniqueid": call_id, "record_location": media_url})
+        self.assertEqual(self.count_calls(call_id), 1)
+        self.assertEqual(self.get_call(call_id).recording_url, media_url)
+
+    def test_unrendered_record_location_is_not_stored(self):
+        call_id = "1793333603.131200022"
+        self.post_cdr(
+            {
+                "uniqueid": call_id,
+                "caller": EXTENSION,
+                "destination": "9876500097",
+                "status": "COMPLETED",
+                "duration": 21,
+                "record_location": "%record_location%",
+            }
+        )
+        self.assertIsNone(self.get_call(call_id).recording_url)
+
+    def test_confirmed_empty_bucket_placeholder_is_not_attached(self):
+        call_id = "1793333604.131200023"
+        placeholder = storage_url(call_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda url, min_size=500, timeout=4.0: url == placeholder,
+        ):
+            self.post_cdr(
+                {
+                    "uniqueid": call_id,
+                    "caller": EXTENSION,
+                    "destination": "9876500096",
+                    "status": "COMPLETED",
+                    "duration": 30,
+                    "record_location": placeholder,
+                }
+            )
+        self.assertIsNone(self.get_call(call_id).recording_url)
+
+    def test_provider_resolver_uses_authoritative_id(self):
+        call_id = "1793333605.131200024"
+        media_url = f"https://media.doocti.com/rec/{call_id}.mp3"
+        self.add_call(call_id)
+
+        db = self.db()
+        call = self.load_call(db, call_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "resolve_provider_recording_url",
+            lambda c, d: media_url,
+        ):
+            resolved = DooctiRecordingService.match_recording_for_call(call, db)
+        db.close()
+
+        self.assertEqual(resolved, media_url)
+        stored = self.get_call(call_id)
+        self.assertEqual(stored.recording_url, media_url)
+        self.assertEqual(stored.recording_id, call_id)
+        self.assertEqual(stored.recording_source, "DOOCTI_API")
+
+    def test_provider_resolver_is_not_used_for_synthetic_id(self):
+        synthetic_id = "doocti_1282_9876543210_2"
+        self.add_call(synthetic_id)
+        db = self.db()
+        call = self.load_call(db, synthetic_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "resolve_provider_recording_url",
+            lambda c, d: "https://media.doocti.com/rec/other.mp3",
+        ):
+            self.assertIsNone(
+                DooctiRecordingService.match_recording_for_call(call, db)
+            )
+        db.close()
+        self.assertIsNone(self.get_call(synthetic_id).recording_url)
 
     def test_concurrent_same_phone_calls_are_not_merged(self):
         phone = "9876500077"

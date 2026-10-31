@@ -190,6 +190,48 @@ class TestDooctiIntegration(unittest.TestCase):
         self.assertEqual(mapping.get("1283", {}).get("employee_id"), 8)
         self.assertEqual(mapping.get("1286", {}).get("employee_id"), 10)
 
+    def test_recording_api_config_masks_and_preserves_secrets(self):
+        secret = "test-doocti-password-123"
+        res = self.client.put(
+            "/api/doocti/config",
+            json={
+                "recording_api_username": "portal-user",
+                "recording_api_password": secret,
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+
+        cfg_res = self.client.get("/api/doocti/config")
+        self.assertEqual(cfg_res.status_code, 200)
+        cfg = cfg_res.json()
+        self.assertTrue(cfg["recording_api_configured"])
+        # Credentials must never be echoed back.
+        self.assertNotIn("recording_api_password", cfg)
+        self.assertNotIn("recording_api_token", cfg)
+
+        # Saving the admin form again submits the mask; the real secret stays.
+        res = self.client.put(
+            "/api/doocti/config",
+            json={
+                "recording_api_username": "portal-user",
+                "recording_api_password": "••••••••",
+                "recording_api_token": "••••••••",
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+
+        from models.integration import IntegrationConfig
+        import json
+        row = (
+            self.db.query(IntegrationConfig)
+            .filter(IntegrationConfig.integration_type == "IVR")
+            .first()
+        )
+        self.db.refresh(row)
+        stored = json.loads(row.config_data)
+        self.assertEqual(stored["recording_api_password"], secret)
+        self.assertNotIn("recording_api_token", stored)
+
     def test_extension_1281_admin_mapping(self):
         call_id = "test_doocti_admin_1281"
         payload = {

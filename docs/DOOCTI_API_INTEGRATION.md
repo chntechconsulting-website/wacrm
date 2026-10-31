@@ -77,7 +77,8 @@ The CRM accepts standard Doocti Push Call Log parameters as well as standard ind
 | `duration` | Integer | Recommended | Billable call talk time or total duration in seconds. | `90` |
 | `start_time` | String | Optional | Call origination timestamp (`YYYY-MM-DD HH:MM:SS` or ISO-8601). | `"2026-10-22 10:00:00"` |
 | `end_time` | String | Optional | Call disconnect timestamp. | `"2026-10-22 10:01:30"` |
-| `recording_path` | String | Optional | Public URL or PBX storage path to the call recording audio file. | `"https://.../rec_123.mp3"` |
+| `record_location` | String | Optional | Playable recording URL. This is the field DooCTI's own portal and iframe player read. | `"https://media.doocti.com/.../rec_123.mp3"` |
+| `recording_path` | String | Optional | Legacy alias for the recording URL (still accepted). | `"https://.../rec_123.mp3"` |
 
 ### 4.2 Additional Supported Fields & Aliases
 
@@ -89,7 +90,7 @@ The CRM accepts standard Doocti Push Call Log parameters as well as standard ind
 | **Agent Info** | `agent_name`, `user_name`, `agent_email`, `email` | Used to match CRM employee and assign call ownership. |
 | **Agent Station** | `agent_number`, `extension`, `ext` | Agent PBX station. |
 | **Duration** | `duration_seconds`, `billsec` | Duration in seconds. |
-| **Recording** | `recording_url`, `recording` | Direct URL to audio file. |
+| **Recording** | `record_location`, `recording_url`, `recording`, `recording_link`, `record_url`, `audio_url` | Direct URL to the playable audio file. Unrendered template values (`%...%`, `{{...}}`, `$...`) are ignored. |
 | **Notes / Disposition** | `disposition`, `call_purpose`, `lead_stage`, `notes` | Agent wrap-up notes saved into CRM lead activity history. |
 
 ---
@@ -207,8 +208,9 @@ Doocti handles call recordings through two supported delivery patterns:
 
 ### Pattern A: Immediate Delivery (Single CDR Webhook)
 If the audio recording URL is already available when the call hangs up:
-- Doocti includes `recording_path` in the initial `POST /api/doocti/call-log` webhook.
+- Doocti includes `record_location` (or the legacy `recording_path`) in the initial `POST /api/doocti/call-log` webhook.
 - WACRM stores the URL directly in `CallLog.recording_url`.
+- A URL that is *confirmed* to be an empty placeholder (a header-only object under 500 bytes) is never stored.
 
 ### Pattern B: Delayed Delivery (Subsequent Recording-Ready Webhook)
 If Asterisk or cloud storage transcribes/processes recordings with a delay:
@@ -217,10 +219,40 @@ If Asterisk or cloud storage transcribes/processes recordings with a delay:
   ```json
   {
     "uniqueid": "1729584000.1001",
-    "recording_path": "https://storage.oracle.com/doocti/1729584000.1001.mp3"
+    "record_location": "https://media.doocti.com/.../1729584000.1001.mp3"
   }
   ```
 - **Idempotency Guarantee:** WACRM identifies the existing call via `uniqueid`, attaches the recording URL, and preserves the call status and duration without creating duplicate call entries.
+
+### Pattern C: Resolve Through DooCTI's recordingUrl API
+Some calls have no usable object in the Oracle bucket: the object is missing, or it is a
+144-byte MP3/LAME header with no audio frames. DooCTI's portal serves those calls from its
+own API instead:
+
+```http
+GET {portal_url}/recordingUrl?tenant_code=<tenant_code>&date=YYYY-MM-DD&id=<uniqueid>
+Authorization: Bearer <portal token>
+```
+
+WACRM can call the same endpoint and attach the returned `{ "url": "..." }` to the exact
+`provider_call_id`. Configure it through `PUT /api/doocti/config` (all fields optional):
+
+| Config key | Purpose |
+| :--- | :--- |
+| `portal_url` | Tenant portal host. If omitted, it is read from the login JWT claim `portal_domain`. |
+| `recording_api_url` | Login API base (default `https://api-v2.doocti.com`). |
+| `recording_api_username` / `recording_api_password` | DooCTI portal login used to obtain a Bearer token automatically (cached 30 minutes). |
+| `recording_api_token` | Pre-issued Bearer token, if you already have one. |
+
+The resolver only accepts the provider's response for the call's own authoritative
+uniqueid; it never guesses by phone number, timestamp or file size.
+
+> **Diagnostic note:** DooCTI's call list enables the play icon whenever
+> `record_location` is a non-empty string. It does not verify that the object has audio
+> frames. A 144-byte MP3 (header only) therefore looks playable in DooCTI but shows
+> "No recording available" in WACRM. When the resolver returns the same stub URL, the
+> recording genuinely failed on the PBX/storage side and must be re-recorded or fixed
+> upstream.
 
 ### Automatic Localhost / Loopback URL Resolution
 If Doocti PBX pushes an internal loopback URL (such as `http://127.0.0.1/audio/...`), WACRM's backend resolver automatically maps the relative path to the cloud storage bucket:

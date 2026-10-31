@@ -1,8 +1,11 @@
+import base64
 import datetime
 import json
 import logging
 import re
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Optional, List, Dict, Any, Tuple
@@ -31,6 +34,19 @@ URL_EXISTS_TTL_SECONDS = 45.0
 _AUDIO_DURATION_CACHE: Dict[str, Tuple[float, Optional[int]]] = {}
 AUDIO_DURATION_TTL_SECONDS = 3600.0
 
+# In-memory "is this object an empty placeholder?" cache: { "url": (timestamp, bool) }
+_STUB_CHECK_CACHE: Dict[str, Tuple[float, bool]] = {}
+STUB_CHECK_TTL_SECONDS = 300.0
+
+# DooCTI recording API resolution cache: { "uniqueid": (timestamp, url|None) }
+_PROVIDER_RECORDING_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+PROVIDER_RECORDING_TTL_SECONDS = 600.0
+
+# DooCTI login (used to obtain a portal token when the API is configured with
+# the tenant's own credentials instead of a pre-issued token).
+_PROVIDER_LOGIN_CACHE: Dict[str, Tuple[float, str, Dict[str, Any]]] = {}
+PROVIDER_LOGIN_TTL_SECONDS = 1800.0
+
 # Webhook fields that identify the recording artifact itself. A recording may be
 # named after the answered leg, so this identity is stored separately from the
 # call uniqueid (but is still never guessed).
@@ -38,6 +54,57 @@ RECORDING_ID_KEYS = (
     "recording_id", "recording_uniqueid", "recording_unique_id",
     "recording_name", "recording_file", "recording_filename", "rec_file",
 )
+
+# Webhook fields that carry the playable recording location. DooCTI's own
+# call-log API (and therefore its webhook/iframe payloads) calls this
+# `record_location`; older integrations used `recording_path`/`recording_url`.
+RECORDING_URL_KEYS = (
+    "record_location",
+    "recordLocation",
+    "recording_location",
+    "recording_path",
+    "recordingPath",
+    "recording_url",
+    "recordingUrl",
+    "record_url",
+    "recordUrl",
+    "recording_link",
+    "recording",
+    "audio_url",
+    "audio_file_url",
+)
+
+_PLACEHOLDER_VALUES = {"", "none", "null", "n/a", "na", "-", "0", "false"}
+_AUDIO_EXT_RE = re.compile(
+    r"\.(?:mp3|wav|m4a|aac|ogg|opus|amr|3gp|caf|webm|mp4)(?:\?.*)?$", re.IGNORECASE
+)
+
+
+def extract_recording_url(raw_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Returns the playable recording URL from a provider payload.
+
+    Accepts every field name DooCTI has used for this value, most importantly
+    ``record_location`` (the field its own portal/iframe reads). Template
+    placeholders such as ``{{record_location}}`` or ``%record_location%`` are
+    ignored so an unrendered webhook can never be stored as a dead link.
+    """
+    if not isinstance(raw_data, dict):
+        return None
+    for key in RECORDING_URL_KEYS:
+        value = raw_data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip().strip('"').strip("'")
+        if text.lower() in _PLACEHOLDER_VALUES:
+            continue
+        if text.startswith(("%", "$", "{")):
+            continue
+        if text.startswith("//"):
+            text = "https:" + text
+        if text.startswith(("http://", "https://")) and " " not in text:
+            return text
+    return None
 RECORDING_DURATION_KEYS = (
     "recording_duration", "recording_duration_seconds", "rec_duration",
     "record_duration", "audio_duration",
@@ -240,6 +307,257 @@ class DooctiRecordingService:
 
         _URL_EXISTS_CACHE[url] = (now, exists)
         return exists
+
+    @classmethod
+    def is_configured_storage_url(cls, url: Optional[str], base_url: Optional[str]) -> bool:
+        """True when *url* lives on the configured recording bucket host."""
+        clean = str(url or "").strip()
+        base = str(base_url or "").strip()
+        if not clean or not base:
+            return False
+        try:
+            return urllib.parse.urlsplit(clean).netloc.lower() == urllib.parse.urlsplit(base).netloc.lower()
+        except Exception:
+            return False
+
+    @classmethod
+    def is_definitely_empty_recording(
+        cls, url: Optional[str], min_size: int = 500, timeout: float = 4.0
+    ) -> bool:
+        """
+        Returns True only when the object is *known* to be an empty placeholder
+        (a header-only file, < ``min_size`` bytes) or is definitively gone.
+
+        A network error returns False: an unverifiable URL is not rejected,
+        because blocking a real recording is worse than showing one spinner.
+        """
+        clean = str(url or "").strip()
+        if not clean:
+            return True
+
+        now = time.time()
+        cached = _STUB_CHECK_CACHE.get(clean)
+        if cached and (now - cached[0]) < STUB_CHECK_TTL_SECONDS:
+            return cached[1]
+
+        is_stub = False
+        headers = {"User-Agent": "WACRM-RecordingResolver/1.0"}
+        try:
+            req = urllib.request.Request(clean, headers=headers, method="HEAD")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                length = int(resp.headers.get("Content-Length") or 0)
+                if length:
+                    is_stub = length < min_size
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 410):
+                is_stub = True
+        except Exception:
+            # Some signed providers reject HEAD; try a tiny ranged GET.
+            try:
+                ranged = dict(headers)
+                ranged["Range"] = "bytes=0-0"
+                req = urllib.request.Request(clean, headers=ranged)
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    content_range = resp.headers.get("Content-Range") or ""
+                    if "/" in content_range:
+                        total = int(content_range.rsplit("/", 1)[-1] or 0)
+                        if total:
+                            is_stub = total < min_size
+            except urllib.error.HTTPError as exc:
+                if exc.code in (404, 410):
+                    is_stub = True
+            except Exception:
+                is_stub = False
+
+        _STUB_CHECK_CACHE[clean] = (now, is_stub)
+        return is_stub
+
+    # ------------------------------------------------------------------
+    # DooCTI recordingUrl API resolver
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _get_provider_api_config(cls, db: Session) -> Dict[str, Any]:
+        """Reads optional DooCTI portal API credentials from IntegrationConfig."""
+        data: Dict[str, Any] = {}
+        try:
+            cfg = db.query(IntegrationConfig).filter(IntegrationConfig.integration_type == "IVR").first()
+            if cfg and cfg.config_data:
+                data = json.loads(cfg.config_data or "{}")
+        except Exception as exc:
+            logger.debug(f"[DooctiRecording] Could not read provider API config: {exc}")
+            return {}
+
+        return {
+            "common_api_url": str(
+                data.get("recording_api_url")
+                or data.get("doocti_api_url")
+                or "https://api-v2.doocti.com"
+            ).strip().rstrip("/"),
+            "portal_url": str(
+                data.get("portal_url") or data.get("doocti_portal_url") or ""
+            ).strip().rstrip("/"),
+            "tenant_code": str(
+                data.get("tenant_code") or data.get("account_id") or ""
+            ).strip(),
+            "token": str(
+                data.get("recording_api_token") or data.get("doocti_api_token") or ""
+            ).strip(),
+            "username": str(
+                data.get("recording_api_username") or data.get("doocti_username") or ""
+            ).strip(),
+            "password": str(
+                data.get("recording_api_password") or data.get("doocti_password") or ""
+            ),
+        }
+
+    @classmethod
+    def _decode_jwt_claims(cls, token: str) -> Dict[str, Any]:
+        """Decodes (without verifying) the claims embedded in a DooCTI JWT."""
+        try:
+            payload = str(token or "").split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            decoded = base64.urlsafe_b64decode(payload.encode("utf-8"))
+            claims = json.loads(decoded.decode("utf-8", errors="ignore"))
+            return claims if isinstance(claims, dict) else {}
+        except Exception:
+            return {}
+
+    @classmethod
+    def _provider_access_token(cls, cfg: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+        """
+        Returns (token, claims). Uses a configured token when present, otherwise
+        logs in with the tenant's DooCTI username/password (the same endpoint
+        the DooCTI dialer uses) and caches the token for 30 minutes.
+        """
+        configured = cfg.get("token") or ""
+        if configured:
+            return configured, cls._decode_jwt_claims(configured)
+
+        username = cfg.get("username") or ""
+        password = cfg.get("password") or ""
+        if not username or not password:
+            return None, {}
+
+        cache_key = f"{cfg.get('common_api_url')}|{username}"
+        now = time.time()
+        cached = _PROVIDER_LOGIN_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < PROVIDER_LOGIN_TTL_SECONDS:
+            return cached[1], cached[2]
+
+        login_url = f"{cfg.get('common_api_url')}/v2/oauth/login"
+        body = json.dumps({"username": username, "password": password, "role": 2}).encode("utf-8")
+        try:
+            req = urllib.request.Request(
+                login_url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "WACRM-RecordingResolver/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                result = json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
+            token = str(result.get("access_token") or "").strip()
+            if not token:
+                logger.warning("[DooctiRecording] DooCTI login returned no access_token.")
+                return None, {}
+            claims = cls._decode_jwt_claims(token)
+            _PROVIDER_LOGIN_CACHE[cache_key] = (now, token, claims)
+            return token, claims
+        except Exception as exc:
+            logger.warning(f"[DooctiRecording] DooCTI API login failed: {exc}")
+            return None, {}
+
+    @classmethod
+    def resolve_provider_recording_url(
+        cls, call: CallLog, db: Session
+    ) -> Optional[str]:
+        """
+        Resolves a recording through DooCTI's own ``recordingUrl`` endpoint:
+
+            GET {portal_url}/recordingUrl?tenant_code=..&date=YYYY-MM-DD&id=<uniqueid>
+
+        The request is keyed by the call's authoritative uniqueid only, so the
+        returned URL is safe to attach to that exact call. Returns None when the
+        API is not configured or no recording exists.
+        """
+        prov_id = str(call.provider_call_id or "").strip()
+        if not cls.is_authoritative_call_id(prov_id):
+            return None
+
+        now = time.time()
+        cached = _PROVIDER_RECORDING_CACHE.get(prov_id)
+        if cached and (now - cached[0]) < PROVIDER_RECORDING_TTL_SECONDS:
+            return cached[1]
+
+        cfg = cls._get_provider_api_config(db)
+        token, claims = cls._provider_access_token(cfg)
+        if not token:
+            return None
+
+        portal = cfg.get("portal_url") or ""
+        if not portal:
+            portal_domain = str(
+                claims.get("http://api.doocti.com/claims/portal_domain") or ""
+            ).strip()
+            if portal_domain:
+                portal = "https://" + portal_domain
+        tenant = cfg.get("tenant_code") or str(
+            claims.get("http://api.doocti.com/claims/tenant_code") or ""
+        ).strip()
+        if not portal or not tenant:
+            logger.debug(
+                "[DooctiRecording] provider resolver skipped: portal_url/tenant_code unknown."
+            )
+            return None
+
+        date_str = cls._recording_date_for_id(prov_id, call.started_at or call.created_at or get_ist_now())
+        query = urllib.parse.urlencode(
+            {"tenant_code": tenant, "date": date_str, "id": prov_id}
+        )
+        api_url = f"{portal}/recordingUrl?{query}"
+        try:
+            req = urllib.request.Request(
+                api_url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "User-Agent": "WACRM-RecordingResolver/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                text = resp.read().decode("utf-8", errors="ignore") or "{}"
+                result = json.loads(text)
+        except Exception as exc:
+            logger.debug(f"[DooctiRecording] recordingUrl lookup failed for {prov_id}: {exc}")
+            _PROVIDER_RECORDING_CACHE[prov_id] = (now, None)
+            return None
+
+        resolved = ""
+        if isinstance(result, dict):
+            resolved = str(result.get("url") or "").strip()
+            if not resolved and isinstance(result.get("data"), dict):
+                resolved = str((result.get("data") or {}).get("url") or "").strip()
+        if resolved.startswith("//"):
+            resolved = "https:" + resolved
+        if not resolved.startswith(("http://", "https://")):
+            _PROVIDER_RECORDING_CACHE[prov_id] = (now, None)
+            return None
+        if cls.is_definitely_empty_recording(resolved):
+            logger.warning(
+                f"[DooctiRecording] recordingUrl for {prov_id} points at an empty placeholder; ignoring."
+            )
+            _PROVIDER_RECORDING_CACHE[prov_id] = (now, None)
+            return None
+
+        logger.info(
+            f"🎧 [DooctiRecording] Resolved provider recording URL for uniqueid='{prov_id}'."
+        )
+        _PROVIDER_RECORDING_CACHE[prov_id] = (now, resolved)
+        return resolved
 
     @classmethod
     def _parse_mpeg_duration(cls, header: bytes, total_size: int) -> Optional[int]:
@@ -657,17 +975,28 @@ class DooctiRecordingService:
         if provider_upper in ("MOBILE_SIM", "DIRECT_DIAL"):
             return None
 
-        # 1. Existing public URL, but never one that provably belongs to another call.
-        if curr_rec and "127.0.0.1" not in curr_rec and "localhost" not in curr_rec:
-            if cls._recording_belongs_to_call(call, curr_rec, db):
-                return curr_rec
-            logger.warning(
-                f"[DooctiRecording] Ignoring recording on Call ID={call.id}: "
-                f"'{curr_rec}' belongs to another call uniqueid."
-            )
-            return None
-
         target_base = (base_url or cls.get_configured_base_url(db)).rstrip("/")
+
+        # 1. Existing public URL, but never one that provably belongs to another call.
+        #    A stored Oracle object may be a 144-byte header-only placeholder that
+        #    DooCTI later replaced; treat it as missing so the provider resolver can
+        #    find the real audio instead of returning a dead link forever.
+        if curr_rec and "127.0.0.1" not in curr_rec and "localhost" not in curr_rec:
+            if not cls._recording_belongs_to_call(call, curr_rec, db):
+                logger.warning(
+                    f"[DooctiRecording] Ignoring recording on Call ID={call.id}: "
+                    f"'{curr_rec}' belongs to another call uniqueid."
+                )
+                return None
+            if cls.is_configured_storage_url(curr_rec, target_base) and cls.is_definitely_empty_recording(
+                curr_rec
+            ):
+                logger.info(
+                    f"[DooctiRecording] Call ID={call.id} stores an empty placeholder "
+                    f"recording; attempting a provider lookup."
+                )
+            else:
+                return curr_rec
 
         # 2. Loopback URL -> Oracle Cloud object (same uniqueid, no guessing).
         if curr_rec and ("127.0.0.1" in curr_rec or "localhost" in curr_rec):
@@ -701,27 +1030,49 @@ class DooctiRecordingService:
             return None
 
         cand = cls._find_exact_bucket_recording(call, db, target_base)
-        if not cand:
-            return None
+        if cand:
+            matched_url = cand["url"]
+            if not cls._recording_belongs_to_call(call, matched_url, db):
+                return None
+            if auto_save:
+                cls.attach_recording(
+                    call,
+                    db,
+                    matched_url,
+                    recording_id=str(cand.get("uniqueid") or ""),
+                    source="DOOCTI",
+                    commit=True,
+                )
+                logger.info(
+                    f"🎯 [DooctiRecording] Linked exact recording for Call ID={call.id} "
+                    f"uniqueid='{call.provider_call_id}'."
+                )
+            return matched_url
 
-        matched_url = cand["url"]
-        if not cls._recording_belongs_to_call(call, matched_url, db):
+        # 5. DooCTI's own recordingUrl API. The request is keyed by this call's
+        #    uniqueid, so the returned URL is authoritative for this call even
+        #    when its filename does not contain the uniqueid.
+        provider_url = cls.resolve_provider_recording_url(call, db)
+        if not provider_url:
+            return None
+        if not cls._recording_belongs_to_call(call, provider_url, db):
             return None
 
         if auto_save:
             cls.attach_recording(
                 call,
                 db,
-                matched_url,
-                recording_id=str(cand.get("uniqueid") or ""),
-                source="DOOCTI",
+                provider_url,
+                recording_id=str(call.provider_call_id or "").strip() or None,
+                source="DOOCTI_API",
                 commit=True,
+                derive_duration=True,
             )
             logger.info(
-                f"🎯 [DooctiRecording] Linked exact recording for Call ID={call.id} "
+                f"🎯 [DooctiRecording] Linked provider recording for Call ID={call.id} "
                 f"uniqueid='{call.provider_call_id}'."
             )
-        return matched_url
+        return provider_url
 
     @classmethod
     def sync_all_missing_recordings(
