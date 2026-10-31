@@ -469,30 +469,39 @@ class DooctiRecordingService:
             return cached[1], cached[2]
 
         login_url = f"{cfg.get('common_api_url')}/v2/oauth/login"
-        body = json.dumps({"username": username, "password": password, "role": 2}).encode("utf-8")
-        try:
-            req = urllib.request.Request(
-                login_url,
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "WACRM-RecordingResolver/1.0",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=10.0) as resp:
-                result = json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
-            token = str(result.get("access_token") or "").strip()
-            if not token:
-                logger.warning("[DooctiRecording] DooCTI login returned no access_token.")
-                return None, {}
-            claims = cls._decode_jwt_claims(token)
-            _PROVIDER_LOGIN_CACHE[cache_key] = (now, token, claims)
-            return token, claims
-        except Exception as exc:
-            logger.warning(f"[DooctiRecording] DooCTI API login failed: {exc}")
-            return None, {}
+        last_error: Optional[Exception] = None
+        for role in (2, 1):
+            body = json.dumps(
+                {"username": username, "password": password, "role": role}
+            ).encode("utf-8")
+            try:
+                req = urllib.request.Request(
+                    login_url,
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": "WACRM-RecordingResolver/1.0",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    result = json.loads(
+                        resp.read().decode("utf-8", errors="ignore") or "{}"
+                    )
+                token = str(result.get("access_token") or "").strip()
+                if not token:
+                    logger.warning("[DooctiRecording] DooCTI login returned no access_token.")
+                    continue
+                claims = cls._decode_jwt_claims(token)
+                _PROVIDER_LOGIN_CACHE[cache_key] = (now, token, claims)
+                return token, claims
+            except Exception as exc:
+                last_error = exc
+                continue
+        if last_error:
+            logger.warning(f"[DooctiRecording] DooCTI API login failed: {last_error}")
+        return None, {}
 
     @classmethod
     def _provider_extension_candidates(
@@ -707,6 +716,16 @@ class DooctiRecordingService:
         prov_id = str(call.provider_call_id or "").strip()
         if not cls.is_authoritative_call_id(prov_id):
             return None
+
+        # The provider API is a fallback for recent uploads, not a bulk backfill:
+        # older calls are resolved from storage only, so a 14-day sync cannot
+        # trigger thousands of provider requests.
+        started = call.started_at or call.created_at
+        if isinstance(started, datetime.datetime):
+            if started.tzinfo:
+                started = started.astimezone(IST_TIMEZONE).replace(tzinfo=None)
+            if (get_ist_now() - started).days > 7:
+                return None
 
         now = time.time()
         cached = _PROVIDER_RECORDING_CACHE.get(prov_id)
