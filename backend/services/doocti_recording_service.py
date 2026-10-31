@@ -428,6 +428,14 @@ class DooctiRecordingService:
         except Exception:
             return {}
 
+    @staticmethod
+    def _token_is_expired(claims: Dict[str, Any], skew_seconds: int = 60) -> bool:
+        try:
+            exp = float(claims.get("exp"))
+        except (TypeError, ValueError):
+            return False
+        return exp <= time.time() + skew_seconds
+
     @classmethod
     def _provider_access_token(cls, cfg: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
         """
@@ -437,7 +445,13 @@ class DooctiRecordingService:
         """
         configured = cfg.get("token") or ""
         if configured:
-            return configured, cls._decode_jwt_claims(configured)
+            claims = cls._decode_jwt_claims(configured)
+            if not cls._token_is_expired(claims):
+                return configured, claims
+            logger.info(
+                "[DooctiRecording] Configured recording API token has expired; "
+                "falling back to username/password login."
+            )
 
         username = cfg.get("username") or ""
         password = cfg.get("password") or ""
@@ -447,7 +461,11 @@ class DooctiRecordingService:
         cache_key = f"{cfg.get('common_api_url')}|{username}"
         now = time.time()
         cached = _PROVIDER_LOGIN_CACHE.get(cache_key)
-        if cached and (now - cached[0]) < PROVIDER_LOGIN_TTL_SECONDS:
+        if (
+            cached
+            and (now - cached[0]) < PROVIDER_LOGIN_TTL_SECONDS
+            and not cls._token_is_expired(cached[2])
+        ):
             return cached[1], cached[2]
 
         login_url = f"{cfg.get('common_api_url')}/v2/oauth/login"

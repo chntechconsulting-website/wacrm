@@ -14,10 +14,12 @@ Every test here asserts the new contract:
 """
 
 import asyncio
+import base64
 import datetime
 import json
 import os
 import sys
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -208,6 +210,40 @@ class TestRecordingIdentityHelpers(RecordingTestBase):
             "not-a-call-id",
         ):
             self.assertFalse(DooctiRecordingService.is_authoritative_call_id(bad), bad)
+
+    def test_expired_configured_token_falls_back_to_password_login(self):
+        def make_token(exp):
+            payload = base64.urlsafe_b64encode(
+                json.dumps({"exp": exp}).encode()
+            ).decode().rstrip("=")
+            return f"header.{payload}.signature"
+
+        expired = make_token(time.time() - 10)
+        fresh = make_token(time.time() + 3600)
+
+        class FakeResponse:
+            def read(self, *_args):
+                return json.dumps({"access_token": fresh}).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        cfg = {
+            "token": expired,
+            "username": "agent",
+            "password": "secret",
+            "common_api_url": "https://api.example.com",
+        }
+        with mock.patch(
+            "urllib.request.urlopen", lambda req, timeout=10.0: FakeResponse()
+        ):
+            token, claims = DooctiRecordingService._provider_access_token(cfg)
+
+        self.assertEqual(token, fresh)
+        self.assertGreater(claims["exp"], time.time())
 
     def test_recording_id_comes_from_filename(self):
         self.assertEqual(
