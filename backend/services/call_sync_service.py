@@ -359,16 +359,44 @@ def reconcile_unanswered_calls_with_cdr(
     )
 
     updated: List[Dict[str, Any]] = []
+    stats = {
+        "inspected": len(rows),
+        "cdr_rows": len(cdr),
+        "matched": 0,
+        "already_answered": 0,
+        "has_audio": 0,
+        "already_correct": 0,
+    }
+    skipped: List[Dict[str, Any]] = []
     for call in rows:
         prov_id = str(call.provider_call_id or "").strip()
         cdr_row = cdr.get(prov_id)
-        if not cdr_row or not _cdr_says_unanswered(cdr_row):
+        if not cdr_row:
+            continue
+        stats["matched"] += 1
+        if not _cdr_says_unanswered(cdr_row):
+            stats["already_answered"] += 1
+            if len(skipped) < 10:
+                skipped.append({
+                    "provider_call_id": prov_id,
+                    "reason": "provider_says_answered",
+                    "provider_status": cdr_row.get("status"),
+                    "provider_talk_time": cdr_row.get("talk_times"),
+                })
             continue
 
         # Audio is proof of a connected call; never contradict it.
         if str(call.recording_url or "").strip():
+            stats["has_audio"] += 1
+            if len(skipped) < 10:
+                skipped.append({
+                    "provider_call_id": prov_id,
+                    "reason": "call_has_recording",
+                    "recording_url": call.recording_url,
+                })
             continue
         if int(call.recording_duration_seconds or 0) > 0:
+            stats["has_audio"] += 1
             continue
 
         direction = str(call.call_direction or "").upper()
@@ -382,6 +410,7 @@ def reconcile_unanswered_calls_with_cdr(
             and call.answered_at is None
         )
         if already_correct:
+            stats["already_correct"] += 1
             continue
 
         change = {
@@ -424,10 +453,11 @@ def reconcile_unanswered_calls_with_cdr(
 
     return {
         "status": "success",
-        "inspected": len(rows),
+        **stats,
         "updated": len(updated),
         "dry_run": dry_run,
         "calls": updated,
+        "skipped": skipped,
     }
 
 
