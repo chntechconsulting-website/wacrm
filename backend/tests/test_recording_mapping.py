@@ -13,6 +13,7 @@ Every test here asserts the new contract:
   * legacy wrong links can be repaired without deleting call rows or files.
 """
 
+import asyncio
 import datetime
 import json
 import os
@@ -29,7 +30,7 @@ from sqlalchemy.pool import StaticPool
 
 import models  # noqa: F401  (registers every table on Base.metadata)
 from database import Base, get_db
-from main import app
+from main import app, startup_db_client
 from models.call_log import CallLog
 from models.integration import IntegrationConfig
 from routers.ivr import build_call_log_response
@@ -627,6 +628,14 @@ class TestWebhookCallBatches(RecordingTestBase):
         self.assertEqual(len(synthetic), 2)
         self.assertTrue(all(c.recording_url is None for c in synthetic))
         db.close()
+
+
+class TestStartupSchedulers(unittest.TestCase):
+    def test_startup_handler_can_create_background_tasks(self):
+        # asyncio.create_task() needs a running loop. Starlette executes sync
+        # startup handlers in a worker thread where no loop exists, which made
+        # the recording auto-link scheduler silently never start.
+        self.assertTrue(asyncio.iscoroutinefunction(startup_db_client))
 
 
 if __name__ == "__main__":

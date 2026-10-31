@@ -206,7 +206,10 @@ app.include_router(crm_proxy_router, prefix="/api/v1")
 app.include_router(crm_proxy_router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
-def startup_db_client():
+async def startup_db_client():
+    # This MUST stay async: Starlette runs sync startup handlers in a worker
+    # thread, where asyncio.create_task() raises "no running event loop" and
+    # silently skips every background scheduler (recording sync included).
     # Initialize Database Tables
     try:
         Base.metadata.create_all(bind=engine)
