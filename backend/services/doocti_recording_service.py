@@ -400,9 +400,7 @@ class DooctiRecordingService:
             "dialer_url": str(
                 data.get("dialer_url") or data.get("doocti_dialer_url") or ""
             ).strip().rstrip("/"),
-            "tenant_code": str(
-                data.get("tenant_code") or data.get("account_id") or ""
-            ).strip(),
+            "tenant_code": str(data.get("tenant_code") or "").strip(),
             "admin_extension": str(data.get("admin_extension") or "").strip(),
             "extension_mapping": data.get("extension_mapping") or {},
             "token": str(
@@ -561,8 +559,27 @@ class DooctiRecordingService:
     def _provider_extension_candidates(
         cls, call: CallLog, cfg: Dict[str, Any]
     ) -> List[str]:
-        """Extensions whose DooCTI call log may contain this call."""
+        """
+        Identifiers DooCTI's dialer call-log accepts as ``agent``.
+
+        In production this is the agent's login email (for example
+        ``itsales@chnindia.com``), not the SIP extension. The extension is kept
+        only as a last-resort fallback.
+        """
         mapping = cfg.get("extension_mapping") or {}
+
+        def identifiers(ext: Any, info: Any) -> List[str]:
+            values: List[str] = []
+            if isinstance(info, dict):
+                for key in ("username", "email", "agent_email"):
+                    value = str(info.get(key) or "").strip()
+                    if value:
+                        values.append(value)
+            ext_text = str(ext or "").strip()
+            if ext_text:
+                values.append(ext_text)
+            return values
+
         candidates: List[str] = []
         emp_id = getattr(call, "employee_id", None)
         if emp_id is not None and isinstance(mapping, dict):
@@ -571,21 +588,26 @@ class DooctiRecordingService:
                     continue
                 try:
                     if int(info.get("employee_id")) == int(emp_id):
-                        candidates.append(str(ext).strip())
+                        candidates.extend(identifiers(ext, info))
                 except (TypeError, ValueError):
                     continue
-        admin = str(cfg.get("admin_extension") or "").strip()
-        if admin:
-            candidates.append(admin)
+
+        admin_ext = str(cfg.get("admin_extension") or "").strip()
+        if admin_ext and isinstance(mapping, dict):
+            candidates.extend(identifiers(admin_ext, mapping.get(admin_ext)))
+        elif admin_ext:
+            candidates.append(admin_ext)
+
         if isinstance(mapping, dict):
-            candidates.extend(str(ext).strip() for ext in mapping.keys())
+            for ext, info in mapping.items():
+                candidates.extend(identifiers(ext, info))
 
         seen = set()
         result: List[str] = []
-        for ext in candidates:
-            if ext and ext not in seen:
-                seen.add(ext)
-                result.append(ext)
+        for candidate in candidates:
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                result.append(candidate)
         return result[:6]
 
     @staticmethod
@@ -717,8 +739,10 @@ class DooctiRecordingService:
             ).strip()
             if portal_domain:
                 portal = "https://" + portal_domain
-        tenant = cfg.get("tenant_code") or str(
-            claims.get("http://api.doocti.com/claims/tenant_code") or ""
+        tenant = str(
+            claims.get("http://api.doocti.com/claims/tenant_code")
+            or cfg.get("tenant_code")
+            or ""
         ).strip()
         if not portal or not tenant:
             logger.debug(

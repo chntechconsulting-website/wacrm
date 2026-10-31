@@ -847,6 +847,17 @@ class TestWebhookCallBatches(RecordingTestBase):
                 DooctiRecordingService._resolve_via_dialer_calllog(call, "t", {}, cfg)
             )
 
+    def test_dialer_calllog_prefers_agent_email_over_extension(self):
+        call = SimpleNamespace(employee_id=5)
+        cfg = {
+            "extension_mapping": {
+                "1282": {"employee_id": 1, "username": "admin"},
+                "1283": {"employee_id": 5, "username": "itsales@chnindia.com"},
+            }
+        }
+        identifiers = DooctiRecordingService._provider_extension_candidates(call, cfg)
+        self.assertEqual(identifiers[0], "itsales@chnindia.com")
+
     def test_concurrent_same_phone_calls_are_not_merged(self):
         phone = "9876500077"
         now = get_ist_now()
