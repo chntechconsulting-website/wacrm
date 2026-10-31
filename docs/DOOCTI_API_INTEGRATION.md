@@ -236,16 +236,24 @@ Authorization: Bearer <portal token>
 
 WACRM can call the same endpoint and attach the returned `{ "url": "..." }` to the exact
 `provider_call_id`. Configure it through `PUT /api/doocti/config` (all fields optional):
-
 | Config key | Purpose |
 | :--- | :--- |
 | `portal_url` | Tenant portal host. If omitted, it is read from the login JWT claim `portal_domain`. |
 | `recording_api_url` | Login API base (default `https://api-v2.doocti.com`). |
+| `dialer_url` | Optional override for the dialer host; otherwise read from the `dialer_domain` claim. |
 | `recording_api_username` / `recording_api_password` | DooCTI portal login used to obtain a Bearer token automatically (cached 30 minutes). |
 | `recording_api_token` | Pre-issued Bearer token, if you already have one. |
 
 The resolver only accepts the provider's response for the call's own authoritative
 uniqueid; it never guesses by phone number, timestamp or file size.
+
+> **Dialer fallback:** the same credentials also let WACRM call the dialer endpoint the
+> DooCTI iframe itself uses,
+> `GET https://<dialer_domain>/crm/calllog?agent=<ext>&skip=0&take=100&phone_number=<num>`.
+> WACRM keeps only the row whose own `id` equals the call's `uniqueid` and reads its
+> `record_location`. The phone number merely narrows the query; it is never used as the
+> match. The dialer domain is read from the login token claim `dialer_domain`, so a
+> username/password login is enough.
 
 > **Diagnostic note:** DooCTI's call list enables the play icon whenever
 > `record_location` is a non-empty string. It does not verify that the object has audio

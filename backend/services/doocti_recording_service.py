@@ -397,9 +397,14 @@ class DooctiRecordingService:
             "portal_url": str(
                 data.get("portal_url") or data.get("doocti_portal_url") or ""
             ).strip().rstrip("/"),
+            "dialer_url": str(
+                data.get("dialer_url") or data.get("doocti_dialer_url") or ""
+            ).strip().rstrip("/"),
             "tenant_code": str(
                 data.get("tenant_code") or data.get("account_id") or ""
             ).strip(),
+            "admin_extension": str(data.get("admin_extension") or "").strip(),
+            "extension_mapping": data.get("extension_mapping") or {},
             "token": str(
                 data.get("recording_api_token") or data.get("doocti_api_token") or ""
             ).strip(),
@@ -472,31 +477,151 @@ class DooctiRecordingService:
             return None, {}
 
     @classmethod
-    def resolve_provider_recording_url(
-        cls, call: CallLog, db: Session
+    def _provider_extension_candidates(
+        cls, call: CallLog, cfg: Dict[str, Any]
+    ) -> List[str]:
+        """Extensions whose DooCTI call log may contain this call."""
+        mapping = cfg.get("extension_mapping") or {}
+        candidates: List[str] = []
+        emp_id = getattr(call, "employee_id", None)
+        if emp_id is not None and isinstance(mapping, dict):
+            for ext, info in mapping.items():
+                if not isinstance(info, dict):
+                    continue
+                try:
+                    if int(info.get("employee_id")) == int(emp_id):
+                        candidates.append(str(ext).strip())
+                except (TypeError, ValueError):
+                    continue
+        admin = str(cfg.get("admin_extension") or "").strip()
+        if admin:
+            candidates.append(admin)
+        if isinstance(mapping, dict):
+            candidates.extend(str(ext).strip() for ext in mapping.keys())
+
+        seen = set()
+        result: List[str] = []
+        for ext in candidates:
+            if ext and ext not in seen:
+                seen.add(ext)
+                result.append(ext)
+        return result[:6]
+
+    @staticmethod
+    def _customer_phone_candidates(call: CallLog) -> List[str]:
+        """The customer's number as DooCTI stores it (10-digit local number)."""
+        direction = str(call.call_direction or "").upper()
+        primary = call.from_number if direction == "INBOUND" else call.to_number
+        out: List[str] = []
+        for value in (primary, call.from_number, call.to_number):
+            digits = re.sub(r"\D", "", str(value or ""))
+            if len(digits) > 10:
+                digits = digits[-10:]
+            if digits and digits not in out:
+                out.append(digits)
+        return out
+
+    @classmethod
+    def _extract_calllog_rows(
+        cls, payload: Any, depth: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Finds the row list in any of DooCTI's call-log response shapes."""
+        if depth > 3:
+            return []
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, dict):
+            for key in ("data", "rows", "result", "calllog", "calls", "records"):
+                if key in payload:
+                    rows = cls._extract_calllog_rows(payload[key], depth + 1)
+                    if rows:
+                        return rows
+        return []
+
+    @classmethod
+    def _resolve_via_dialer_calllog(
+        cls,
+        call: CallLog,
+        token: str,
+        claims: Dict[str, Any],
+        cfg: Dict[str, Any],
     ) -> Optional[str]:
         """
-        Resolves a recording through DooCTI's own ``recordingUrl`` endpoint:
-
-            GET {portal_url}/recordingUrl?tenant_code=..&date=YYYY-MM-DD&id=<uniqueid>
-
-        The request is keyed by the call's authoritative uniqueid only, so the
-        returned URL is safe to attach to that exact call. Returns None when the
-        API is not configured or no recording exists.
+        Mirrors what the DooCTI iframe itself does: read the agent's call log and
+        take the recording from the row whose *own id* is this call's uniqueid.
+        The id equality is the join; phone numbers only narrow the query.
         """
+        dialer = cfg.get("dialer_url") or str(
+            claims.get("http://api.doocti.com/claims/dialer_domain") or ""
+        ).strip()
+        if dialer and not dialer.startswith(("http://", "https://")):
+            dialer = "https://" + dialer
+        if not dialer:
+            return None
+
         prov_id = str(call.provider_call_id or "").strip()
-        if not cls.is_authoritative_call_id(prov_id):
+        extensions = cls._provider_extension_candidates(call, cfg)
+        phones = cls._customer_phone_candidates(call)
+        if not extensions:
             return None
 
-        now = time.time()
-        cached = _PROVIDER_RECORDING_CACHE.get(prov_id)
-        if cached and (now - cached[0]) < PROVIDER_RECORDING_TTL_SECONDS:
-            return cached[1]
+        for ext in extensions:
+            params = {"agent": ext, "skip": 0, "take": 100}
+            if phones:
+                params["phone_number"] = phones[0]
+            url = f"{dialer.rstrip('/')}/crm/calllog?{urllib.parse.urlencode(params)}"
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json",
+                        "User-Agent": "WACRM-RecordingResolver/1.0",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    payload = json.loads(
+                        resp.read().decode("utf-8", errors="ignore") or "{}"
+                    )
+            except Exception as exc:
+                logger.debug(
+                    f"[DooctiRecording] dialer calllog lookup failed for ext={ext}: {exc}"
+                )
+                continue
 
-        cfg = cls._get_provider_api_config(db)
-        token, claims = cls._provider_access_token(cfg)
-        if not token:
-            return None
+            for row in cls._extract_calllog_rows(payload):
+                row_ids = {
+                    str(row.get(key) or "").strip()
+                    for key in ("id", "uniqueid", "unique_id", "call_id", "callid")
+                }
+                if prov_id not in row_ids:
+                    continue
+                candidate = extract_recording_url(row)
+                if not candidate:
+                    continue
+                if cls.is_definitely_empty_recording(candidate):
+                    logger.info(
+                        f"[DooctiRecording] dialer calllog for {prov_id} returned an "
+                        f"empty placeholder; ignoring."
+                    )
+                    continue
+                logger.info(
+                    f"🎧 [DooctiRecording] Resolved recording from dialer call log "
+                    f"for uniqueid='{prov_id}'."
+                )
+                return candidate
+        return None
+
+    @classmethod
+    def _resolve_via_portal_api(
+        cls,
+        call: CallLog,
+        token: str,
+        claims: Dict[str, Any],
+        cfg: Dict[str, Any],
+    ) -> Optional[str]:
+        """Calls DooCTI's tenant portal ``recordingUrl`` endpoint for one uniqueid."""
+        prov_id = str(call.provider_call_id or "").strip()
 
         portal = cfg.get("portal_url") or ""
         if not portal:
@@ -514,7 +639,9 @@ class DooctiRecordingService:
             )
             return None
 
-        date_str = cls._recording_date_for_id(prov_id, call.started_at or call.created_at or get_ist_now())
+        date_str = cls._recording_date_for_id(
+            prov_id, call.started_at or call.created_at or get_ist_now()
+        )
         query = urllib.parse.urlencode(
             {"tenant_code": tenant, "date": date_str, "id": prov_id}
         )
@@ -533,7 +660,6 @@ class DooctiRecordingService:
                 result = json.loads(text)
         except Exception as exc:
             logger.debug(f"[DooctiRecording] recordingUrl lookup failed for {prov_id}: {exc}")
-            _PROVIDER_RECORDING_CACHE[prov_id] = (now, None)
             return None
 
         resolved = ""
@@ -544,18 +670,47 @@ class DooctiRecordingService:
         if resolved.startswith("//"):
             resolved = "https:" + resolved
         if not resolved.startswith(("http://", "https://")):
-            _PROVIDER_RECORDING_CACHE[prov_id] = (now, None)
             return None
-        if cls.is_definitely_empty_recording(resolved):
-            logger.warning(
-                f"[DooctiRecording] recordingUrl for {prov_id} points at an empty placeholder; ignoring."
-            )
-            _PROVIDER_RECORDING_CACHE[prov_id] = (now, None)
-            return None
-
         logger.info(
             f"🎧 [DooctiRecording] Resolved provider recording URL for uniqueid='{prov_id}'."
         )
+        return resolved
+
+    @classmethod
+    def resolve_provider_recording_url(
+        cls, call: CallLog, db: Session
+    ) -> Optional[str]:
+        """
+        Resolves a recording through DooCTI itself, keyed only by this call's
+        authoritative uniqueid. Tries the dialer call log (what the iframe uses)
+        and then the tenant portal ``recordingUrl`` endpoint, depending on which
+        the configured credentials can access. Returns None when unconfigured.
+        """
+        prov_id = str(call.provider_call_id or "").strip()
+        if not cls.is_authoritative_call_id(prov_id):
+            return None
+
+        now = time.time()
+        cached = _PROVIDER_RECORDING_CACHE.get(prov_id)
+        if cached and (now - cached[0]) < PROVIDER_RECORDING_TTL_SECONDS:
+            return cached[1]
+
+        cfg = cls._get_provider_api_config(db)
+        token, claims = cls._provider_access_token(cfg)
+        if not token:
+            return None
+
+        resolved = cls._resolve_via_dialer_calllog(call, token, claims, cfg)
+        if not resolved:
+            resolved = cls._resolve_via_portal_api(call, token, claims, cfg)
+
+        if resolved and cls.is_definitely_empty_recording(resolved):
+            logger.warning(
+                f"[DooctiRecording] provider recording for {prov_id} is an empty "
+                f"placeholder; ignoring."
+            )
+            resolved = None
+
         _PROVIDER_RECORDING_CACHE[prov_id] = (now, resolved)
         return resolved
 

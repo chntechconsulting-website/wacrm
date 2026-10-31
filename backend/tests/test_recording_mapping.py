@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -708,6 +709,107 @@ class TestWebhookCallBatches(RecordingTestBase):
             )
         db.close()
         self.assertIsNone(self.get_call(synthetic_id).recording_url)
+
+    def test_dialer_calllog_matches_by_exact_uniqueid_only(self):
+        call = SimpleNamespace(
+            provider_call_id="1793333701.131200031",
+            employee_id=7,
+            call_direction="OUTBOUND",
+            to_number="+91 98765 00031",
+            from_number="07969671855",
+        )
+        cfg = {
+            "admin_extension": "1281",
+            "extension_mapping": {"1282": {"employee_id": 7}},
+            "dialer_url": "https://dialer.example.com",
+        }
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = json.dumps(payload).encode()
+
+            def read(self, *_args):
+                return self._payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        seen = []
+
+        def fake_urlopen(req, timeout=10.0):
+            seen.append(req.full_url)
+            return FakeResponse(
+                {
+                    "data": [
+                        {
+                            "id": "1793333701.131200032",
+                            "record_location": "https://media.example.com/other.mp3",
+                        },
+                        {
+                            "id": "1793333701.131200031",
+                            "record_location": "https://media.example.com/right.mp3",
+                        },
+                    ]
+                }
+            )
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda url, **kwargs: False,
+        ):
+            resolved = DooctiRecordingService._resolve_via_dialer_calllog(
+                call, "test-token", {}, cfg
+            )
+
+        self.assertEqual(resolved, "https://media.example.com/right.mp3")
+        self.assertTrue(seen)
+        self.assertTrue(all("agent=1282" in url for url in seen))
+        self.assertTrue(all("phone_number=9876500031" in url for url in seen))
+
+    def test_dialer_calllog_refuses_same_phone_different_call(self):
+        call = SimpleNamespace(
+            provider_call_id="1793333702.131200041",
+            employee_id=7,
+            call_direction="INBOUND",
+            to_number="07969671855",
+            from_number="9876500041",
+        )
+        cfg = {
+            "extension_mapping": {"1282": {"employee_id": 7}},
+            "dialer_url": "https://dialer.example.com",
+        }
+
+        class FakeResponse:
+            def read(self, *_args):
+                return json.dumps(
+                    {
+                        "data": [
+                            {
+                                "id": "1793333702.131200042",
+                                "record_location": "https://media.example.com/other.mp3",
+                            }
+                        ]
+                    }
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        with mock.patch("urllib.request.urlopen", lambda req, timeout=10.0: FakeResponse()), mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda url, **kwargs: False,
+        ):
+            self.assertIsNone(
+                DooctiRecordingService._resolve_via_dialer_calllog(call, "t", {}, cfg)
+            )
 
     def test_concurrent_same_phone_calls_are_not_merged(self):
         phone = "9876500077"
