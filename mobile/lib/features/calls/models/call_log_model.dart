@@ -7,6 +7,8 @@ class CallLogModel {
   final String callStatus; // ANSWERED, MISSED, BUSY, FAILED, COMPLETED
   final int durationSeconds;
   final String? recordingUrl;
+  final String? recordingId;
+  final int? recordingDurationSeconds;
   final String? recordingStatus;
   final String? notes;
   final String? employeeName;
@@ -23,6 +25,8 @@ class CallLogModel {
     required this.callStatus,
     required this.durationSeconds,
     this.recordingUrl,
+    this.recordingId,
+    this.recordingDurationSeconds,
     this.recordingStatus,
     this.notes,
     this.employeeName,
@@ -54,6 +58,9 @@ class CallLogModel {
           .toUpperCase(),
       durationSeconds: json['duration_seconds'] ?? json['duration'] ?? 0,
       recordingUrl: json['recording_url'],
+      recordingId: json['recording_id'],
+      recordingDurationSeconds: (json['recording_duration_seconds'] as num?)
+          ?.toInt(),
       recordingStatus: json['recording_status'],
       notes: json['notes'],
       employeeName: json['employee_name'],

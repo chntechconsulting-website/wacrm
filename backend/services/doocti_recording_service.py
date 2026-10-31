@@ -31,6 +31,53 @@ URL_EXISTS_TTL_SECONDS = 45.0
 _AUDIO_DURATION_CACHE: Dict[str, Tuple[float, Optional[int]]] = {}
 AUDIO_DURATION_TTL_SECONDS = 3600.0
 
+# Webhook fields that identify the recording artifact itself. A recording may be
+# named after the answered leg, so this identity is stored separately from the
+# call uniqueid (but is still never guessed).
+RECORDING_ID_KEYS = (
+    "recording_id", "recording_uniqueid", "recording_unique_id",
+    "recording_name", "recording_file", "recording_filename", "rec_file",
+)
+RECORDING_DURATION_KEYS = (
+    "recording_duration", "recording_duration_seconds", "rec_duration",
+    "record_duration", "audio_duration",
+)
+
+
+def extract_recording_metadata(
+    raw_data: Dict[str, Any], rec_url: Optional[str]
+) -> Tuple[Optional[str], Optional[int]]:
+    """Returns (recording_id, recording_duration_seconds) from a webhook payload."""
+    recording_id = None
+    for key in RECORDING_ID_KEYS:
+        value = raw_data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and not text.startswith("%") and not text.startswith("$"):
+            recording_id = text
+            break
+    if recording_id and ("/" in recording_id or "\\" in recording_id):
+        recording_id = DooctiRecordingService.recording_id_from_url(recording_id)
+    if not recording_id and rec_url:
+        recording_id = DooctiRecordingService.recording_id_from_url(rec_url)
+
+    duration = None
+    for key in RECORDING_DURATION_KEYS:
+        value = raw_data.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            parsed = int(float(str(value).strip()))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= parsed <= 24 * 60 * 60:
+            duration = parsed
+            break
+
+    return recording_id, duration
+
+
 # MPEG audio Layer III bitrate tables (kbit/s), indexed by the 4-bit bitrate index.
 _MPEG_LAYER3_BITRATES = {
     1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],   # MPEG 1
@@ -296,6 +343,275 @@ class DooctiRecordingService:
         _AUDIO_DURATION_CACHE[clean_url] = (now, duration)
         return duration
 
+    # ------------------------------------------------------------------
+    # Exact recording identity helpers
+    # ------------------------------------------------------------------
+
+    # Asterisk/FreePBX uniqueids look like "1793333301.131253490". Only these
+    # (or equally authoritative numeric provider call ids) may be used to join
+    # a recording to a call.
+    _AUTHORITATIVE_ID_RE = re.compile(r"^\d{9,13}(?:\.\d+)?$")
+    _SYNTHETIC_PREFIXES = ("DOOCTI_", "CALL_", "SIM_", "CS_CALL_", "SMARTFLO_CALL_")
+    _RECORDING_EXTENSIONS = (
+        ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".amr",
+        ".3gp", ".caf", ".webm", ".mp4",
+    )
+
+    @classmethod
+    def is_authoritative_call_id(cls, value: Any) -> bool:
+        """True only for IDs the PBX itself generated (never CRM synthetic ids)."""
+        clean = str(value or "").strip()
+        if not clean:
+            return False
+        if clean.upper().startswith(cls._SYNTHETIC_PREFIXES):
+            return False
+        return bool(cls._AUTHORITATIVE_ID_RE.match(clean))
+
+    @classmethod
+    def recording_id_from_url(cls, url: Optional[str]) -> Optional[str]:
+        """Extracts the recording's own uniqueid from its filename."""
+        clean = str(url or "").strip()
+        if not clean:
+            return None
+        path = clean.split("?", 1)[0].split("#", 1)[0].rstrip("/\\")
+        name = re.split(r"[\\/]", path)[-1]
+        low = name.lower()
+        for ext in cls._RECORDING_EXTENSIONS:
+            if low.endswith(ext):
+                name = name[: -len(ext)]
+                break
+        return name.strip() or None
+
+    @classmethod
+    def _recording_belongs_to_call(cls, call: CallLog, url: Optional[str], db: Session) -> bool:
+        """
+        Rejects a URL that provably belongs to another call row.
+
+        Legacy rows were sometimes given a recording whose filename is the
+        *other* call's PBX uniqueid. That is proof of a wrong association: the
+        call that owns that uniqueid is the only legal owner.
+        """
+        rec_id = cls.recording_id_from_url(url)
+        if not rec_id or not cls.is_authoritative_call_id(rec_id):
+            return True
+        if str(call.provider_call_id or "").strip() == rec_id:
+            return True
+        try:
+            owner = (
+                db.query(CallLog.id)
+                .filter(CallLog.provider_call_id == rec_id, CallLog.id != call.id)
+                .first()
+            )
+        except Exception:
+            return True
+        if owner:
+            return False
+        stored_id = str(call.recording_id or "").strip()
+        if stored_id and cls.is_authoritative_call_id(stored_id) and stored_id != rec_id:
+            return False
+        return True
+
+    @classmethod
+    def _recording_date_for_id(cls, uniqueid: str, fallback_dt: datetime.datetime) -> str:
+        """Bucket folders are IST dates derived from the uniqueid's epoch."""
+        match = re.match(r"^(\d{9,13})(?:\.\d+)?$", uniqueid or "")
+        if match:
+            try:
+                epoch = int(match.group(1))
+                dt_ist = datetime.datetime.fromtimestamp(epoch, tz=IST_TIMEZONE)
+                return dt_ist.strftime("%Y-%m-%d")
+            except (ValueError, OSError, OverflowError):
+                pass
+        return fallback_dt.strftime("%Y-%m-%d")
+
+    @classmethod
+    def _find_exact_bucket_recording(
+        cls,
+        call: CallLog,
+        db: Session,
+        base_url: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Returns the bucket object whose filename is exactly the call's
+        provider uniqueid. No time/size scoring is performed.
+        """
+        prov_id = str(call.provider_call_id or "").strip()
+        if not cls.is_authoritative_call_id(prov_id):
+            return None
+        target_dt = call.started_at or call.created_at or get_ist_now()
+        if isinstance(target_dt, datetime.datetime) and target_dt.tzinfo:
+            target_dt = target_dt.astimezone(IST_TIMEZONE).replace(tzinfo=None)
+        if not isinstance(target_dt, datetime.datetime):
+            target_dt = get_ist_now()
+
+        date_str = cls._recording_date_for_id(prov_id, target_dt)
+        direct_url = f"{base_url.rstrip('/')}/{date_str}/{prov_id}.mp3"
+        if cls.url_exists(direct_url):
+            return {
+                "uniqueid": prov_id,
+                "url": direct_url,
+                "filename": f"{prov_id}.mp3",
+                "size": 0,
+            }
+
+        # The folder date is normally encoded in the uniqueid. Check the
+        # neighbouring IST dates only as an exact-name lookup.
+        dates = [date_str]
+        epoch_match = re.match(r"^(\d{9,13})", prov_id)
+        if epoch_match:
+            try:
+                epoch_dt = datetime.datetime.fromtimestamp(
+                    int(epoch_match.group(1)), tz=IST_TIMEZONE
+                )
+                dates = [
+                    (epoch_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
+                    epoch_dt.strftime("%Y-%m-%d"),
+                    (epoch_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
+                ]
+            except (ValueError, OSError, OverflowError):
+                pass
+
+        for d in dates:
+            for cand in cls.fetch_bucket_recordings_for_date(d, base_url):
+                if str(cand.get("uniqueid") or "").strip() != prov_id:
+                    continue
+                if int(cand.get("size") or 0) < 500:
+                    continue
+                if not cls.url_exists(cand.get("url")):
+                    continue
+                return cand
+        return None
+
+    @classmethod
+    def attach_recording(
+        cls,
+        call: CallLog,
+        db: Session,
+        url: Optional[str],
+        recording_id: Optional[str] = None,
+        duration: Optional[int] = None,
+        source: Optional[str] = None,
+        commit: bool = True,
+        derive_duration: bool = False,
+    ) -> bool:
+        """
+        Links a recording to exactly one call, with duplicate protection.
+
+        The recording is expected to carry its own identity (uniqueid in the
+        filename or an explicit recording id from the webhook). If the same
+        recording is already stored on another call the link is refused rather
+        than duplicated.
+        """
+        clean_url = str(url or "").strip()
+        if not clean_url:
+            return False
+        rec_id = str(recording_id or "").strip() or cls.recording_id_from_url(clean_url)
+
+        try:
+            if rec_id:
+                conflict = (
+                    db.query(CallLog.id)
+                    .filter(CallLog.id != call.id, CallLog.recording_id == rec_id)
+                    .first()
+                )
+                if conflict:
+                    logger.warning(
+                        f"[DooctiRecording] Refusing duplicate recording id '{rec_id}' "
+                        f"for Call ID={call.id}; already linked to Call ID={conflict[0]}."
+                    )
+                    return False
+            conflict_url = (
+                db.query(CallLog.id)
+                .filter(CallLog.id != call.id, CallLog.recording_url == clean_url)
+                .first()
+            )
+            if conflict_url:
+                logger.warning(
+                    f"[DooctiRecording] Refusing duplicate recording URL for Call ID={call.id}; "
+                    f"already linked to Call ID={conflict_url[0]}."
+                )
+                return False
+        except Exception as exc:
+            logger.debug(f"[DooctiRecording] Duplicate check failed for Call ID={call.id}: {exc}")
+
+        if duration is None and derive_duration:
+            duration = cls.resolve_audio_duration(clean_url)
+
+        call.recording_url = clean_url
+        if rec_id:
+            call.recording_id = rec_id
+        if duration is not None:
+            try:
+                call.recording_duration_seconds = int(duration)
+            except (TypeError, ValueError):
+                pass
+        call.recording_source = source or call.recording_source or "DOOCTI"
+        call.recording_attached_at = get_ist_now()
+
+        if commit:
+            try:
+                db.commit()
+            except Exception as save_err:
+                db.rollback()
+                logger.warning(
+                    f"[DooctiRecording] Failed to save recording for Call ID={call.id}: {save_err}"
+                )
+                return False
+        return True
+
+    @classmethod
+    def repair_misassigned_recordings(cls, db: Session, limit: int = 500) -> int:
+        """
+        Non-destructive repair for legacy rows whose recording filename is the
+        uniqueid of a *different* call row. The link is moved to its rightful
+        owner (or cleared when the owner already has audio). Files and call logs
+        are never deleted.
+        """
+        repaired = 0
+        calls = (
+            db.query(CallLog)
+            .filter(CallLog.recording_url.isnot(None))
+            .order_by(desc(CallLog.id))
+            .limit(limit)
+            .all()
+        )
+        for call in calls:
+            rec_id = cls.recording_id_from_url(call.recording_url)
+            if not rec_id or not cls.is_authoritative_call_id(rec_id):
+                continue
+            if str(call.provider_call_id or "").strip() == rec_id:
+                continue
+            owner = (
+                db.query(CallLog)
+                .filter(CallLog.provider_call_id == rec_id, CallLog.id != call.id)
+                .first()
+            )
+            if not owner:
+                continue
+            if not owner.recording_url and not owner.recording_id:
+                owner.recording_url = call.recording_url
+                owner.recording_id = rec_id
+                owner.recording_duration_seconds = call.recording_duration_seconds
+                owner.recording_source = call.recording_source or "DOOCTI"
+                owner.recording_attached_at = call.recording_attached_at
+                logger.info(
+                    f"[DooctiRecording] Moved legacy recording '{rec_id}' from "
+                    f"Call ID={call.id} to its owner Call ID={owner.id}."
+                )
+            call.recording_url = None
+            call.recording_id = None
+            call.recording_duration_seconds = None
+            call.recording_attached_at = None
+            repaired += 1
+        if repaired:
+            try:
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning(f"[DooctiRecording] Legacy recording repair failed: {exc}")
+                return 0
+        return repaired
+
     @classmethod
     def claim_unambiguous_recording(
         cls,
@@ -306,94 +622,17 @@ class DooctiRecordingService:
         window_after: int = 180,
     ) -> Optional[str]:
         """
-        Finds the ONE recording that belongs to a call that was never finalised by a
-        CDR (browser closed, hangup message lost, webhook never delivered).
-
-        Recording keys are named after the PBX uniqueid, whose epoch is the call start
-        time, so a narrow window around ``started_at`` is a reliable join. Only a
-        single, unused candidate is ever claimed: if the window is ambiguous nothing
-        is linked rather than attaching somebody else's audio.
+        Links a recording only when the call's own authoritative uniqueid matches
+        a stored recording. Time-window guessing was removed: a missing recording
+        is always safer than another customer's audio.
         """
         if str(call.provider or "").upper() in ("MOBILE_SIM", "DIRECT_DIAL"):
             return None
-        base_url = (base_url or cls.get_configured_base_url(db)).rstrip("/")
-        target_dt = call.started_at or call.created_at
-        if not isinstance(target_dt, datetime.datetime):
+        if not cls.is_authoritative_call_id(call.provider_call_id):
             return None
-        if target_dt.tzinfo:
-            target_dt = target_dt.astimezone(IST_TIMEZONE).replace(tzinfo=None)
-
-        dates = [target_dt.strftime("%Y-%m-%d")]
-        if target_dt.hour == 0 and target_dt.minute < 15:
-            dates.append((target_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
-
-        candidates: List[Dict[str, Any]] = []
-        for d in dates:
-            for cand in cls.fetch_bucket_recordings_for_date(d, base_url):
-                if cand.get("size", 0) < 500:
-                    continue
-                cand_dt = cand.get("dt_ist")
-                if not cand_dt:
-                    continue
-                diff = (cand_dt - target_dt).total_seconds()
-                if -window_before <= diff <= window_after:
-                    candidates.append(cand)
-
-        if len(candidates) != 1:
-            return None
-
-        cand = candidates[0]
-        cand_url = cand.get("url")
-        cand_uid = cand.get("uniqueid")
-        cand_dt = cand.get("dt_ist")
-        if not cand_url:
-            return None
-
-        # If another call session started at almost the same moment, the audio cannot
-        # be attributed unambiguously - leave it unlinked rather than guessing.
-        if cand_dt:
-            sibling = (
-                db.query(CallLog.id)
-                .filter(
-                    CallLog.id != call.id,
-                    or_(
-                        and_(
-                            CallLog.started_at.isnot(None),
-                            CallLog.started_at >= cand_dt - datetime.timedelta(seconds=window_before),
-                            CallLog.started_at <= cand_dt + datetime.timedelta(seconds=window_after),
-                        ),
-                        and_(
-                            CallLog.started_at.is_(None),
-                            CallLog.created_at >= cand_dt - datetime.timedelta(seconds=window_before),
-                            CallLog.created_at <= cand_dt + datetime.timedelta(seconds=window_after),
-                        ),
-                    ),
-                )
-                .first()
-            )
-            if sibling:
-                return None
-
-        # Never steal a recording that is already attached to another call.
-        used_url = (
-            db.query(CallLog.id)
-            .filter(CallLog.recording_url == cand_url, CallLog.id != call.id)
-            .first()
+        return cls.match_recording_for_call(
+            call, db, base_url=base_url, auto_save=True
         )
-        if used_url:
-            return None
-        if cand_uid:
-            used_uid = (
-                db.query(CallLog.id)
-                .filter(CallLog.provider_call_id == cand_uid, CallLog.id != call.id)
-                .first()
-            )
-            if used_uid:
-                return None
-
-        if not cls.url_exists(cand_url):
-            return None
-        return cand_url
 
     @classmethod
     def match_recording_for_call(
@@ -404,25 +643,33 @@ class DooctiRecordingService:
         auto_save: bool = True
     ) -> Optional[str]:
         """
-        Resolves or matches the audio recording URL for a CallLog instance.
-        If recording is found, updates call.recording_url, links real Asterisk uniqueid,
-        and persists to DB if auto_save is True.
+        Resolves a recording strictly by the call's provider uniqueid.
+
+        There is deliberately no fallback that scores candidates by timestamp or
+        file size: that is what previously attached one call's audio to another.
         """
-        # 1. Existing valid public recording URL
         curr_rec = str(call.recording_url or "").strip()
-        if curr_rec and "127.0.0.1" not in curr_rec and "localhost" not in curr_rec:
-            return curr_rec
 
         # Mobile SIM / direct-dial calls are recorded, if at all, by the device's
         # own dialer and uploaded as an authorised file. They must never be
-        # matched against the DooCTI Oracle bucket by phone/time heuristics:
-        # doing so could attach somebody else's PBX recording.
+        # matched against the DooCTI Oracle bucket.
         provider_upper = str(call.provider or "").upper()
         if provider_upper in ("MOBILE_SIM", "DIRECT_DIAL"):
             return None
 
-        # 2. Existing loopback URL (127.0.0.1/audio/...) -> normalize to Oracle Cloud storage
+        # 1. Existing public URL, but never one that provably belongs to another call.
+        if curr_rec and "127.0.0.1" not in curr_rec and "localhost" not in curr_rec:
+            if cls._recording_belongs_to_call(call, curr_rec, db):
+                return curr_rec
+            logger.warning(
+                f"[DooctiRecording] Ignoring recording on Call ID={call.id}: "
+                f"'{curr_rec}' belongs to another call uniqueid."
+            )
+            return None
+
         target_base = (base_url or cls.get_configured_base_url(db)).rstrip("/")
+
+        # 2. Loopback URL -> Oracle Cloud object (same uniqueid, no guessing).
         if curr_rec and ("127.0.0.1" in curr_rec or "localhost" in curr_rec):
             match = re.search(r"https?://[^/]+(?:/audio)?(/.*)", curr_rec)
             if match:
@@ -430,18 +677,17 @@ class DooctiRecordingService:
                 if path.endswith(".wav"):
                     path = path[:-4] + ".mp3"
                 resolved = f"{target_base}{path}"
-                # Only keep the rewrite when the object really exists; otherwise
-                # fall through to the bucket listing which can find the right key.
-                if cls.url_exists(resolved):
-                    call.recording_url = resolved
+                if (
+                    cls.url_exists(resolved)
+                    and cls._recording_belongs_to_call(call, resolved, db)
+                ):
                     if auto_save:
-                        try:
-                            db.commit()
-                        except Exception:
-                            db.rollback()
+                        cls.attach_recording(
+                            call, db, resolved, source="DOOCTI", commit=True
+                        )
                     return resolved
 
-        # 3. Only attempt bucket resolution for calls that were connected / completed or have positive duration
+        # 3. Only connected/completed calls may be resolved automatically.
         st_upper = (call.call_status or "").upper()
         is_candidate = (
             (call.duration_seconds is not None and call.duration_seconds > 0)
@@ -450,109 +696,32 @@ class DooctiRecordingService:
         if not is_candidate:
             return None
 
-        # 4. If provider_call_id is a native Asterisk uniqueid (e.g. 1793333301.131253490)
-        prov_id = str(call.provider_call_id or "").strip()
-        is_asterisk_uid = bool(re.match(r"^\d{9,11}\.\d+$", prov_id))
-        target_dt = call.started_at or call.created_at or get_ist_now()
-        date_str = target_dt.strftime("%Y-%m-%d")
-
-        if is_asterisk_uid:
-            direct_url = f"{target_base}/{date_str}/{prov_id}.mp3"
-            # Only persist the direct URL when the object really exists; otherwise
-            # fall through to the bucket listing (Asterisk may name the file with
-            # the answered leg's uniqueid instead of the caller leg's).
-            if cls.url_exists(direct_url):
-                call.recording_url = direct_url
-                if auto_save:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                return direct_url
-
-        # 5. Search Oracle Object Storage bucket for the call date
-        dates_to_search = [date_str]
-        # If call occurred within 30 minutes of midnight, also check previous or next day
-        if target_dt.hour == 0 and target_dt.minute < 30:
-            prev_day = (target_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-            dates_to_search.append(prev_day)
-        elif target_dt.hour == 23 and target_dt.minute > 30:
-            next_day = (target_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-            dates_to_search.append(next_day)
-
-        recordings: List[Dict[str, Any]] = []
-        for d in dates_to_search:
-            recordings.extend(cls.fetch_bucket_recordings_for_date(d, target_base))
-
-        if not recordings:
+        # 4. Strict exact-uniqueid lookup.
+        if not cls.is_authoritative_call_id(call.provider_call_id):
             return None
 
-        # Matching algorithm:
-        # Candidate must:
-        # - Have audio data (size > 500 bytes to filter empty 144B headers)
-        # - Fall within a ±15-minute window of the call start/connect time
-        expected_size = max(5000, (call.duration_seconds or 10) * 1000)
-        best_candidate: Optional[Dict[str, Any]] = None
-        best_score = float("inf")
+        cand = cls._find_exact_bucket_recording(call, db, target_base)
+        if not cand:
+            return None
 
-        # An exact filename/uniqueid match is authoritative - use it directly.
-        if prov_id:
-            for cand in recordings:
-                if cand.get("uniqueid") == prov_id and cand.get("size", 0) >= 500:
-                    best_candidate = cand
-                    best_score = 0.0
-                    break
+        matched_url = cand["url"]
+        if not cls._recording_belongs_to_call(call, matched_url, db):
+            return None
 
-        if not best_candidate:
-            for cand in recordings:
-                if cand["size"] < 500:
-                    continue
-                cand_dt = cand.get("dt_ist")
-                if not cand_dt:
-                    continue
-
-                time_diff = abs((cand_dt - target_dt).total_seconds())
-                if time_diff > 900:  # 15 minutes max difference
-                    continue
-
-                # Weight score by time proximity and audio size correlation
-                size_diff = abs(cand["size"] - expected_size)
-                score = time_diff + (size_diff / 800.0)
-
-                if score < best_score:
-                    best_score = score
-                    best_candidate = cand
-
-        if best_candidate:
-            matched_url = best_candidate["url"]
-            call.recording_url = matched_url
-
-            # If call had a synthetic ID (doocti_1282_...), update with real Asterisk PBX uniqueid if unique
-            uid_cand = best_candidate.get("uniqueid")
-            if uid_cand and (prov_id.startswith("doocti_") or not prov_id):
-                conflict = (
-                    db.query(CallLog)
-                    .filter(CallLog.provider_call_id == uid_cand, CallLog.id != call.id)
-                    .first()
-                )
-                if not conflict:
-                    call.provider_call_id = uid_cand
-
-            if auto_save:
-                call_id_val = call.id
-                try:
-                    db.commit()
-                    logger.info(
-                        f"🎯 [DooctiRecording] Auto-linked recording for Call ID={call_id_val}: "
-                        f"{best_candidate['filename']} (Size={best_candidate['size']}B, Diff={best_score:.1f})"
-                    )
-                except Exception as save_err:
-                    db.rollback()
-                    logger.warning(f"Failed to save matched recording URL to CallLog ID={call_id_val}: {save_err}")
-
-            return matched_url
-
-        return None
+        if auto_save:
+            cls.attach_recording(
+                call,
+                db,
+                matched_url,
+                recording_id=str(cand.get("uniqueid") or ""),
+                source="DOOCTI",
+                commit=True,
+            )
+            logger.info(
+                f"🎯 [DooctiRecording] Linked exact recording for Call ID={call.id} "
+                f"uniqueid='{call.provider_call_id}'."
+            )
+        return matched_url
 
     @classmethod
     def sync_all_missing_recordings(
@@ -567,6 +736,10 @@ class DooctiRecordingService:
         now_ist = get_ist_now()
         since_date = now_ist - datetime.timedelta(days=days_back)
         base_url = cls.get_configured_base_url(db)
+
+        # First correct any provably wrong legacy association (moves/clears the
+        # link only; audio files and call logs are never deleted).
+        repaired = cls.repair_misassigned_recordings(db)
 
         calls = (
             db.query(CallLog)
@@ -613,6 +786,7 @@ class DooctiRecordingService:
         return {
             "status": "success",
             "synced_count": matched_count,
+            "repaired_count": repaired,
             "total_inspected": len(calls),
             "updated_calls": updated_calls,
         }

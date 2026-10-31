@@ -31,7 +31,25 @@ import { isUsableDuration, probeAudioDuration, rewindAfterProbe } from '../../ut
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import './CallLogsPage.css';
 
-const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
+// Only one call recording may play at a time. Every player listens for this
+// event and pauses itself when a different row starts playing.
+const RECORDING_PLAY_EVENT = 'wacrm:call-recording-play';
+
+const normalizeRecordingSrc = (src) => {
+  const value = String(src || '').trim();
+  if (!value) return '';
+  if (value.startsWith('//')) return `${window.location.protocol}${value}`;
+  if (value.startsWith('/')) return `${window.location.origin}${value}`;
+  return value;
+};
+
+const AudioRecordingPlayer = ({
+  src,
+  logId,
+  recordingId,
+  recordingDuration = 0,
+  fallbackDuration = 0,
+}) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -41,9 +59,26 @@ const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
   const audioRef = useRef(null);
   const probedDurationRef = useRef(false);
   const probePendingRef = useRef(false);
+  const normalizedSrc = normalizeRecordingSrc(src);
 
-  // Reset audio state when src changes
+  // Reset all audio state when this row's recording (or its identity) changes.
+  // A new recording must never inherit the previous file's duration/cursor.
   useEffect(() => {
+    const element = audioRef.current;
+    if (element) {
+      try {
+        element.pause();
+      } catch {
+        /* ignore */
+      }
+      try {
+        element.currentTime = 0;
+      } catch {
+        /* ignore */
+      }
+      if (element.dataset) delete element.dataset.durationProbe;
+    }
+
     setIsPlaying(false);
     setCurrentTime(0);
     setIsReady(false);
@@ -52,10 +87,36 @@ const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
     probedDurationRef.current = false;
     probePendingRef.current = false;
 
-    if (audioRef.current) {
-      audioRef.current.load();
+    if (element && normalizedSrc) {
+      element.load();
     }
-  }, [src]);
+
+    return () => {
+      if (element) {
+        try {
+          element.pause();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [normalizedSrc, recordingId]);
+
+  // Pause when another row starts playing its own recording.
+  useEffect(() => {
+    const handleOtherPlay = (event) => {
+      const element = audioRef.current;
+      if (!element || event.detail?.audio === element) return;
+      try {
+        element.pause();
+      } catch {
+        /* ignore */
+      }
+      setIsPlaying(false);
+    };
+    window.addEventListener(RECORDING_PLAY_EVENT, handleOtherPlay);
+    return () => window.removeEventListener(RECORDING_PLAY_EVENT, handleOtherPlay);
+  }, []);
 
   const formatAudioTime = (seconds) => {
     if (!isUsableDuration(seconds)) return '0:00';
@@ -146,6 +207,10 @@ const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
       if (el.currentTime > 1e6) {
         el.currentTime = 0;
       }
+      // Tell every other row to pause before this recording starts.
+      window.dispatchEvent(
+        new CustomEvent(RECORDING_PLAY_EVENT, { detail: { audio: el, logId } })
+      );
       el.play().then(() => {
         setIsPlaying(true);
       }).catch(err => {
@@ -172,13 +237,19 @@ const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
     }
   };
 
-  // Until the browser reports a duration, fall back to the call's billed
-  // duration so the slider and label remain usable.
+  // Actual audio metadata always wins. The backend's recording duration is the
+  // next-best value; the billed call duration is only a last-resort fallback
+  // (ringing/connection time means the two are not expected to be identical).
+  const callDuration = Number(fallbackDuration) || 0;
+  const storedRecordingDuration = Number(recordingDuration) || 0;
   const effectiveDuration = isUsableDuration(audioDuration)
     ? audioDuration
-    : (isUsableDuration(Number(fallbackDuration)) ? Number(fallbackDuration) : 0);
+    : (isUsableDuration(storedRecordingDuration)
+      ? storedRecordingDuration
+      : (isUsableDuration(callDuration) ? callDuration : 0));
+  const durationTitle = `Call: ${formatAudioTime(callDuration)} · Recording: ${formatAudioTime(effectiveDuration)}`;
 
-  if (!src || isFailed) {
+  if (!normalizedSrc || isFailed) {
     return <span className="no-recording-text">No recording available</span>;
   }
 
@@ -186,7 +257,9 @@ const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
     <div className="audio-player-wrapper">
       <audio
         ref={audioRef}
-        src={src}
+        src={normalizedSrc}
+        data-call-id={logId}
+        data-recording-id={recordingId || undefined}
         preload="metadata"
         onLoadedMetadata={handleLoadedMetadata}
         onDurationChange={handleDurationChange}
@@ -225,7 +298,7 @@ const AudioRecordingPlayer = ({ src, logId, fallbackDuration = 0 }) => {
             />
           </div>
 
-          <span className="audio-duration-text">
+          <span className="audio-duration-text" title={durationTitle}>
             {formatAudioTime(currentTime)} / {formatAudioTime(effectiveDuration)}
           </span>
         </div>
@@ -1188,9 +1261,11 @@ const CallLogsPage = () => {
                           if (log.recording_url) {
                             return (
                               <AudioRecordingPlayer
-                                key={log.id}
+                                key={`${log.id}:${log.recording_id || log.recording_url}`}
                                 src={log.recording_url}
                                 logId={log.id}
+                                recordingId={log.recording_id}
+                                recordingDuration={log.recording_duration_seconds}
                                 fallbackDuration={log.duration_seconds}
                               />
                             );

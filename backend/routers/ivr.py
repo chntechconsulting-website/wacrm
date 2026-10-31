@@ -9,6 +9,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -263,6 +264,19 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     duration = call.duration_seconds or 0
     is_connected = status_upper in ["ANSWERED", "CONNECTED", "COMPLETED"]
 
+    provider_upper = str(call.provider or "").upper()
+    is_device_dial = provider_upper in ("MOBILE_SIM", "DIRECT_DIAL")
+
+    from services.doocti_recording_service import DooctiRecordingService
+
+    # Never expose audio that provably belongs to another call row. This is a
+    # read-side guard for legacy rows; the stored link is left untouched unless
+    # the explicit repair endpoint/sync runs.
+    if resolved_rec and not DooctiRecordingService._recording_belongs_to_call(
+        call, resolved_rec, db
+    ):
+        resolved_rec = None
+
     now_ist = get_ist_now()
     call_end_time = call.ended_at or call.created_at
     is_recent = False
@@ -276,8 +290,6 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     # Fallback to automated Oracle Cloud Storage recording matcher if recording_url is missing.
     # Mobile SIM / direct-device calls are never recorded by the CRM, so never probe
     # DooCTI storage for them (that could attach an unrelated PBX recording).
-    provider_upper = str(call.provider or "").upper()
-    is_device_dial = provider_upper in ("MOBILE_SIM", "DIRECT_DIAL")
     if (
         not resolved_rec
         and is_connected
@@ -285,7 +297,6 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         and not is_device_dial
         and _should_attempt_recording_lookup(call)
     ):
-        from services.doocti_recording_service import DooctiRecordingService
         try:
             resolved_rec = DooctiRecordingService.match_recording_for_call(call, db, auto_save=True)
         except Exception:
@@ -345,6 +356,12 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         call_direction=call.call_direction or "INBOUND",
         duration_seconds=call.duration_seconds,
         recording_url=resolved_rec,
+        recording_id=(
+            (call.recording_id or "").strip()
+            or DooctiRecordingService.recording_id_from_url(resolved_rec)
+        ),
+        recording_duration_seconds=call.recording_duration_seconds,
+        recording_source=call.recording_source,
         recording_status=rec_status,
         transcript=call.transcript,
         ai_summary=call.ai_summary,
@@ -649,6 +666,7 @@ def log_manual_call_endpoint(
 async def upload_mobile_call_recording(
     call_id: str,
     file: UploadFile = File(...),
+    duration_seconds: Optional[int] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -764,6 +782,16 @@ async def upload_mobile_call_recording(
                 pass
 
     call.recording_url = f"/uploads/{_RECORDING_MANAGED_PREFIX}/{call.id}/{target.name}"
+    call.recording_id = target.stem
+    call.recording_source = "UPLOAD"
+    call.recording_attached_at = get_ist_now()
+    if duration_seconds is not None:
+        try:
+            parsed_duration = int(duration_seconds)
+        except (TypeError, ValueError):
+            parsed_duration = None
+        if parsed_duration is not None and 0 <= parsed_duration <= 24 * 60 * 60:
+            call.recording_duration_seconds = parsed_duration
     try:
         db.commit()
         db.refresh(call)

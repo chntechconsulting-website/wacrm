@@ -18,6 +18,10 @@ from models.integration import IntegrationConfig
 from services.auth import get_current_user
 from utils.timezone import get_ist_now, IST_TIMEZONE
 from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
+from services.doocti_recording_service import (
+    DooctiRecordingService,
+    extract_recording_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,43 @@ ALL_EXTENSIONS: List[str] = []
 # never be re-used for a different phone call.
 ACTIVE_CALL_STATUSES: List[str] = ["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]
 TERMINAL_CALL_STATUSES: List[str] = ["COMPLETED", "MISSED", "NO_ANSWER", "BUSY", "FAILED"]
+
+def _recording_url_conflicts_with_other_call(
+    db: Session, call: CallLog, rec_url: Optional[str], recording_id: Optional[str]
+) -> bool:
+    """True when the same audio artifact is already linked to another call row."""
+    if not rec_url and not recording_id:
+        return False
+    filters = []
+    if rec_url:
+        filters.append(CallLog.recording_url == rec_url)
+    if recording_id:
+        filters.append(CallLog.recording_id == recording_id)
+    existing = (
+        db.query(CallLog.id)
+        .filter(CallLog.id != call.id, or_(*filters))
+        .first()
+    )
+    return existing is not None
+
+
+def _candidate_has_different_recording(
+    candidate: CallLog, rec_url: Optional[str], recording_id: Optional[str]
+) -> bool:
+    """
+    A synthetic call row may only be adopted when it does not already prove a
+    different audio artifact belongs to it.
+    """
+    if not rec_url and not recording_id:
+        return False
+    stored_url = str(candidate.recording_url or "").strip()
+    if stored_url and not ("127.0.0.1" in stored_url or "localhost" in stored_url):
+        if rec_url and stored_url != rec_url:
+            return True
+    stored_id = str(candidate.recording_id or "").strip()
+    if stored_id and recording_id and stored_id != recording_id:
+        return True
+    return False
 
 # -------------------------------------------------------------
 # Helpers
@@ -577,7 +618,6 @@ def doocti_sync_recordings_alias(
     days: int = Query(7, ge=1, le=90),
     db: Session = Depends(get_db)
 ):
-    from services.doocti_recording_service import DooctiRecordingService
     return DooctiRecordingService.sync_all_missing_recordings(db=db, days_back=days)
 
 # -------------------------------------------------------------
@@ -709,11 +749,11 @@ async def push_doocti_call_log(
         clean_cust = clean_phone(raw_cust)
         if clean_cust and len(clean_cust) >= 6:
             # Only ever adopt a call that is STILL ACTIVE and started recently.
-            # Matching a finished call from an earlier session is how a new CDR used to
-            # inherit another call's answered_at/duration (e.g. a 20:20 call receiving
-            # the 12:44 answer timestamp of a previous call to the same number).
-            active_cutoff = get_ist_now() - datetime.timedelta(hours=4)
-            existing_log = (
+            # If more than one synthetic row matches, the event is ambiguous: a new
+            # row is created for the authoritative uniqueid instead of stealing a
+            # concurrent call (and its future recording).
+            active_cutoff = get_ist_now() - datetime.timedelta(minutes=30)
+            active_matches = (
                 db.query(CallLog)
                 .filter(
                     or_(
@@ -732,12 +772,18 @@ async def push_doocti_call_log(
                     ),
                 )
                 .order_by(desc(CallLog.id))
-                .first()
+                .all()
             )
-            if existing_log:
+            if len(active_matches) == 1:
+                existing_log = active_matches[0]
                 logger.info(
                     f"🔁 [DOOCTI CDR] Correlated event to active CallLog ID={existing_log.id} "
                     f"(provider_call_id='{existing_log.provider_call_id}') for phone={clean_cust}."
+                )
+            elif len(active_matches) > 1:
+                logger.warning(
+                    f"⚠️ [DOOCTI CDR] {len(active_matches)} active call rows match phone={clean_cust}; "
+                    f"refusing to merge uniqueid='{call_id}' into an arbitrary row."
                 )
 
     # 2. Agent & Station extraction (handling both scalar and dict values)
@@ -879,6 +925,8 @@ async def push_doocti_call_log(
         ""
     ).strip() or None
 
+    recording_id, recording_duration = extract_recording_metadata(raw_data, rec_url)
+
     # 8b. Answered / Connected verification:
     # A call is definitively answered if it has positive duration, a valid recording, or answered_at
     # Note: Dummy recording URLs with duration 0 on failed/missed calls do NOT count as answered!
@@ -1012,7 +1060,6 @@ async def push_doocti_call_log(
     # derived from the first frame header + object size instead of being left at 0s.
     if status_str in ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"] and dur_sec <= 0 and rec_url:
         try:
-            from services.doocti_recording_service import DooctiRecordingService
             derived_duration = DooctiRecordingService.resolve_audio_duration(rec_url)
             if derived_duration and derived_duration > 0:
                 dur_sec = int(derived_duration)
@@ -1169,16 +1216,18 @@ async def push_doocti_call_log(
         existing_log = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
 
     # Cross-provider & PBX duplicate detection:
-    # 1. Same phone + currently active call within the past 4 hours.
-    #    The initial row is created with a synthetic ID (doocti_<ext>_<phone>_<ts>) by the
-    #    originate proxy / inbound ring handler, while the terminating CDR arrives with
-    #    the real PBX uniqueid (e.g. 1792669919.123839191). Matching the *active* row by
-    #    customer number connects the CDR to that session.
-    #    Only synthetic rows are candidates: a row that already owns a different real
-    #    PBX uniqueid belongs to another call and must never be merged into.
+    # 1. Same phone + currently active synthetic row started within the last 30
+    #    minutes. The initial row is created with a synthetic ID
+    #    (doocti_<ext>_<phone>_<ts>) by the originate proxy / inbound ring handler,
+    #    while the terminating CDR arrives with the real PBX uniqueid.
+    #
+    #    The candidate must be unique AND must not already prove a different
+    #    recording belongs to it. If two calls to the same number are in flight,
+    #    nothing is merged: the CDR gets its own row with the authoritative
+    #    uniqueid instead of inheriting another call's audio.
     if not existing_log and clean_target:
-        four_hours_ago = (started_at or now_ist) - datetime.timedelta(hours=4)
-        active_match = (
+        active_cutoff = (started_at or now_ist) - datetime.timedelta(minutes=30)
+        active_matches = (
             db.query(CallLog)
             .filter(
                 or_(
@@ -1187,8 +1236,8 @@ async def push_doocti_call_log(
                 ),
                 CallLog.call_status.in_(ACTIVE_CALL_STATUSES),
                 or_(
-                    and_(CallLog.started_at.isnot(None), CallLog.started_at >= four_hours_ago),
-                    and_(CallLog.started_at.is_(None), CallLog.created_at >= four_hours_ago),
+                    and_(CallLog.started_at.isnot(None), CallLog.started_at >= active_cutoff),
+                    and_(CallLog.started_at.is_(None), CallLog.created_at >= active_cutoff),
                 ),
                 or_(
                     CallLog.provider_call_id.is_(None),
@@ -1197,26 +1246,33 @@ async def push_doocti_call_log(
                 ),
             )
             .order_by(desc(CallLog.id))
-            .first()
+            .all()
         )
-        if active_match:
-            existing_log = active_match
+        eligible = [
+            c for c in active_matches
+            if not _candidate_has_different_recording(c, rec_url, recording_id)
+        ]
+        if len(eligible) == 1:
+            existing_log = eligible[0]
             logger.info(
                 f"🔁 [DOOCTI CDR] Matched active call in progress: CallLog ID={existing_log.id} "
                 f"(provider={existing_log.provider}, call_id={existing_log.provider_call_id}) "
                 f"for phone={clean_target}. Updating with final CDR outcome."
             )
+        elif len(active_matches) > 1:
+            logger.warning(
+                f"⚠️ [DOOCTI CDR] {len(active_matches)} active rows match phone={clean_target}; "
+                f"refusing to merge uniqueid='{call_id}' into an arbitrary row."
+            )
 
-    # 2. Same phone + time window matching:
-    #    Handles the window between the hangup event and the delayed CDR/recording where
-    #    the CRM row is already terminal but still carries a synthetic provider id.
-    #    Again: only synthetic rows may be adopted, so two distinct calls to the same
-    #    number never collapse into one record.
+    # 2. Same phone + time window matching (terminal synthetic row only).
+    #    Again: one unique candidate only, and never one that already owns a
+    #    different recording.
     if not existing_log and clean_target and started_at:
         margin_sec = max(dur_sec + 600, 1800)
         window_start = started_at - datetime.timedelta(minutes=10)
         window_end = started_at + datetime.timedelta(seconds=margin_sec)
-        existing_log = (
+        candidates = (
             db.query(CallLog)
             .filter(
                 or_(
@@ -1236,14 +1292,24 @@ async def push_doocti_call_log(
                 ),
             )
             .order_by(desc(CallLog.created_at))
-            .first()
+            .all()
         )
-        if existing_log:
+        eligible = [
+            c for c in candidates
+            if not _candidate_has_different_recording(c, rec_url, recording_id)
+        ]
+        if len(eligible) == 1:
+            existing_log = eligible[0]
             logger.info(
                 f"🔁 [DOOCTI CDR] Duplicate/prior session detected: "
                 f"existing CallLog ID={existing_log.id} (provider={existing_log.provider}, "
                 f"call_id={existing_log.provider_call_id}) matches phone={clean_target}. "
                 f"Merging instead of creating duplicate."
+            )
+        elif len(candidates) > 1:
+            logger.warning(
+                f"⚠️ [DOOCTI CDR] {len(candidates)} rows match phone={clean_target} in the "
+                f"CDR window; keeping them separate for uniqueid='{call_id}'."
             )
 
     if existing_log:
@@ -1308,18 +1374,53 @@ async def push_doocti_call_log(
                 existing_log.call_status = "COMPLETED"
 
         if rec_url:
-            is_new_loopback = "127.0.0.1" in rec_url or "localhost" in rec_url
             curr_rec = str(existing_log.recording_url or "").strip()
             is_curr_loopback = "127.0.0.1" in curr_rec or "localhost" in curr_rec
-            # Update if existing has no recording, or is loopback, or new rec_url is a public/valid URL
-            if not curr_rec or is_curr_loopback or not is_new_loopback:
-                existing_log.recording_url = rec_url
-        elif not existing_log.recording_url and ((existing_log.duration_seconds and existing_log.duration_seconds > 0) or (existing_log.call_status or "").upper() in ["COMPLETED", "ANSWERED"]):
-            from services.doocti_recording_service import DooctiRecordingService
+            same_url = curr_rec == rec_url
+            same_recording = (
+                not existing_log.recording_id
+                or not recording_id
+                or existing_log.recording_id == recording_id
+            )
+            # The payload is keyed by this exact call uniqueid, so filling a missing
+            # / loopback recording is authoritative. Replacing a different valid
+            # recording is only allowed when the recording identity agrees.
+            may_attach = (
+                not curr_rec
+                or is_curr_loopback
+                or same_url
+                or (same_recording and recording_id == existing_log.provider_call_id)
+            )
+            if may_attach and not _recording_url_conflicts_with_other_call(
+                db, existing_log, rec_url, recording_id
+            ):
+                DooctiRecordingService.attach_recording(
+                    existing_log,
+                    db,
+                    rec_url,
+                    recording_id=recording_id,
+                    duration=recording_duration,
+                    source="WEBHOOK",
+                    commit=False,
+                )
+            elif may_attach:
+                logger.warning(
+                    f"⚠️ [DOOCTI CDR] Recording for uniqueid='{call_id}' is already linked "
+                    f"to another call row; not duplicating it."
+                )
+        elif (
+            not existing_log.recording_url
+            and ((existing_log.duration_seconds and existing_log.duration_seconds > 0)
+                 or (existing_log.call_status or "").upper() in ["COMPLETED", "ANSWERED"])
+        ):
             try:
-                matched_rec = DooctiRecordingService.match_recording_for_call(existing_log, db, auto_save=False)
+                matched_rec = DooctiRecordingService.match_recording_for_call(
+                    existing_log, db, auto_save=False
+                )
                 if matched_rec:
-                    existing_log.recording_url = matched_rec
+                    DooctiRecordingService.attach_recording(
+                        existing_log, db, matched_rec, source="DOOCTI", commit=False
+                    )
             except Exception:
                 pass
 
@@ -1399,7 +1500,6 @@ async def push_doocti_call_log(
                 call_status=status_str,
                 call_direction=call_dir,
                 duration_seconds=dur_sec,
-                recording_url=rec_url,
                 started_at=started_at,
                 answered_at=answered_at,
                 ended_at=ended_at,
@@ -1410,9 +1510,28 @@ async def push_doocti_call_log(
             db.commit()
             db.refresh(call_entry)
 
+            # Attach only the artifact delivered for this exact uniqueid (or one
+            # whose filename is exactly this uniqueid). Never guess.
+            if rec_url and not _recording_url_conflicts_with_other_call(
+                db, call_entry, rec_url, recording_id
+            ):
+                DooctiRecordingService.attach_recording(
+                    call_entry,
+                    db,
+                    rec_url,
+                    recording_id=recording_id,
+                    duration=recording_duration,
+                    source="WEBHOOK",
+                    commit=True,
+                )
+            elif rec_url:
+                logger.warning(
+                    f"⚠️ [DOOCTI CDR] Recording for uniqueid='{call_id}' is already "
+                    f"linked to another call; not duplicating it."
+                )
+
             # Auto-resolve recording from Oracle storage if not in payload
             if not call_entry.recording_url and (dur_sec > 0 or status_str in ["COMPLETED", "ANSWERED"]):
-                from services.doocti_recording_service import DooctiRecordingService
                 try:
                     matched_new = DooctiRecordingService.match_recording_for_call(call_entry, db, auto_save=True)
                     if matched_new:
@@ -1431,8 +1550,18 @@ async def push_doocti_call_log(
                     existing_log.call_status = status_str
                 if dur_sec > 0:
                     existing_log.duration_seconds = dur_sec
-                if rec_url and not existing_log.recording_url:
-                    existing_log.recording_url = rec_url
+                if rec_url and not existing_log.recording_url and not _recording_url_conflicts_with_other_call(
+                    db, existing_log, rec_url, recording_id
+                ):
+                    DooctiRecordingService.attach_recording(
+                        existing_log,
+                        db,
+                        rec_url,
+                        recording_id=recording_id,
+                        duration=recording_duration,
+                        source="WEBHOOK",
+                        commit=False,
+                    )
                 if resolved_lead_id and not existing_log.lead_id:
                     existing_log.lead_id = resolved_lead_id
                 if resolved_emp_id and not existing_log.employee_id:
@@ -1471,7 +1600,9 @@ async def push_doocti_call_log(
         "product_category": call_entry.product_category or lead_product_cat or "UNCLASSIFIED",
         "call_status": call_entry.call_status or status_str,
         "duration": call_entry.duration_seconds or 0,
-        "recording_path": call_entry.recording_url
+        "recording_path": call_entry.recording_url,
+        "recording_id": call_entry.recording_id,
+        "recording_duration_seconds": call_entry.recording_duration_seconds,
     }
 
 # -------------------------------------------------------------

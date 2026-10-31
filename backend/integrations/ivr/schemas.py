@@ -31,6 +31,9 @@ class CallLogResponse(BaseModel):
     call_direction: str
     duration_seconds: int
     recording_url: Optional[str] = None
+    recording_id: Optional[str] = None
+    recording_duration_seconds: Optional[int] = None
+    recording_source: Optional[str] = None
     transcript: Optional[str] = None
     ai_summary: Optional[str] = None
     sentiment: Optional[str] = None

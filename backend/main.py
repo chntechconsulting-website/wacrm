@@ -259,7 +259,12 @@ def startup_db_client():
                     "ALTER TABLE call_logs ADD COLUMN product_category VARCHAR(50) NULL",
                     "ALTER TABLE call_logs ADD COLUMN sim_account_id VARCHAR(100) NULL",
                     "ALTER TABLE call_logs ADD COLUMN sim_label VARCHAR(100) NULL",
-                    "ALTER TABLE call_logs ADD COLUMN sim_slot INT NULL"
+                    "ALTER TABLE call_logs ADD COLUMN sim_slot INT NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_id VARCHAR(150) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_duration_seconds INT NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_source VARCHAR(30) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_attached_at DATETIME NULL",
+                    "ALTER TABLE call_logs ADD INDEX ix_call_logs_recording_id (recording_id)"
                 ]:
                     try:
                         conn.execute(text(col_sql))

@@ -11,6 +11,11 @@ from models.customer import Customer
 from models.employee import Employee
 from models.activity import LeadActivity
 from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
+from utils.timezone import get_ist_now
+from services.doocti_recording_service import (
+    DooctiRecordingService,
+    extract_recording_metadata,
+)
 from .service import (
     IVRService, 
     CALL_STATUS_COMPLETED, 
@@ -172,6 +177,7 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
     # Parse Recording
     raw_rec = payload.get("recording") or payload.get("RecordingUrl") or payload.get("recording_url") or payload.get("recording_path")
     recording_url = None if _is_placeholder(raw_rec) else (str(raw_rec).strip() if raw_rec else None)
+    recording_id, recording_duration = extract_recording_metadata(payload, recording_url)
 
     # -------------------------------------------------------------
     # STAGE 3: RESOLVE DIRECTION (INBOUND VS OUTBOUND)
@@ -211,10 +217,10 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
     # Cross-provider duplicate detection: same phone + same time window (3 min) from any provider
     # Prevents double entries when both Smartflo/IVR AND Doocti fire webhooks for the same call
     if not existing_call and not is_test_call and cust_digits and len(cust_digits) >= 10:
-        _now = datetime.datetime.utcnow()
+        _now = get_ist_now()
         _window_start = _now - datetime.timedelta(minutes=3)
         _window_end = _now + datetime.timedelta(minutes=1)
-        existing_call = (
+        candidates = (
             db.query(CallLog)
             .filter(
                 or_(
@@ -226,13 +232,31 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
                 CallLog.call_direction == call_direction,
             )
             .order_by(CallLog.created_at.desc())
-            .first()
+            .all()
         )
-        if existing_call:
+        # Only merge when exactly one row can be the same call and it does not
+        # already prove a different recording belongs to it. Two concurrent
+        # calls to the same number must never collapse into one row.
+        eligible = []
+        for cand in candidates:
+            stored_url = str(cand.recording_url or "").strip()
+            stored_id = str(cand.recording_id or "").strip()
+            if recording_url and stored_url and stored_url != recording_url:
+                continue
+            if recording_id and stored_id and stored_id != recording_id:
+                continue
+            eligible.append(cand)
+        if len(eligible) == 1:
+            existing_call = eligible[0]
             logger.info(
                 f"[IVR DEDUP] Cross-provider duplicate detected: existing CallLog ID={existing_call.id} "
                 f"(provider={existing_call.provider}, call_id={existing_call.provider_call_id}) "
                 f"matches phone={cust_digits[-10:]} within 3-min window. Merging."
+            )
+        elif len(candidates) > 1:
+            logger.warning(
+                f"[IVR DEDUP] {len(candidates)} rows match phone={cust_digits[-10:]} within the "
+                f"3-min window; refusing to merge provider_call_id={provider_call_id} arbitrarily."
             )
 
     logger.info(
@@ -312,9 +336,23 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
         existing_call.call_status = call_status
         existing_call.duration_seconds = duration_sec or existing_call.duration_seconds
         if recording_url:
-            existing_call.recording_url = recording_url
+            curr_rec = str(existing_call.recording_url or "").strip()
+            stored_id = str(existing_call.recording_id or "").strip()
+            same_recording = bool(
+                recording_id and stored_id and stored_id == recording_id
+            )
+            if not curr_rec or curr_rec == recording_url or same_recording:
+                DooctiRecordingService.attach_recording(
+                    existing_call,
+                    db,
+                    recording_url,
+                    recording_id=recording_id,
+                    duration=recording_duration,
+                    source="IVR_WEBHOOK",
+                    commit=False,
+                )
         if call_status in [CALL_STATUS_COMPLETED, CALL_STATUS_FAILED, CALL_STATUS_BUSY, CALL_STATUS_MISSED]:
-            existing_call.ended_at = datetime.datetime.utcnow()
+            existing_call.ended_at = get_ist_now()
         if lead_id and not existing_call.lead_id:
             existing_call.lead_id = lead_id
         if emp_id and not existing_call.employee_id:
@@ -335,9 +373,8 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
                 call_status=call_status,
                 call_direction=call_direction,
                 duration_seconds=duration_sec,
-                recording_url=recording_url,
-                started_at=datetime.datetime.utcnow(),
-                ended_at=datetime.datetime.utcnow() if call_status in [CALL_STATUS_COMPLETED, CALL_STATUS_FAILED, CALL_STATUS_BUSY, CALL_STATUS_MISSED] else None,
+                started_at=get_ist_now(),
+                ended_at=get_ist_now() if call_status in [CALL_STATUS_COMPLETED, CALL_STATUS_FAILED, CALL_STATUS_BUSY, CALL_STATUS_MISSED] else None,
                 lead_id=lead_id,
                 employee_id=emp_id,
                 notes=f"{detected_provider} IVR ({call_direction}) | Agent: {agent_name} | Circle: {payload.get('billing_circle') or payload.get('circle', 'N/A')} | Operator: {payload.get('operator', 'N/A')}"
@@ -345,6 +382,16 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
             db.add(new_call)
             db.commit()
             db.refresh(new_call)
+            if recording_url:
+                DooctiRecordingService.attach_recording(
+                    new_call,
+                    db,
+                    recording_url,
+                    recording_id=recording_id,
+                    duration=recording_duration,
+                    source="IVR_WEBHOOK",
+                    commit=True,
+                )
             call_record_id = new_call.id
             action_taken = "CREATED"
         except Exception as insert_err:
@@ -356,7 +403,15 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
                 if duration_sec:
                     existing_call.duration_seconds = duration_sec
                 if recording_url and not existing_call.recording_url:
-                    existing_call.recording_url = recording_url
+                    DooctiRecordingService.attach_recording(
+                        existing_call,
+                        db,
+                        recording_url,
+                        recording_id=recording_id,
+                        duration=recording_duration,
+                        source="IVR_WEBHOOK",
+                        commit=False,
+                    )
                 if lead_id and not existing_call.lead_id:
                     existing_call.lead_id = lead_id
                 if emp_id and not existing_call.employee_id:

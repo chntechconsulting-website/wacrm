@@ -25,6 +25,14 @@ class CallLog(Base):
     
     duration_seconds = Column(Integer, default=0, nullable=False)
     recording_url = Column(Text, nullable=True)
+
+    # Recording identity. A recording may only be linked to a call through its
+    # own provider uniqueid (or an explicit recording URL delivered for that
+    # exact call) - never by phone number, list position or timestamp guesses.
+    recording_id = Column(String(150), nullable=True, index=True)
+    recording_duration_seconds = Column(Integer, nullable=True)
+    recording_source = Column(String(30), nullable=True)  # DOOCTI, UPLOAD, WEBHOOK
+    recording_attached_at = Column(DateTime, nullable=True)
     
     # Call Transcription & AI Summary
     transcript = Column(Text, nullable=True)

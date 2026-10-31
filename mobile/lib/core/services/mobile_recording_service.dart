@@ -18,20 +18,26 @@ class PickedRecording {
   final String name;
   final int size;
   final String mimeType;
+  final int? durationSeconds;
 
   const PickedRecording({
     required this.path,
     required this.name,
     required this.size,
     required this.mimeType,
+    this.durationSeconds,
   });
 
   factory PickedRecording.fromMap(Map<String, dynamic> map) {
+    final durationMs = (map['durationMs'] as num?)?.toInt();
     return PickedRecording(
       path: (map['path'] ?? '').toString(),
       name: (map['name'] ?? 'recording').toString(),
       size: (map['size'] as num?)?.toInt() ?? 0,
       mimeType: (map['mimeType'] ?? 'audio/*').toString(),
+      durationSeconds: durationMs != null && durationMs > 0
+          ? (durationMs / 1000).round()
+          : null,
     );
   }
 
@@ -141,6 +147,10 @@ class MobileRecordingService {
       await _client.postMultipart(
         ApiEndpoints.ivrCallRecording(callId),
         file: File(picked.path),
+        fields: {
+          if (picked.durationSeconds != null)
+            'duration_seconds': '${picked.durationSeconds}',
+        },
       );
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
