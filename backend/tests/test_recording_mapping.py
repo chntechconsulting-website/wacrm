@@ -637,6 +637,24 @@ class TestStartupSchedulers(unittest.TestCase):
         # the recording auto-link scheduler silently never start.
         self.assertTrue(asyncio.iscoroutinefunction(startup_db_client))
 
+    def test_deep_sweep_rechecks_wide_window_and_closes_session(self):
+        # DooCTI may replace a 144-byte placeholder with real audio long after
+        # the 60-minute fast sweep has moved on. The deep sweep must reuse the
+        # exact-identity resolver over a wider window.
+        import services.doocti_recording_service as svc
+
+        fake_db = mock.MagicMock()
+        with mock.patch("database.SessionLocal", return_value=fake_db), mock.patch.object(
+            DooctiRecordingService,
+            "sync_all_missing_recordings",
+            return_value={"synced_count": 3},
+        ) as sync:
+            count = svc._run_deep_recording_sync(2)
+
+        self.assertEqual(count, 3)
+        sync.assert_called_once_with(fake_db, days_back=2, limit=200)
+        fake_db.close.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

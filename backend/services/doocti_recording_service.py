@@ -866,18 +866,62 @@ def _run_recent_recording_sync(minutes_back: int) -> int:
         db.close()
 
 
-async def start_recording_sync_scheduler(interval_seconds: int = 20, minutes_back: int = 60):
+def _run_deep_recording_sync(days_back: int) -> int:
+    """
+    Re-checks missing recordings over a wider window.
+
+    DooCTI sometimes uploads a 144-byte header-only placeholder first and
+    replaces it with real audio minutes (or hours) later. The fast recent sweep
+    only looks back 60 minutes, so without this wider sweep a replaced file
+    could stay unlinked forever.
+    """
+    from database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        result = DooctiRecordingService.sync_all_missing_recordings(
+            db, days_back=days_back, limit=200
+        )
+        return int(result.get("synced_count") or 0)
+    finally:
+        db.close()
+
+
+async def start_recording_sync_scheduler(
+    interval_seconds: int = 20,
+    minutes_back: int = 60,
+    deep_sweep_interval_seconds: int = 600,
+    deep_sweep_days: int = 2,
+):
     """
     Periodically auto-links DooCTI recordings for recently completed calls.
-    Runs the blocking HTTP/DB work in a worker thread.
+
+    A fast sweep runs every ``interval_seconds`` for freshly finished calls and
+    a slower sweep re-checks the last ``deep_sweep_days`` days so late or
+    replaced provider uploads are still picked up. Blocking HTTP/DB work runs
+    in worker threads so the event loop stays responsive.
     """
     import asyncio
 
     logger.info("Call recording auto-link scheduler started.")
+    # Run the wider sweep once on startup to catch uploads that arrived while
+    # the backend was down, then at the configured cadence.
+    next_deep_sweep = time.monotonic()
     while True:
         try:
             await asyncio.to_thread(_run_recent_recording_sync, minutes_back)
+            if time.monotonic() >= next_deep_sweep:
+                matched = await asyncio.to_thread(
+                    _run_deep_recording_sync, deep_sweep_days
+                )
+                if matched:
+                    logger.info(
+                        f"🎯 [DooctiRecording] Deep sweep linked {matched} late "
+                        f"recording(s) from the last {deep_sweep_days} day(s)."
+                    )
+                next_deep_sweep = time.monotonic() + deep_sweep_interval_seconds
         except Exception as exc:
             logger.warning(f"[DooctiRecording] Scheduler iteration failed: {exc}")
+            next_deep_sweep = time.monotonic() + deep_sweep_interval_seconds
         await asyncio.sleep(interval_seconds)
 
