@@ -692,7 +692,8 @@ class DooctiRecordingService:
                 )
                 continue
 
-            for row in cls._extract_calllog_rows(payload):
+            rows = cls._extract_calllog_rows(payload)
+            for row in rows:
                 row_ids = {
                     str(row.get(key) or "").strip()
                     for key in ("id", "uniqueid", "unique_id", "call_id", "callid")
@@ -719,6 +720,12 @@ class DooctiRecordingService:
                     f"for uniqueid='{prov_id}'."
                 )
                 return candidate
+
+            if rows:
+                # This agent has call history for the customer but not this call.
+                # The portal lookup (keyed by the exact uniqueid) still covers
+                # transferred calls, so stop querying more agents here.
+                break
         return None
 
     @classmethod
@@ -1154,6 +1161,61 @@ class DooctiRecordingService:
         return True
 
     @classmethod
+    def release_empty_placeholder_recordings(
+        cls, db: Session, days_back: int = 14, limit: int = 200
+    ) -> int:
+        """
+        Clears stored links that point at a *confirmed* header-only placeholder
+        (a 144-byte MP3 with no audio frames). The object itself is not deleted;
+        only the dead link is released so the call becomes eligible for a fresh
+        provider lookup and stops showing a 0:00 player.
+
+        A network error returns "not a stub", so a real recording is never lost.
+        """
+        base_url = cls.get_configured_base_url(db)
+        since = get_ist_now() - datetime.timedelta(days=days_back)
+        calls = (
+            db.query(CallLog)
+            .filter(
+                CallLog.recording_url.isnot(None),
+                CallLog.created_at >= since,
+                CallLog.recording_url.ilike("%http%"),
+            )
+            .order_by(desc(CallLog.id))
+            .limit(limit)
+            .all()
+        )
+
+        released = 0
+        for call in calls:
+            url = str(call.recording_url or "").strip()
+            if not url or not cls.is_configured_storage_url(url, base_url):
+                continue
+            if not cls.is_definitely_empty_recording(url):
+                continue
+            logger.info(
+                f"[DooctiRecording] Releasing empty placeholder recording from "
+                f"Call ID={call.id} ({url})."
+            )
+            call.recording_url = None
+            call.recording_id = None
+            call.recording_duration_seconds = None
+            call.recording_source = None
+            call.recording_attached_at = None
+            released += 1
+
+        if released:
+            try:
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning(
+                    f"[DooctiRecording] Could not release placeholder recordings: {exc}"
+                )
+                return 0
+        return released
+
+    @classmethod
     def repair_misassigned_recordings(cls, db: Session, limit: int = 500) -> int:
         """
         Non-destructive repair for legacy rows whose recording filename is the
@@ -1355,7 +1417,7 @@ class DooctiRecordingService:
         cls,
         db: Session,
         days_back: int = 7,
-        limit: int = 100
+        limit: int = 50
     ) -> Dict[str, Any]:
         """
         Scans all recent completed calls missing audio recordings and auto-links them.
@@ -1367,6 +1429,9 @@ class DooctiRecordingService:
         # First correct any provably wrong legacy association (moves/clears the
         # link only; audio files and call logs are never deleted).
         repaired = cls.repair_misassigned_recordings(db)
+        # Release dead links to header-only placeholders so they are retried and
+        # never render as a 0:00 player.
+        released = cls.release_empty_placeholder_recordings(db, days_back=days_back)
 
         calls = (
             db.query(CallLog)
@@ -1414,6 +1479,7 @@ class DooctiRecordingService:
             "status": "success",
             "synced_count": matched_count,
             "repaired_count": repaired,
+            "released_empty_count": released,
             "total_inspected": len(calls),
             "updated_calls": updated_calls,
         }

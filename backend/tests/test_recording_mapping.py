@@ -560,6 +560,28 @@ class TestLegacyRepair(RecordingTestBase):
         self.assertIsNone(self.get_call(wrong_id).recording_url)
 
 
+    def test_releases_confirmed_empty_placeholder_link(self):
+        call_id = "1793333301.131253524"
+        url = storage_url(call_id)
+        self.add_call(call_id, recording_url=url, recording_id=call_id)
+
+        db = self.db()
+        with mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda candidate, **kwargs: candidate == url,
+        ):
+            released = DooctiRecordingService.release_empty_placeholder_recordings(db)
+        db.close()
+
+        self.assertEqual(released, 1)
+        call = self.get_call(call_id)
+        self.assertIsNone(call.recording_url)
+        self.assertIsNone(call.recording_id)
+        # The call row itself is never deleted.
+        self.assertIsNotNone(call)
+
+
 class TestWebhookCallBatches(RecordingTestBase):
     def _outbound_payload(self, index):
         call_id = f"179333340{index}.13120000{index}"
