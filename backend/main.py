@@ -256,7 +256,10 @@ def startup_db_client():
                     "ALTER TABLE call_logs ADD COLUMN transcript TEXT NULL",
                     "ALTER TABLE call_logs ADD COLUMN ai_summary TEXT NULL",
                     "ALTER TABLE call_logs ADD COLUMN sentiment VARCHAR(50) NULL",
-                    "ALTER TABLE call_logs ADD COLUMN product_category VARCHAR(50) NULL"
+                    "ALTER TABLE call_logs ADD COLUMN product_category VARCHAR(50) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN sim_account_id VARCHAR(100) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN sim_label VARCHAR(100) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN sim_slot INT NULL"
                 ]:
                     try:
                         conn.execute(text(col_sql))

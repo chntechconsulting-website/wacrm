@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/services/doocti_call_service.dart';
+import '../../../core/services/mobile_sim_call_service.dart';
 import '../../../core/widgets/wacrm_wave_nav_bar.dart';
 import '../../activities/presentation/activities_screen.dart';
 import '../../field_visits/presentation/field_visit_form_screen.dart';
@@ -50,6 +52,296 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
       phone: phone,
       leadId: _lead.id,
       contactName: _lead.name,
+    );
+  }
+
+  Future<void> _startMobileSimCall() async {
+    final phone = _lead.phone.trim();
+    if (phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This lead has no phone number.'),
+          backgroundColor: Color(0xFFE5252A),
+        ),
+      );
+      return;
+    }
+
+    if (!MobileSimCallService.isSupported) {
+      _showMobileSimMessage(
+        'Mobile SIM calling is available on the Android app only.',
+      );
+      return;
+    }
+
+    try {
+      final permissions = await MobileSimCallService.requestPermissions();
+      if (!mounted) return;
+
+      if (!permissions.hasRequired) {
+        _showMobileSimPermissionDialog(permissions);
+        return;
+      }
+
+      final sims = await MobileSimCallService.getSimAccounts();
+      if (!mounted) return;
+
+      if (sims.isEmpty) {
+        _showMobileSimMessage(
+          'No active SIM was found on this device. Check that a SIM is inserted and has signal.',
+        );
+        return;
+      }
+
+      SimAccount? selectedSim;
+      if (sims.length == 1) {
+        selectedSim = sims.first;
+      } else {
+        selectedSim = await _showSimPicker(sims);
+      }
+      if (selectedSim == null || !mounted) return;
+
+      await MobileSimCallService.startCall(
+        phone: phone,
+        callId: MobileSimCallService.newCallId(),
+        leadId: _lead.id,
+        contactName: _lead.name,
+        sim: selectedSim,
+      );
+
+      if (!mounted) return;
+      final durationNote = permissions.readCallLog
+          ? ''
+          : ' Call-log permission is off, so duration will be estimated.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Calling $phone from ${selectedSim.label}.$durationNote',
+          ),
+          backgroundColor: const Color(0xFF10B981),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      if (error.code == 'CALL_IN_PROGRESS') {
+        _showMobileSimMessage(
+          'A device call is already being tracked. Finish it before starting another.',
+        );
+      } else if (error.code == 'PERMISSION_DENIED') {
+        _showMobileSimMessage(
+          'Phone permission was denied. Allow it in Settings to call from your SIM.',
+          openSettings: true,
+        );
+      } else {
+        _showMobileSimMessage(
+          error.message ?? 'Unable to start the mobile SIM call.',
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _showMobileSimMessage(
+        'Unable to start the mobile SIM call: ${error.toString()}',
+      );
+    }
+  }
+
+  Future<SimAccount?> _showSimPicker(List<SimAccount> sims) {
+    return showModalBottomSheet<SimAccount>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Choose SIM for this call',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'The customer will see the selected SIM number as your caller ID.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              ),
+              const SizedBox(height: 12),
+              ...sims.map(
+                (sim) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => Navigator.pop(ctx, sim),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFECFDF5),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.sim_card_rounded,
+                                size: 20,
+                                color: Color(0xFF059669),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    sim.label,
+                                    style: const TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF0F172A),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    [
+                                      if (sim.carrierName.trim().isNotEmpty)
+                                        sim.carrierName.trim(),
+                                      'Slot ${sim.slotIndex + 1}',
+                                      if ((sim.phoneNumber ?? '').isNotEmpty)
+                                        sim.phoneNumber!,
+                                    ].join(' • '),
+                                    style: const TextStyle(
+                                      fontSize: 11.5,
+                                      color: Color(0xFF64748B),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (sim.isDefault)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE0F2FE),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Text(
+                                  'Default',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF0369A1),
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(width: 8),
+                            const Icon(
+                              Icons.chevron_right_rounded,
+                              color: Color(0xFF94A3B8),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'SIM selection support varies by Android device and carrier. The call always uses the real cellular network, never the CRM PBX.',
+                style: TextStyle(fontSize: 10.5, color: Color(0xFF94A3B8)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showMobileSimPermissionDialog(MobileSimPermissionStatus permissions) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Phone permission required',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          'To place calls from your mobile SIM, allow: '
+          '${permissions.missingRequired.join(', ')}.\n\n'
+          'Call-log access is optional. Without it, call duration is estimated.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              MobileSimCallService.openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMobileSimMessage(String message, {bool openSettings = false}) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Mobile SIM calling',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: Text(message),
+        actions: [
+          if (openSettings)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                MobileSimCallService.openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -360,6 +652,11 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
             // 2. 5 Quick Action Buttons (Call, WhatsApp, Email, Map, More)
             _buildQuickActionButtons(),
 
+            const SizedBox(height: 10),
+
+            // Dedicated real-SIM call action (separate from the DooCTI call actions)
+            _buildMobileSimCallButton(),
+
             const SizedBox(height: 16),
 
             // 3. Sub-Navigation Tabs (Overview, Activities, Quotes, Files)
@@ -573,6 +870,70 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
           onTap: _showMoreActionsSheet,
         ),
       ],
+    );
+  }
+
+  Widget _buildMobileSimCallButton() {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: _startMobileSimCall,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFD1FAE5), width: 1.2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFECFDF5),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.sim_card_rounded,
+                  size: 20,
+                  color: Color(0xFF059669),
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Call via Mobile SIM',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Uses your phone SIM • customer sees your real caller ID',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: Color(0xFF94A3B8)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

@@ -190,7 +190,7 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
               : calls.isEmpty
                   ? EmptyState(
                       title: 'No Call Logs Found',
-                      subtitle: 'Interactions via Doocti or manual phone calls will be logged here.',
+                      subtitle: 'Calls via DooCTI, mobile SIM or manual phone calls will be logged here.',
                       pingoPose: PingoPoses.inspect,
                       actionLabel: 'Log Call',
                       onAction: _showLogManualCallDialog,
@@ -254,6 +254,32 @@ class _CallLogsScreenState extends State<CallLogsScreen> {
                                         DateFormatter.formatDateTime(call.createdAt),
                                         style: const TextStyle(fontSize: 11, color: AppColors.textLight),
                                       ),
+                                      if (call.isMobileSim) ...[
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.sim_card_rounded,
+                                              size: 11,
+                                              color: Color(0xFF059669),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Flexible(
+                                              child: Text(
+                                                '${call.simLabel ?? 'Mobile SIM'}'
+                                                '${call.hasRecording ? ' • Recording linked' : ' • Recording unavailable'}',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 10.5,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Color(0xFF059669),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),

@@ -983,6 +983,7 @@ const CallLogsPage = () => {
             >
               <option value="">All Telephony Providers</option>
               <option value="DOOCTI">Doocti Telephony</option>
+              <option value="MOBILE_SIM">Mobile SIM (Device Dialer)</option>
               <option value="Smartflo">Tata Smartflo</option>
               <option value="CloudShope">CloudShope</option>
               <option value="TWILIO">Twilio</option>

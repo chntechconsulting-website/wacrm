@@ -59,7 +59,11 @@ class CallsRepository {
     return {'status': 'success', 'data': response};
   }
 
-  Future<void> initiateIvrCall({required String phone, int? leadId, String? notes}) async {
+  Future<void> initiateIvrCall({
+    required String phone,
+    int? leadId,
+    String? notes,
+  }) async {
     final body = {
       'phone': phone,
       'customer_phone': phone,
@@ -77,6 +81,17 @@ class CallsRepository {
     required int durationSeconds,
     int? leadId,
     String? notes,
+    String? clientCallId,
+    String? callDirection,
+    String? startedAt,
+    String? answeredAt,
+    String? endedAt,
+    String? recordingUrl,
+    String? simAccountId,
+    String? simLabel,
+    int? simSlot,
+    String? simPhoneNumber,
+    String? callSource,
   }) async {
     final effectivePhone = customerPhone ?? customerNumber ?? '';
     final body = {
@@ -86,6 +101,17 @@ class CallsRepository {
       'duration_seconds': durationSeconds,
       if (leadId != null) 'lead_id': leadId,
       if (notes != null) 'notes': notes,
+      if (clientCallId != null) 'client_call_id': clientCallId,
+      if (callDirection != null) 'call_direction': callDirection,
+      if (startedAt != null) 'started_at': startedAt,
+      if (answeredAt != null) 'answered_at': answeredAt,
+      if (endedAt != null) 'ended_at': endedAt,
+      if (recordingUrl != null) 'recording_url': recordingUrl,
+      if (simAccountId != null) 'sim_account_id': simAccountId,
+      if (simLabel != null) 'sim_label': simLabel,
+      if (simSlot != null) 'sim_slot': simSlot,
+      if (simPhoneNumber != null) 'sim_phone_number': simPhoneNumber,
+      if (callSource != null) 'call_source': callSource,
     };
 
     try {

@@ -37,6 +37,11 @@ class CallLog(Base):
     
     notes = Column(Text, nullable=True)
     product_category = Column(String(50), nullable=True)  # BIOMETRIC, WAHRMS, UNCLASSIFIED
+
+    # Mobile SIM (device dialer) metadata. Null for PBX/IVR calls.
+    sim_account_id = Column(String(100), nullable=True)
+    sim_label = Column(String(100), nullable=True)
+    sim_slot = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
 
     lead = relationship("Lead", backref="call_logs")

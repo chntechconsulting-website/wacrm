@@ -39,6 +39,9 @@ class CallLogResponse(BaseModel):
     ended_at: Optional[datetime] = None
     notes: Optional[str] = None
     product_category: Optional[str] = None  # BIOMETRIC, WAHRMS, UNCLASSIFIED
+    sim_account_id: Optional[str] = None
+    sim_label: Optional[str] = None
+    sim_slot: Optional[int] = None
     created_at: datetime
 
     # Additional expanded fields for UI

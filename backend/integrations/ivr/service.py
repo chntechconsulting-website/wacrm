@@ -3,8 +3,10 @@ import datetime
 import json
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from config import settings
 from models import Lead, LeadActivity, Employee, CallLog
+from utils.timezone import get_ist_now, IST_TIMEZONE
 from .base import BaseIVRProvider
 from .providers import MockIVRProvider, TwilioIVRProvider, ExotelIVRProvider, CloudShopeIVRProvider, SmartfloIVRProvider, DooctiIVRProvider
 from .schemas import (
@@ -305,6 +307,19 @@ class IVRService:
         return call_log
 
     @staticmethod
+    def _naive_ist(value: Optional[datetime.datetime]) -> Optional[datetime.datetime]:
+        """
+        Normalizes an optional datetime for the CRM's MySQL DATETIME convention:
+        naive Asia/Kolkata (IST). Aware values (mobile sends UTC ISO strings) are
+        converted to IST; naive values are assumed to already be IST.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            value = value.astimezone(IST_TIMEZONE).replace(tzinfo=None)
+        return value
+
+    @staticmethod
     def log_manual_call(
         db: Session,
         lead_id: Optional[int] = None,
@@ -313,13 +328,44 @@ class IVRService:
         employee_phone: Optional[str] = None,
         call_status: str = "COMPLETED",
         duration_seconds: int = 0,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        client_call_id: Optional[str] = None,
+        call_direction: str = "OUTBOUND",
+        started_at: Optional[datetime.datetime] = None,
+        answered_at: Optional[datetime.datetime] = None,
+        ended_at: Optional[datetime.datetime] = None,
+        recording_url: Optional[str] = None,
+        sim_account_id: Optional[str] = None,
+        sim_label: Optional[str] = None,
+        sim_slot: Optional[int] = None,
+        sim_phone_number: Optional[str] = None,
+        call_source: Optional[str] = None
     ) -> CallLog:
         """
-        Logs a direct or manual phone call (device fallback / offline dial).
+        Logs a direct or manual phone call (device fallback / mobile SIM dial).
         Records CallLog and LeadActivity without calling cloud telecom APIs.
+
+        Mobile SIM calls send a stable `client_call_id`; the same ID is used as
+        `provider_call_id` so retries from the device cannot create duplicates.
         """
         import uuid
+
+        client_call_id = str(client_call_id or "").strip()
+
+        # Idempotency: a device retry must return the already-saved call record.
+        if client_call_id:
+            existing = db.query(CallLog).filter(
+                CallLog.provider_call_id == client_call_id
+            ).first()
+            if existing:
+                if (existing.provider or "").upper() not in ("MOBILE_SIM", "DIRECT_DIAL"):
+                    raise ValueError("This call id is already used by another telephony record.")
+                if (
+                    current_employee_id is not None
+                    and existing.employee_id != current_employee_id
+                ):
+                    raise ValueError("This call record belongs to another employee.")
+                return existing
 
         target_phone = str(customer_phone or "").strip()
         if not target_phone and lead_id:
@@ -330,7 +376,7 @@ class IVRService:
         if not target_phone:
             raise ValueError("Customer phone number is required to log a call.")
 
-        emp_phone = employee_phone
+        emp_phone = str(sim_phone_number or employee_phone or "").strip()
         if not emp_phone and current_employee_id:
             emp = db.query(Employee).filter(Employee.id == current_employee_id).first()
             if emp and emp.phone:
@@ -338,37 +384,123 @@ class IVRService:
         if not emp_phone:
             emp_phone = "+919876500000"
 
-        now = datetime.datetime.utcnow()
-        start_time = now - datetime.timedelta(seconds=duration_seconds or 0)
-        provider_call_id = f"DIRECT_{uuid.uuid4().hex[:10].upper()}"
+        is_mobile_sim = (
+            str(call_source or "").strip().upper() == "MOBILE_SIM"
+            or bool(sim_account_id or sim_label)
+            or sim_slot is not None
+        )
+        provider_name = "MOBILE_SIM" if is_mobile_sim else "DIRECT_DIAL"
+
+        direction = str(call_direction or "OUTBOUND").strip().upper()
+        if direction not in ("INBOUND", "OUTBOUND"):
+            direction = "OUTBOUND"
+
+        status = str(call_status or "COMPLETED").strip().upper().replace(" ", "_")
+        if status == "UNANSWERED":
+            status = "NO_ANSWER"
+        if status == "ANSWERED":
+            status = "COMPLETED"
+        if status not in (
+            "COMPLETED", "CONNECTED", "MISSED", "REJECTED", "NO_ANSWER",
+            "BUSY", "FAILED", "CANCELLED"
+        ):
+            status = "COMPLETED"
+
+        try:
+            duration_seconds = max(0, int(duration_seconds or 0))
+        except (TypeError, ValueError):
+            duration_seconds = 0
+
+        if status in ("MISSED", "REJECTED", "NO_ANSWER", "BUSY", "FAILED", "CANCELLED"):
+            duration_seconds = 0
+
+        now = get_ist_now()
+        end_dt = IVRService._naive_ist(ended_at) or now
+        if started_at:
+            start_dt = IVRService._naive_ist(started_at)
+        else:
+            start_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
+        if not start_dt or start_dt > end_dt:
+            start_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
+
+        answered_dt = IVRService._naive_ist(answered_at)
+        if status in ("COMPLETED", "CONNECTED"):
+            if not answered_dt:
+                answered_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
+        else:
+            answered_dt = None
+
+        provider_call_id = client_call_id or f"DIRECT_{uuid.uuid4().hex[:10].upper()}"
+
+        if is_mobile_sim:
+            default_note = "Mobile SIM call from device dialer."
+            if sim_label:
+                default_note = f"Mobile SIM call via {sim_label}."
+        else:
+            default_note = f"Direct Device / Manual Call ({status})."
 
         call_log = CallLog(
             lead_id=lead_id,
             employee_id=current_employee_id,
-            provider="DIRECT_DIAL",
+            provider=provider_name,
             provider_call_id=provider_call_id,
             from_number=emp_phone,
             to_number=target_phone,
-            call_status=call_status.upper(),
-            call_direction="OUTBOUND",
+            call_status=status,
+            call_direction=direction,
             duration_seconds=duration_seconds,
-            started_at=start_time,
-            answered_at=start_time if call_status.upper() in ["COMPLETED", "CONNECTED"] else None,
-            ended_at=now,
-            notes=notes or f"Direct Device / Manual Call ({call_status})."
+            recording_url=(str(recording_url).strip() or None) if recording_url else None,
+            started_at=start_dt,
+            answered_at=answered_dt,
+            ended_at=end_dt,
+            sim_account_id=(str(sim_account_id).strip() or None) if sim_account_id else None,
+            sim_label=(str(sim_label).strip() or None) if sim_label else None,
+            sim_slot=sim_slot,
+            notes=notes or default_note
         )
         db.add(call_log)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Concurrent retry with the same client_call_id: return the winner.
+            db.rollback()
+            if client_call_id:
+                existing = db.query(CallLog).filter(
+                    CallLog.provider_call_id == client_call_id
+                ).first()
+                if existing:
+                    if (existing.provider or "").upper() not in ("MOBILE_SIM", "DIRECT_DIAL"):
+                        raise ValueError("This call id is already used by another telephony record.")
+                    if (
+                        current_employee_id is not None
+                        and existing.employee_id != current_employee_id
+                    ):
+                        raise ValueError("This call record belongs to another employee.")
+                    return existing
+            raise
         db.refresh(call_log)
 
         if lead_id:
             dur_msg = f" (Duration: {duration_seconds}s)" if duration_seconds else ""
             note_msg = f" Notes: {notes}" if notes else ""
+            if is_mobile_sim:
+                sim_msg = f" via {sim_label}" if sim_label else ""
+                description = (
+                    f"Mobile SIM call{sim_msg} to {target_phone} - "
+                    f"Status: {status}{dur_msg}.{note_msg}"
+                )
+                activity_type = "CALL_LOGGED"
+            else:
+                description = (
+                    f"Direct Phone Call logged to {target_phone} - "
+                    f"Status: {status}{dur_msg}.{note_msg}"
+                )
+                activity_type = "CALL_LOGGED"
             activity = LeadActivity(
                 lead_id=lead_id,
                 performed_by=current_employee_id,
-                activity_type="CALL_LOGGED",
-                description=f"Direct Phone Call logged to {target_phone} - Status: {call_status}{dur_msg}.{note_msg}"
+                activity_type=activity_type,
+                description=description
             )
             db.add(activity)
             db.commit()

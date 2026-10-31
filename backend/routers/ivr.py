@@ -2,6 +2,7 @@ import os
 import json
 import re
 import time
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -85,6 +86,19 @@ class ManualCallLogRequest(BaseModel):
     duration_seconds: Optional[int] = 0
     notes: Optional[str] = None
 
+    # Optional mobile SIM / direct-device metadata. Older clients can omit these.
+    client_call_id: Optional[str] = None
+    call_direction: Optional[str] = "OUTBOUND"
+    started_at: Optional[datetime] = None
+    answered_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    recording_url: Optional[str] = None
+    sim_account_id: Optional[str] = None
+    sim_label: Optional[str] = None
+    sim_slot: Optional[int] = None
+    sim_phone_number: Optional[str] = None
+    call_source: Optional[str] = None
+
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
 
@@ -166,11 +180,15 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
             pass
 
     # Fallback to automated Oracle Cloud Storage recording matcher if recording_url is missing.
-    # Only for recently ended calls and throttled per call so listing stays fast.
+    # Mobile SIM / direct-device calls are never recorded by the CRM, so never probe
+    # DooCTI storage for them (that could attach an unrelated PBX recording).
+    provider_upper = str(call.provider or "").upper()
+    is_device_dial = provider_upper in ("MOBILE_SIM", "DIRECT_DIAL")
     if (
         not resolved_rec
         and is_connected
         and is_recent
+        and not is_device_dial
         and _should_attempt_recording_lookup(call)
     ):
         from services.doocti_recording_service import DooctiRecordingService
@@ -184,6 +202,9 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
 
     if resolved_rec:
         rec_status = "RECORDING_AVAILABLE"
+    elif is_device_dial:
+        # Device/carrier call recording is not exposed to third-party apps.
+        rec_status = "RECORDING_UNAVAILABLE"
     elif is_recent and status_upper not in ["BUSY", "MISSED", "FAILED"]:
         rec_status = "RECORDING_PROCESSING"
     else:
@@ -239,6 +260,9 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         ended_at=call.ended_at,
         notes=call.notes,
         product_category=call.product_category or (call.lead.product_category if call.lead else 'UNCLASSIFIED'),
+        sim_account_id=call.sim_account_id,
+        sim_label=call.sim_label,
+        sim_slot=call.sim_slot,
         created_at=call.created_at,
         lead_name=lead_name,
         employee_name=employee_name,
@@ -495,6 +519,10 @@ def log_manual_call_endpoint(
                     )
 
     try:
+        client_call_id = (body.client_call_id or "").strip() or None
+        if client_call_id and len(client_call_id) > 100:
+            raise ValueError("client_call_id must be 100 characters or fewer.")
+
         call_log = IVRService.log_manual_call(
             db=db,
             lead_id=body.lead_id,
@@ -503,7 +531,18 @@ def log_manual_call_endpoint(
             employee_phone=employee_phone,
             call_status=body.call_status,
             duration_seconds=body.duration_seconds or 0,
-            notes=body.notes
+            notes=body.notes,
+            client_call_id=client_call_id,
+            call_direction=body.call_direction or "OUTBOUND",
+            started_at=body.started_at,
+            answered_at=body.answered_at,
+            ended_at=body.ended_at,
+            recording_url=body.recording_url,
+            sim_account_id=body.sim_account_id,
+            sim_label=body.sim_label,
+            sim_slot=body.sim_slot,
+            sim_phone_number=body.sim_phone_number,
+            call_source=body.call_source
         )
         return build_call_log_response(call_log, db)
     except ValueError as e:

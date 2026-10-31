@@ -7,8 +7,11 @@ class CallLogModel {
   final String callStatus; // ANSWERED, MISSED, BUSY, FAILED, COMPLETED
   final int durationSeconds;
   final String? recordingUrl;
+  final String? recordingStatus;
   final String? notes;
   final String? employeeName;
+  final String? provider;
+  final String? simLabel;
   final String? createdAt;
 
   CallLogModel({
@@ -20,10 +23,18 @@ class CallLogModel {
     required this.callStatus,
     required this.durationSeconds,
     this.recordingUrl,
+    this.recordingStatus,
     this.notes,
     this.employeeName,
+    this.provider,
+    this.simLabel,
     this.createdAt,
   });
+
+  bool get isMobileSim => (provider ?? '').toUpperCase().contains('MOBILE_SIM');
+
+  bool get hasRecording =>
+      recordingUrl != null && recordingUrl!.trim().isNotEmpty;
 
   factory CallLogModel.fromJson(Map<String, dynamic> json) {
     return CallLogModel(
@@ -31,13 +42,20 @@ class CallLogModel {
       leadId: json['lead_id'],
       leadName: json['lead_name'] ?? json['customer_name'],
       customerNumber: json['customer_number'] ?? json['phone'] ?? '',
-      callType: json['call_type'] ?? 'OUTBOUND',
-      callStatus: (json['call_status'] ?? json['status'] ?? 'COMPLETED').toString().toUpperCase(),
+      callType: (json['call_direction'] ?? json['call_type'] ?? 'OUTBOUND')
+          .toString()
+          .toUpperCase(),
+      callStatus: (json['call_status'] ?? json['status'] ?? 'COMPLETED')
+          .toString()
+          .toUpperCase(),
       durationSeconds: json['duration_seconds'] ?? json['duration'] ?? 0,
       recordingUrl: json['recording_url'],
+      recordingStatus: json['recording_status'],
       notes: json['notes'],
       employeeName: json['employee_name'],
-      createdAt: json['created_at'],
+      provider: json['provider'],
+      simLabel: json['sim_label'],
+      createdAt: json['created_at'] ?? json['started_at'],
     );
   }
 
