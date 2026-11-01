@@ -18,7 +18,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, and_, func, case
 from typing import Optional, List, Dict, Any
@@ -68,6 +68,22 @@ _RECORDING_MIME_TYPES = {
     "audio/opus", "audio/amr", "audio/3gpp", "audio/3gpp2", "audio/caf",
     "audio/webm", "video/3gpp",
 }
+# Explicit content types for playback. Python's mimetypes is not reliable for
+# every OEM container on every server, and MediaPlayer rejects generic types.
+_RECORDING_PLAYBACK_MIME_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".mp4": "audio/mp4",
+    ".aac": "audio/aac",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".amr": "audio/amr",
+    ".3gp": "audio/3gpp",
+    ".3gpp": "audio/3gpp",
+    ".caf": "audio/x-caf",
+    ".webm": "audio/webm",
+}
 
 RECORDING_STATUS_AVAILABLE = "AVAILABLE"
 RECORDING_STATUS_PENDING_SYNC = "PENDING_SYNC"
@@ -110,7 +126,14 @@ def _canonical_recording_status(raw: Optional[str]) -> Optional[str]:
 
 
 def _absolute_media_url(raw_url: Optional[str]) -> Optional[str]:
-    """Turns a locally stored /uploads/... path into a public absolute URL."""
+    """
+    Turns a stored media path into a URL every client can play.
+
+    Managed call recordings are served by the API (`/api/ivr/media/recordings/...`)
+    because production reverse proxies only forward `/api/*` to FastAPI; the
+    generic `/uploads` mount is not publicly routed. Other uploads keep their
+    historic `/uploads/...` URL.
+    """
     if not raw_url:
         return None
     value = str(raw_url).strip()
@@ -118,7 +141,23 @@ def _absolute_media_url(raw_url: Optional[str]) -> Optional[str]:
         return None
     if value.startswith("/"):
         base = (settings.PUBLIC_BASE_URL or "").strip().rstrip("/")
+        api_prefix = (settings.API_V1_STR or "/api").rstrip("/")
+        managed_prefix = f"/uploads/{_RECORDING_MANAGED_PREFIX}/"
+        if value.startswith(managed_prefix):
+            suffix = value[len(managed_prefix):]
+            value = f"{api_prefix}/ivr/media/{_RECORDING_MANAGED_PREFIX}/{suffix}"
         return f"{base}{value}" if base else value
+    # Absolute legacy URLs that still point at the unrouted /uploads mount.
+    marker = f"/uploads/{_RECORDING_MANAGED_PREFIX}/"
+    if marker in value and value.startswith(("http://", "https://")):
+        head, _, suffix = value.partition(marker)
+        host = head.split("//", 1)[-1].split("/", 1)[0]
+        scheme = head.split(":", 1)[0]
+        api_prefix = (settings.API_V1_STR or "/api").rstrip("/")
+        return (
+            f"{scheme}://{host}{api_prefix}/ivr/media/"
+            f"{_RECORDING_MANAGED_PREFIX}/{suffix}"
+        )
     return value
 
 
@@ -742,6 +781,54 @@ def log_manual_call_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to log call: {str(e)}")
+
+
+@router.get("/media/recordings/{call_id}/{filename}")
+def stream_managed_call_recording(call_id: str, filename: str):
+    """
+    Serves an uploaded mobile call recording to the mobile and web players.
+
+    This route exists because production reverse proxies forward only `/api/*`
+    to FastAPI, so the historic `/uploads/...` mount is not publicly playable.
+    The file name is a random UUID generated at upload time, and access is
+    therefore unguessable; the response is read-only and supports HTTP Range so
+    Android MediaPlayer can seek inside the file.
+    """
+    if not call_id.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recording not found.",
+        )
+    safe_name = os.path.basename(filename)
+    if (
+        safe_name != filename
+        or safe_name in ("", ".", "..")
+        or Path(safe_name).suffix.lower() not in _RECORDING_EXTENSIONS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recording not found.",
+        )
+
+    root = (Path(settings.UPLOAD_DIR) / _RECORDING_MANAGED_PREFIX).resolve()
+    target = (root / call_id / safe_name).resolve()
+    if root not in target.parents or not target.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recording not found.",
+        )
+
+    media_type = _RECORDING_PLAYBACK_MIME_TYPES.get(
+        Path(safe_name).suffix.lower(),
+        "application/octet-stream",
+    )
+    return FileResponse(
+        target,
+        media_type=media_type,
+        filename=safe_name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.post("/calls/{call_id}/recording", response_model=CallLogResponse)

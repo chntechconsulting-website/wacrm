@@ -37,13 +37,23 @@ void main() {
       expect(MobileRecordingService.resolveRecordingUrl('   '), isNull);
     });
 
-    test('keeps an absolute managed upload URL', () {
+    test('keeps an absolute API media URL', () {
+      final resolved = MobileRecordingService.resolveRecordingUrl(
+        'https://www.wapluscrm.in/api/ivr/media/recordings/12/call.m4a',
+      );
+      expect(
+        resolved,
+        'https://www.wapluscrm.in/api/ivr/media/recordings/12/call.m4a',
+      );
+    });
+
+    test('rewrites legacy /uploads recording links onto the API media route', () {
       final resolved = MobileRecordingService.resolveRecordingUrl(
         'https://www.wapluscrm.in/uploads/recordings/12/call.m4a',
       );
       expect(
         resolved,
-        'https://www.wapluscrm.in/uploads/recordings/12/call.m4a',
+        'https://www.wapluscrm.in/api/ivr/media/recordings/12/call.m4a',
       );
     });
 
@@ -54,7 +64,10 @@ void main() {
       final resolved = MobileRecordingService.resolveRecordingUrl(
         'https://www.wapluscrm.in/uploads/recordings/12/call.m4a',
       );
-      expect(resolved, 'http://192.168.1.20:8000/uploads/recordings/12/call.m4a');
+      expect(
+        resolved,
+        'http://192.168.1.20:8000/api/ivr/media/recordings/12/call.m4a',
+      );
     });
 
     test('leaves external PBX recordings untouched', () {

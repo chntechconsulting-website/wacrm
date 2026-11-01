@@ -49,6 +49,7 @@
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `Unable to play this recording (1/-1015)` on a call marked **Available** | The mobile player opened `POST /api/ivr/calls/{id}/recording` (the upload endpoint) instead of the stored `recording_url`. | Play now uses the call's `recording_url`; absolute, rebased or external URLs are resolved before MediaPlayer opens them. |
+| `Unable to play this recording (1/-1015); HTTP 206, text/html` | Production Caddy serves the web app for `/uploads/...` (SPA fallback); it only proxies `/api/*` to FastAPI, so uploaded recordings were unreachable at their stored URL. | Added a read-only `GET /api/ivr/media/recordings/{call_id}/{filename}` route that serves the file with an explicit audio content type and HTTP Range support. Stored links are rewritten to it, including legacy rows and old app responses. |
 | Picker cancellation showed “No unambiguous device recording was found” | Native picker returned `null` for both cancel and no-match. | Cancellation is a distinct result; backing out is silent. |
 | Samsung recordings were not found by automatic search | Discovery was gated on already-readable recordings and only queried one volume. | Discovery uses read-only audio access and queries every external volume; capability sheet reports readable count and folder hints. |
 

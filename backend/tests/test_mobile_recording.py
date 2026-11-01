@@ -46,10 +46,17 @@ class TestMobileRecordingHelpers(unittest.TestCase):
     def test_local_media_paths_become_absolute(self):
         url = _absolute_media_url("/uploads/recordings/42/call.mp3")
         self.assertTrue(url.startswith("https://"))
-        self.assertTrue(url.endswith("/uploads/recordings/42/call.mp3"))
+        self.assertTrue(url.endswith("/api/ivr/media/recordings/42/call.mp3"))
         self.assertEqual(
             _absolute_media_url("https://storage.example.com/call.mp3"),
             "https://storage.example.com/call.mp3",
+        )
+        legacy = _absolute_media_url(
+            "https://www.wapluscrm.in/uploads/recordings/42/call.m4a"
+        )
+        self.assertEqual(
+            legacy,
+            "https://www.wapluscrm.in/api/ivr/media/recordings/42/call.m4a",
         )
 
     def test_mobile_calls_never_probe_doocti_storage(self):
@@ -152,6 +159,37 @@ class TestMobileRecordingUpload(unittest.TestCase):
         stored = call.recording_url
         db.close()
         self.assertTrue(stored.startswith(f"/uploads/recordings/{self.call_id}/"))
+
+    def test_uploaded_recording_is_playable_via_api_media_route(self):
+        from urllib.parse import urlparse
+
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            files={"file": ("call-play.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        url = response.json()["recording_url"]
+        path = urlparse(url).path
+        self.assertIn(f"/api/ivr/media/recordings/{self.call_id}/", path)
+
+        media = self.client.get(path)
+        self.assertEqual(media.status_code, 200, media.text)
+        self.assertEqual(media.headers["content-type"], "audio/mpeg")
+        self.assertEqual(media.content, self._audio_bytes())
+
+        ranged = self.client.get(path, headers={"Range": "bytes=0-9"})
+        self.assertEqual(ranged.status_code, 206, ranged.text)
+        self.assertEqual(ranged.content, self._audio_bytes()[:10])
+
+    def test_media_route_hides_unknown_and_unsafe_paths(self):
+        missing = self.client.get(
+            f"/api/ivr/media/recordings/{self.call_id}/missing.mp3"
+        )
+        self.assertEqual(missing.status_code, 404)
+        unsafe = self.client.get(
+            f"/api/ivr/media/recordings/{self.call_id}/..%2Fsecret.mp3"
+        )
+        self.assertEqual(unsafe.status_code, 404)
 
     def test_upload_rejects_non_audio(self):
         response = self.client.post(

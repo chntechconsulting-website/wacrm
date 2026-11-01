@@ -133,6 +133,12 @@ limitation, not an upload failure.
 Backing out of the system file picker is treated as a cancellation and does not
 show a “no recording found” error.
 
+**Deployment requirement:** recordings are served from
+`/api/ivr/media/recordings/{call_id}/{filename}`. Reverse proxies must forward
+`/api/*` to FastAPI (the generic `/uploads/*` mount is not publicly routed in
+production). The mobile app rewrites legacy `/uploads/recordings/...` links to
+this route automatically.
+
 ## 7. Expected limitations
 
 - **No universal automatic SIM recording.** The app can only see files Android

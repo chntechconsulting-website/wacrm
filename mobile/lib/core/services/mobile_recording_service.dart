@@ -238,11 +238,25 @@ class MobileRecordingService {
     if (raw.isEmpty) return null;
     final uri = Uri.tryParse(raw);
     if (uri == null) return null;
+
+    // Older backend responses (and legacy rows) point at the generic
+    // `/uploads/...` mount, which production reverse proxies do not forward to
+    // FastAPI. Managed recordings are always playable through the API media
+    // route, on whichever backend the app is configured to use.
+    const managedUploads = '/uploads/recordings/';
+    const mediaRoute = '/ivr/media/recordings/';
+    if (uri.path.contains(managedUploads)) {
+      final suffix = uri.path.substring(
+        uri.path.indexOf(managedUploads) + managedUploads.length,
+      );
+      return '${ApiEndpoints.apiPrefix}$mediaRoute$suffix';
+    }
+
     if (!uri.hasScheme) {
       return '${ApiEndpoints.baseUrl.replaceAll(RegExp(r'/+$'), '')}$raw';
     }
     final base = Uri.tryParse(ApiEndpoints.baseUrl);
-    final isManagedUpload = uri.path.contains('/uploads/');
+    final isManagedUpload = uri.path.contains('/media/recordings/');
     if (isManagedUpload && base != null && base.host.isNotEmpty) {
       if (uri.host != base.host || uri.port != base.port) {
         final authority = base.hasPort ? '${base.host}:${base.port}' : base.host;

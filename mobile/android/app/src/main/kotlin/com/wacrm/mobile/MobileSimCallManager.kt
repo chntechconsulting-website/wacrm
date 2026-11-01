@@ -547,7 +547,9 @@ class MobileSimCallManager(
             // Managed /uploads/ files are public static assets; sending an
             // Authorization header to them makes some Samsung media stacks
             // fail the HTTP request. External PBX URLs keep the header.
-            val isManagedUpload = Uri.parse(url).path.orEmpty().contains("/uploads/")
+            val isManagedUpload = Uri.parse(url).path.orEmpty().let { path ->
+                path.contains("/uploads/") || path.contains("/media/recordings/")
+            }
             val headers = if (token.isNullOrBlank() || isManagedUpload) {
                 emptyMap()
             } else {
