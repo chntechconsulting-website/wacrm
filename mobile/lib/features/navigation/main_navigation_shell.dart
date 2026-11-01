@@ -93,6 +93,9 @@ class MainNavigationShellState extends State<MainNavigationShell>
     }
   }
 
+  String get _employeeKey =>
+      context.read<AuthProvider>().currentUser?.id.toString() ?? 'default';
+
   Future<void> _syncMobileSimCall(MobileSimCallResult result) async {
     if (!mounted) return;
     final callsProvider = context.read<CallsProvider>();
@@ -108,6 +111,7 @@ class MainNavigationShellState extends State<MainNavigationShell>
         final uploaded = await DeviceCallLogSyncService.attachRecordingForLiveResult(
           result: result,
           callId: rowId,
+          employeeKey: _employeeKey,
         );
         if (uploaded && mounted) {
           await callsProvider.fetchCalls(showLoading: false);

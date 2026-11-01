@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/doocti_call_service.dart';
+import '../../../core/services/mobile_call_recording_manager.dart';
 import '../../../core/services/mobile_recording_service.dart';
+import '../../../core/services/mobile_sim_call_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
@@ -15,6 +18,7 @@ import '../../../core/widgets/wacrm_card.dart';
 import '../../../core/widgets/wacrm_text_field.dart';
 import '../providers/calls_provider.dart';
 import '../models/call_log_model.dart';
+import '../../auth/providers/auth_provider.dart';
 import 'dialer_screen.dart';
 
 class CallLogsScreen extends StatefulWidget {
@@ -195,6 +199,12 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       );
       if (callId == null || !mounted) return;
 
+      final consented = await RecordingConsentService.ensureConsent(
+        context,
+        employeeKey: _employeeKey,
+      );
+      if (!consented || !mounted) return;
+
       final uploaded = await MobileRecordingService.attachToCall(
         context,
         callId: callId,
@@ -208,14 +218,257 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     }
   }
 
-  Future<void> _attachRecording(int callId) async {
-    final uploaded = await MobileRecordingService.attachToCall(
+  String get _employeeKey =>
+      context.read<AuthProvider>().currentUser?.id.toString() ?? 'default';
+
+  Future<void> _attachRecording(CallLogModel call) async {
+    final employeeKey = _employeeKey;
+    final consented = await RecordingConsentService.ensureConsent(
       context,
-      callId: callId,
+      employeeKey: employeeKey,
     );
-    if (uploaded && mounted) {
-      await context.read<CallsProvider>().fetchCalls(showLoading: false);
+    if (!consented || !mounted) return;
+
+    final capability = await MobileCallRecordingManager.capability();
+    if (!mounted) return;
+
+    ImportedCallRecording? recording;
+    if (capability.hasAutomaticDiscovery) {
+      final choice = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: AppColors.card,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.manage_search_rounded),
+                title: const Text('Find on this device'),
+                subtitle: const Text(
+                  'Search readable MediaStore recordings for this exact call',
+                ),
+                onTap: () => Navigator.pop(ctx, 'auto'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder_open_rounded),
+                title: const Text('Choose a recording file'),
+                subtitle: const Text(
+                  'Open the system document picker (user-authorised access)',
+                ),
+                onTap: () => Navigator.pop(ctx, 'file'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+      if (choice == 'auto') {
+        final rawStarted = call.startedAt ?? call.createdAt;
+        final started = rawStarted == null
+            ? null
+            : DateTime.tryParse(rawStarted)?.toUtc();
+        if (started != null) {
+          recording = await MobileCallRecordingManager.findRecordingForCall(
+            phone: call.customerNumber,
+            startedAt: started,
+            endedAt: call.endedAt == null
+                ? null
+                : DateTime.tryParse(call.endedAt!)?.toUtc(),
+            durationSeconds: call.durationSeconds,
+          );
+        }
+      } else if (choice == 'file') {
+        recording = await _pickRecordingSafely();
+      }
+    } else {
+      recording = await _pickRecordingSafely();
     }
+
+    if (!mounted) return;
+    if (recording == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No unambiguous device recording was found for this call. '
+            'Nothing was attached.',
+          ),
+          backgroundColor: Color(0xFFB45309),
+        ),
+      );
+      return;
+    }
+
+    final outcome = await MobileCallRecordingManager.upload(
+      callId: call.id,
+      recording: recording,
+      consent: true,
+      callDurationSeconds: call.durationSeconds,
+    );
+    if (!mounted) return;
+    final uploaded =
+        outcome == RecordingUploadOutcome.uploaded ||
+        outcome == RecordingUploadOutcome.duplicate;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(_outcomeMessage(outcome)),
+        backgroundColor: uploaded
+            ? const Color(0xFF10B981)
+            : const Color(0xFFDC2626),
+      ),
+    );
+    await context.read<CallsProvider>().fetchCalls(showLoading: false);
+  }
+
+  Future<ImportedCallRecording?> _pickRecordingSafely() async {
+    try {
+      return await MobileCallRecordingManager.pickRecordingFile();
+    } on PlatformException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error.message ??
+                  'The selected file could not be verified as a recording.',
+            ),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
+  String _outcomeMessage(RecordingUploadOutcome outcome) {
+    switch (outcome) {
+      case RecordingUploadOutcome.uploaded:
+        return 'Recording verified, uploaded and linked to this call.';
+      case RecordingUploadOutcome.duplicate:
+        return 'This recording is already linked to the call.';
+      case RecordingUploadOutcome.consentRequired:
+        return 'Recording consent is required before importing.';
+      case RecordingUploadOutcome.verificationFailed:
+        return 'Recording verification failed. The file was not attached.';
+      case RecordingUploadOutcome.uploadFailed:
+        return 'Recording upload failed. The call stays marked for retry.';
+    }
+  }
+
+  Future<void> _showRecordingCapability() async {
+    final capability = await MobileCallRecordingManager.capability();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Call recording support',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _capabilityRow('Device', capability.platformLabel),
+              _capabilityRow(
+                'Android',
+                '${capability.androidVersion} (API ${capability.androidSdk})',
+              ),
+              _capabilityRow('OEM family', capability.oemFamily),
+              _capabilityRow(
+                'Native dialer',
+                capability.nativeDialerPackage ?? 'Not reported',
+              ),
+              _capabilityRow(
+                'Automatic sync',
+                capability.automaticSyncLabel,
+              ),
+              _capabilityRow('OEM support', capability.oemSupportLabel),
+              _capabilityRow(
+                'Audio permission',
+                capability.audioPermission ? 'Granted' : 'Not granted',
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                RecordingConsentService.disclosureText,
+                style: TextStyle(fontSize: 12, height: 1.4),
+              ),
+              if (capability.notes.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                ...capability.notes.map(
+                  (note) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '• $note',
+                      style: const TextStyle(fontSize: 11.5, height: 1.35),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          if (!capability.audioPermission)
+            TextButton(
+              onPressed: () async {
+                await MobileSimCallService.requestPermissions();
+                if (ctx.mounted) Navigator.pop(ctx);
+                _showRecordingCapability();
+              },
+              child: const Text('Grant audio access'),
+            ),
+          FutureBuilder<bool>(
+            future: RecordingConsentService.hasConsent(_employeeKey),
+            builder: (context, snapshot) {
+              if (snapshot.data != true) return const SizedBox.shrink();
+              return TextButton(
+                onPressed: () async {
+                  await RecordingConsentService.revoke(_employeeKey);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text('Revoke consent'),
+              );
+            },
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _capabilityRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textMuted,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 12, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _callNumber(String phone, {int? leadId, String? contactName}) {
@@ -432,6 +685,11 @@ class _CallLogsScreenState extends State<CallLogsScreen>
         title: const Text('Call Logs & Telephony'),
         actions: [
           IconButton(
+            tooltip: 'Recording support on this device',
+            icon: const Icon(Icons.verified_user_outlined),
+            onPressed: _showRecordingCapability,
+          ),
+          IconButton(
             tooltip: 'Dial pad',
             icon: const Icon(Icons.dialpad_rounded),
             onPressed: () => Navigator.push(
@@ -556,7 +814,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                     Flexible(
                                       child: Text(
                                         '${call.simLabel ?? 'Mobile SIM'}'
-                                        '${call.hasRecording ? ' • Recording attached' : ' • Recording Unavailable'}',
+                                        ' • ${call.recordingStatusLabel}',
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
@@ -589,8 +847,8 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                           : Icons.upload_file_rounded,
                                       label: call.hasRecording
                                           ? 'Replace'
-                                          : 'Attach recording',
-                                      onTap: () => _attachRecording(call.id),
+                                          : 'Import recording',
+                                      onTap: () => _attachRecording(call),
                                     ),
                                   ],
                                 ),

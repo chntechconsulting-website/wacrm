@@ -1,3 +1,4 @@
+import hashlib
 import os
 import json
 import re
@@ -67,6 +68,45 @@ _RECORDING_MIME_TYPES = {
     "audio/opus", "audio/amr", "audio/3gpp", "audio/3gpp2", "audio/caf",
     "audio/webm", "video/3gpp",
 }
+
+RECORDING_STATUS_AVAILABLE = "AVAILABLE"
+RECORDING_STATUS_PENDING_SYNC = "PENDING_SYNC"
+RECORDING_STATUS_UNAVAILABLE = "RECORDING_UNAVAILABLE"
+RECORDING_STATUS_UPLOAD_FAILED = "UPLOAD_FAILED"
+RECORDING_STATUS_VERIFICATION_FAILED = "VERIFICATION_FAILED"
+
+RECORDING_STATUSES = {
+    RECORDING_STATUS_AVAILABLE,
+    RECORDING_STATUS_PENDING_SYNC,
+    RECORDING_STATUS_UNAVAILABLE,
+    RECORDING_STATUS_UPLOAD_FAILED,
+    RECORDING_STATUS_VERIFICATION_FAILED,
+}
+# Client-reported statuses. AVAILABLE is granted only by a verified upload.
+REPORTABLE_RECORDING_STATUSES = {
+    RECORDING_STATUS_PENDING_SYNC,
+    RECORDING_STATUS_UNAVAILABLE,
+    RECORDING_STATUS_UPLOAD_FAILED,
+    RECORDING_STATUS_VERIFICATION_FAILED,
+}
+# A connected mobile call may still receive an OEM/dialer recording from the
+# device. After this window we stop advertising PENDING_SYNC automatically.
+RECORDING_PENDING_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def _canonical_recording_status(raw: Optional[str]) -> Optional[str]:
+    """Maps legacy statuses and returns a canonical value or None."""
+    value = str(raw or "").strip().upper()
+    if value in RECORDING_STATUSES:
+        return value
+    if value in ("RECORDING_AVAILABLE", "AVAILABLE"):
+        return RECORDING_STATUS_AVAILABLE
+    if value in ("RECORDING_PROCESSING", "PROCESSING", "PENDING"):
+        return RECORDING_STATUS_PENDING_SYNC
+    if value in ("RECORDING_UNAVAILABLE", "UNAVAILABLE"):
+        return RECORDING_STATUS_UNAVAILABLE
+    return None
+
 
 
 def _absolute_media_url(raw_url: Optional[str]) -> Optional[str]:
@@ -198,6 +238,10 @@ class ManualCallLogRequest(BaseModel):
     # history row can be reconciled with an already tracked in-app call.
     native_call_reference: Optional[str] = None
 
+class RecordingStatusUpdateRequest(BaseModel):
+    status: str
+    detail: Optional[str] = None
+
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
 
@@ -311,14 +355,35 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     is_loopback = "127.0.0.1" in raw_rec or "localhost" in raw_rec
 
     if resolved_rec:
-        rec_status = "RECORDING_AVAILABLE"
-    elif is_device_dial:
-        # Device/carrier call recording is not exposed to third-party apps.
-        rec_status = "RECORDING_UNAVAILABLE"
-    elif is_recent and status_upper not in ["BUSY", "MISSED", "FAILED"]:
-        rec_status = "RECORDING_PROCESSING"
+        rec_status = RECORDING_STATUS_AVAILABLE
     else:
-        rec_status = "RECORDING_UNAVAILABLE"
+        stored_status = _canonical_recording_status(call.recording_status)
+        if stored_status in (
+            RECORDING_STATUS_PENDING_SYNC,
+            RECORDING_STATUS_UPLOAD_FAILED,
+            RECORDING_STATUS_VERIFICATION_FAILED,
+        ):
+            rec_status = stored_status
+        elif is_device_dial:
+            # OEM/dialer recordings are imported only with user authorisation.
+            # A recent connected call may still be pending on the device; an
+            # older call is simply unavailable unless a file was uploaded.
+            pending = False
+            if call_end_time and status_upper not in ("BUSY", "MISSED", "FAILED", "REJECTED"):
+                try:
+                    age = (now_ist - call_end_time).total_seconds()
+                    pending = 0 <= age <= RECORDING_PENDING_WINDOW_SECONDS
+                except Exception:
+                    pending = False
+            rec_status = (
+                RECORDING_STATUS_PENDING_SYNC
+                if pending and (duration > 0 or status_upper in ("ANSWERED", "CONNECTED", "COMPLETED"))
+                else RECORDING_STATUS_UNAVAILABLE
+            )
+        elif is_recent and status_upper not in ["BUSY", "MISSED", "FAILED"]:
+            rec_status = RECORDING_STATUS_PENDING_SYNC
+        else:
+            rec_status = RECORDING_STATUS_UNAVAILABLE
 
     # UI Status Normalization:
     # If a call has ended or was answered/connected, map to COMPLETED for final UI display.
@@ -374,6 +439,10 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         ),
         recording_duration_seconds=call.recording_duration_seconds,
         recording_source=call.recording_source,
+        recording_checksum=call.recording_checksum,
+        recording_verified_at=call.recording_verified_at,
+        recording_consent_at=call.recording_consent_at,
+        recording_status_detail=call.recording_status_detail,
         recording_status=rec_status,
         transcript=call.transcript,
         ai_summary=call.ai_summary,
@@ -681,6 +750,7 @@ async def upload_mobile_call_recording(
     file: UploadFile = File(...),
     duration_seconds: Optional[int] = Form(None),
     source: Optional[str] = Form(None),
+    consent: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -721,6 +791,36 @@ async def upload_mobile_call_recording(
             ),
         )
 
+    recording_source = str(source or "UPLOAD").strip().upper()
+    if recording_source not in ("UPLOAD", "DEVICE"):
+        recording_source = "UPLOAD"
+    consent_given = str(consent or "").strip().lower() in ("true", "1", "yes", "on")
+    if recording_source == "DEVICE" and not consent_given:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Explicit consent is required before importing a device call "
+                "recording into the CRM."
+            ),
+        )
+
+    parsed_duration: Optional[int] = None
+    if duration_seconds is not None:
+        try:
+            candidate_duration = int(duration_seconds)
+            if 0 <= candidate_duration <= 24 * 60 * 60:
+                parsed_duration = candidate_duration
+        except (TypeError, ValueError):
+            parsed_duration = None
+    if recording_source == "DEVICE" and not parsed_duration:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "The actual recording duration is required so the file can be "
+                "verified against the call before it is attached."
+            ),
+        )
+
     ext = _safe_recording_extension(file.filename, file.content_type)
     if not ext:
         raise HTTPException(
@@ -740,6 +840,7 @@ async def upload_mobile_call_recording(
 
     total = 0
     head = b""
+    digest = hashlib.sha256()
     try:
         with target.open("wb") as out:
             while True:
@@ -754,6 +855,7 @@ async def upload_mobile_call_recording(
                     )
                 if len(head) < 12:
                     head += chunk[: 12 - len(head)]
+                digest.update(chunk)
                 out.write(chunk)
 
         if total < 1024:
@@ -781,6 +883,50 @@ async def upload_mobile_call_recording(
         except Exception:
             pass
 
+    checksum = digest.hexdigest()
+
+    # Idempotency: re-uploading the same bytes for the same call is a no-op.
+    existing_checksum = str(call.recording_checksum or "").strip().lower()
+    if (
+        existing_checksum
+        and existing_checksum == checksum
+        and str(call.recording_url or "").strip()
+    ):
+        target.unlink(missing_ok=True)
+        call.recording_status = RECORDING_STATUS_AVAILABLE
+        call.recording_status_detail = None
+        db.commit()
+        db.refresh(call)
+        return build_call_log_response(call, db)
+
+    # Validate the actual audio duration against the call duration before the
+    # file is linked. A mismatch means the wrong file was selected.
+    expected_duration = int(call.duration_seconds or 0)
+    if (
+        parsed_duration is not None
+        and expected_duration > 0
+        and abs(parsed_duration - expected_duration)
+        > max(20, int(expected_duration * 0.30))
+    ):
+        target.unlink(missing_ok=True)
+        call.recording_status = RECORDING_STATUS_VERIFICATION_FAILED
+        call.recording_status_detail = (
+            f"Recording duration {parsed_duration}s does not match call "
+            f"duration {expected_duration}s."
+        )
+        call.recording_verified_at = get_ist_now()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Recording duration does not match the call duration; the file "
+                "was not attached."
+            ),
+        )
+
     # Replace a previously attached managed file; never touch external URLs.
     old_url = str(call.recording_url or "")
     marker = "/uploads/"
@@ -797,18 +943,16 @@ async def upload_mobile_call_recording(
 
     call.recording_url = f"/uploads/{_RECORDING_MANAGED_PREFIX}/{call.id}/{target.name}"
     call.recording_id = target.stem
-    recording_source = str(source or "UPLOAD").strip().upper()
-    call.recording_source = (
-        recording_source if recording_source in ("UPLOAD", "DEVICE") else "UPLOAD"
-    )
+    call.recording_source = recording_source
     call.recording_attached_at = get_ist_now()
-    if duration_seconds is not None:
-        try:
-            parsed_duration = int(duration_seconds)
-        except (TypeError, ValueError):
-            parsed_duration = None
-        if parsed_duration is not None and 0 <= parsed_duration <= 24 * 60 * 60:
-            call.recording_duration_seconds = parsed_duration
+    call.recording_verified_at = call.recording_attached_at
+    call.recording_checksum = checksum
+    call.recording_status = RECORDING_STATUS_AVAILABLE
+    call.recording_status_detail = None
+    if consent_given:
+        call.recording_consent_at = call.recording_attached_at
+    if parsed_duration is not None:
+        call.recording_duration_seconds = parsed_duration
     try:
         db.commit()
         db.refresh(call)
@@ -820,6 +964,72 @@ async def upload_mobile_call_recording(
             detail=f"Failed to save recording link: {exc}",
         )
 
+    return build_call_log_response(call, db)
+
+
+@router.post("/calls/{call_id}/recording-status", response_model=CallLogResponse)
+def update_call_recording_status(
+    call_id: str,
+    body: RecordingStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Records mobile-side recording sync status (pending, upload failed or
+    verification failed). AVAILABLE is never accepted here: it is granted only
+    after the backend has stored and verified an actual audio file.
+    """
+    if call_id.isdigit():
+        call = db.query(CallLog).filter(CallLog.id == int(call_id)).first()
+    else:
+        call = db.query(CallLog).filter(CallLog.provider_call_id == call_id).first()
+
+    if not call:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Call log record '{call_id}' not found.",
+        )
+
+    authorized_emp_ids = get_authorized_call_employee_ids(current_user, db)
+    if authorized_emp_ids is not None:
+        if call.employee_id is None or call.employee_id not in authorized_emp_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: you cannot update this call's recording status.",
+            )
+
+    if str(call.provider or "").upper() not in ("MOBILE_SIM", "DIRECT_DIAL"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Recording sync status is only tracked for device calls.",
+        )
+
+    new_status = _canonical_recording_status(body.status)
+    if new_status not in REPORTABLE_RECORDING_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unsupported status. Use PENDING_SYNC, RECORDING_UNAVAILABLE, "
+                "UPLOAD_FAILED or VERIFICATION_FAILED."
+            ),
+        )
+
+    # A stored recording always wins over a stale client failure report.
+    if str(call.recording_url or "").strip():
+        return build_call_log_response(call, db)
+
+    call.recording_status = new_status
+    detail = str(body.detail or "").strip()
+    call.recording_status_detail = detail[:255] or None
+    try:
+        db.commit()
+        db.refresh(call)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save recording status: {exc}",
+        )
     return build_call_log_response(call, db)
 
 

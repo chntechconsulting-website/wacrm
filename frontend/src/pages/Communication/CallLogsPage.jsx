@@ -688,7 +688,7 @@ const CallLogsPage = () => {
         const isRecent = diffMs < 600000; // within last 10 minutes
         const recStatus = String(log.recording_status || '').toUpperCase();
         const callStatus = String(log.call_status || '').toUpperCase();
-        const isProcessing = recStatus.includes('PROCESSING');
+        const isProcessing = recStatus.includes('PROCESSING') || recStatus === 'PENDING_SYNC';
         const isConnected = ['ANSWERED', 'COMPLETED', 'CONNECTED'].includes(callStatus);
         return isRecent && (isProcessing || (!log.recording_url && isConnected));
       });
@@ -1292,7 +1292,9 @@ const CallLogsPage = () => {
                       <td>
                         {(() => {
                           const recStatus = String(log.recording_status || '').toUpperCase();
-                          const isProcessing = recStatus.includes('PROCESSING');
+                          const isProcessing = recStatus.includes('PROCESSING') || recStatus === 'PENDING_SYNC';
+                          const isFailed = recStatus === 'UPLOAD_FAILED';
+                          const isVerificationFailed = recStatus === 'VERIFICATION_FAILED';
                           
                           if (log.recording_url) {
                             return (
@@ -1308,9 +1310,23 @@ const CallLogsPage = () => {
                           }
                           if (isProcessing) {
                             return (
-                              <span className="recording-status-badge processing" title="Audio recording is currently being processed by Doocti PBX (auto-updating...)">
+                              <span className="recording-status-badge processing" title="Waiting for the device/OEM recording to be imported and synced.">
                                 <span className="recording-pulse-dot" />
-                                Recording Processing
+                                Pending Sync
+                              </span>
+                            );
+                          }
+                          if (isFailed) {
+                            return (
+                              <span className="recording-status-badge failed" title="The recording upload failed. Retry from the mobile app.">
+                                Upload Failed
+                              </span>
+                            );
+                          }
+                          if (isVerificationFailed) {
+                            return (
+                              <span className="recording-status-badge verification" title="The imported file did not match this call and was not attached.">
+                                Verification Failed
                               </span>
                             );
                           }

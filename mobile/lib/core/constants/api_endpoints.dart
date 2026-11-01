@@ -119,6 +119,8 @@ class ApiEndpoints {
   static String get manualCallLegacy => '$apiPrefix/ivr/calls/manual';
   static String ivrCallById(int id) => '$apiPrefix/ivr/calls/$id';
   static String ivrCallRecording(int id) => '$apiPrefix/ivr/calls/$id/recording';
+  static String ivrCallRecordingStatus(int id) =>
+      '$apiPrefix/ivr/calls/$id/recording-status';
   static String disconnectCall(int id) => '$apiPrefix/ivr/calls/$id/disconnect';
 
   // DooCTI Telephony

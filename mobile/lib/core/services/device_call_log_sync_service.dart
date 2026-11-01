@@ -3,7 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
-import 'mobile_recording_service.dart';
+import 'mobile_call_recording_manager.dart';
 import 'mobile_sim_call_service.dart';
 
 /// One row from the Android device call log.
@@ -137,6 +137,9 @@ class DeviceCallLogSyncService {
       final repository = CallsRepository();
       var synced = 0;
       var recordings = 0;
+      final consented = autoUploadRecordings
+          ? await RecordingConsentService.hasConsent(scope)
+          : false;
 
       for (final raw in rows) {
         final entry = DeviceCallLogEntry.fromMap(raw);
@@ -166,25 +169,29 @@ class DeviceCallLogSyncService {
           final hasRecording =
               (response?['recording_url'] ?? '').toString().trim().isNotEmpty;
           final started = entry.startedDateTime;
-          if (autoUploadRecordings &&
+          if (consented &&
               callId != null &&
               !hasRecording &&
               entry.durationSeconds > 0 &&
               started != null) {
             try {
-              final match = await MobileSimCallService.findDeviceRecording(
+              final match = await MobileCallRecordingManager.findRecordingForCall(
                 phone: entry.phone,
                 startedAt: started,
                 endedAt: entry.endedDateTime,
                 durationSeconds: entry.durationSeconds,
               );
               if (match != null) {
-                final uploaded = await MobileRecordingService.uploadForCall(
+                final outcome = await MobileCallRecordingManager.upload(
                   callId: callId,
-                  recording: PickedRecording.fromMap(match),
-                  source: 'DEVICE',
+                  recording: match,
+                  consent: true,
+                  callDurationSeconds: entry.durationSeconds,
                 );
-                if (uploaded) recordings += 1;
+                if (outcome == RecordingUploadOutcome.uploaded ||
+                    outcome == RecordingUploadOutcome.duplicate) {
+                  recordings += 1;
+                }
               }
             } catch (_) {
               // No accessible/unambiguous recording: keep "Unavailable".
@@ -216,10 +223,13 @@ class DeviceCallLogSyncService {
   static Future<bool> attachRecordingForLiveResult({
     required MobileSimCallResult result,
     required int callId,
+    required String employeeKey,
   }) async {
     if (!isSupported || result.hasRecording || result.durationSeconds <= 0) {
       return false;
     }
+    final consented = await RecordingConsentService.hasConsent(employeeKey);
+    if (!consented) return false;
     final startedRaw = result.startedAt;
     if (startedRaw == null || startedRaw.isEmpty) return false;
     final started = DateTime.tryParse(startedRaw)?.toUtc();
@@ -228,18 +238,21 @@ class DeviceCallLogSyncService {
         ? null
         : DateTime.tryParse(result.endedAt!)?.toUtc();
     try {
-      final match = await MobileSimCallService.findDeviceRecording(
+      final match = await MobileCallRecordingManager.findRecordingForCall(
         phone: result.customerPhone,
         startedAt: started,
         endedAt: ended,
         durationSeconds: result.durationSeconds,
       );
       if (match == null) return false;
-      return await MobileRecordingService.uploadForCall(
+      final outcome = await MobileCallRecordingManager.upload(
         callId: callId,
-        recording: PickedRecording.fromMap(match),
-        source: 'DEVICE',
+        recording: match,
+        consent: true,
+        callDurationSeconds: result.durationSeconds,
       );
+      return outcome == RecordingUploadOutcome.uploaded ||
+          outcome == RecordingUploadOutcome.duplicate;
     } catch (_) {
       return false;
     }

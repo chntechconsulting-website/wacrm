@@ -1,3 +1,5 @@
+import '../../../core/services/mobile_call_recording_manager.dart';
+
 class CallLogModel {
   final int id;
   final int? leadId;
@@ -17,6 +19,8 @@ class CallLogModel {
   final String? nativeCallReference;
   final String? simLabel;
   final String? createdAt;
+  final String? startedAt;
+  final String? endedAt;
 
   CallLogModel({
     required this.id,
@@ -37,6 +41,8 @@ class CallLogModel {
     this.nativeCallReference,
     this.simLabel,
     this.createdAt,
+    this.startedAt,
+    this.endedAt,
   });
 
   bool get isMobileSim => (provider ?? '').toUpperCase().contains('MOBILE_SIM');
@@ -53,6 +59,17 @@ class CallLogModel {
 
   bool get isMobile => source == 'MOBILE';
   bool get isDoocti => source == 'DOOCTI';
+
+  /// Canonical recording lifecycle, including legacy backend values.
+  RecordingSyncStatus get recordingSyncStatus {
+    if (hasRecording) return RecordingSyncStatus.available;
+    return RecordingSyncStatus.fromApi(recordingStatus);
+  }
+
+  String get recordingStatusLabel => recordingSyncStatus.label;
+
+  bool get isRecordingAvailable =>
+      recordingSyncStatus == RecordingSyncStatus.available;
 
   bool get hasRecording =>
       recordingUrl != null && recordingUrl!.trim().isNotEmpty;
@@ -86,6 +103,8 @@ class CallLogModel {
       nativeCallReference: json['native_call_reference'],
       simLabel: json['sim_label'],
       createdAt: json['created_at'] ?? json['started_at'],
+      startedAt: json['started_at'],
+      endedAt: json['ended_at'],
     );
   }
 

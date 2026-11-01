@@ -39,6 +39,10 @@ class CallLogResponse(BaseModel):
     recording_id: Optional[str] = None
     recording_duration_seconds: Optional[int] = None
     recording_source: Optional[str] = None
+    recording_checksum: Optional[str] = None
+    recording_verified_at: Optional[datetime] = None
+    recording_consent_at: Optional[datetime] = None
+    recording_status_detail: Optional[str] = None
     transcript: Optional[str] = None
     ai_summary: Optional[str] = None
     sentiment: Optional[str] = None
@@ -53,7 +57,10 @@ class CallLogResponse(BaseModel):
     created_at: datetime
 
     # Additional expanded fields for UI
-    recording_status: Optional[str] = "RECORDING_UNAVAILABLE"  # "RECORDING_AVAILABLE", "RECORDING_PROCESSING", "RECORDING_UNAVAILABLE"
+    # Canonical recording lifecycle shared by mobile and web:
+    # AVAILABLE | PENDING_SYNC | RECORDING_UNAVAILABLE |
+    # UPLOAD_FAILED | VERIFICATION_FAILED
+    recording_status: Optional[str] = "RECORDING_UNAVAILABLE"
     lead_name: Optional[str] = None
     employee_name: Optional[str] = None
     employee_extension: Optional[str] = None

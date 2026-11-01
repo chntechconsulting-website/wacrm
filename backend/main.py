@@ -267,6 +267,11 @@ async def startup_db_client():
                     "ALTER TABLE call_logs ADD COLUMN recording_duration_seconds INT NULL",
                     "ALTER TABLE call_logs ADD COLUMN recording_source VARCHAR(30) NULL",
                     "ALTER TABLE call_logs ADD COLUMN recording_attached_at DATETIME NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_status VARCHAR(40) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_status_detail VARCHAR(255) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_checksum VARCHAR(64) NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_verified_at DATETIME NULL",
+                    "ALTER TABLE call_logs ADD COLUMN recording_consent_at DATETIME NULL",
                     "ALTER TABLE call_logs ADD INDEX ix_call_logs_recording_id (recording_id)"
                 ]:
                     try:

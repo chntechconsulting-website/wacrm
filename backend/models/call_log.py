@@ -31,8 +31,16 @@ class CallLog(Base):
     # exact call) - never by phone number, list position or timestamp guesses.
     recording_id = Column(String(150), nullable=True, index=True)
     recording_duration_seconds = Column(Integer, nullable=True)
-    recording_source = Column(String(30), nullable=True)  # DOOCTI, UPLOAD, WEBHOOK
+    recording_source = Column(String(30), nullable=True)  # DOOCTI, UPLOAD, DEVICE
     recording_attached_at = Column(DateTime, nullable=True)
+    # Canonical recording sync status shared by mobile and web:
+    # AVAILABLE, PENDING_SYNC, RECORDING_UNAVAILABLE, UPLOAD_FAILED,
+    # VERIFICATION_FAILED.
+    recording_status = Column(String(40), nullable=True)
+    recording_status_detail = Column(String(255), nullable=True)
+    recording_checksum = Column(String(64), nullable=True)
+    recording_verified_at = Column(DateTime, nullable=True)
+    recording_consent_at = Column(DateTime, nullable=True)
     
     # Call Transcription & AI Summary
     transcript = Column(Text, nullable=True)

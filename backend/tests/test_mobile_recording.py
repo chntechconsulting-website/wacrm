@@ -142,7 +142,7 @@ class TestMobileRecordingUpload(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertTrue(data["recording_url"].endswith(".mp3"))
-        self.assertEqual(data["recording_status"], "RECORDING_AVAILABLE")
+        self.assertEqual(data["recording_status"], "AVAILABLE")
         self.assertEqual(data["call_source"], "MOBILE")
         self.assertIsNone(data["native_call_reference"])
         self.assertEqual(data["recording_source"], "UPLOAD")
@@ -164,11 +164,109 @@ class TestMobileRecordingUpload(unittest.TestCase):
     def test_upload_marks_device_source(self):
         response = self.client.post(
             f"/api/ivr/calls/{self.call_id}/recording",
-            data={"source": "DEVICE"},
+            data={
+                "source": "DEVICE",
+                "consent": "true",
+                "duration_seconds": "30",
+            },
             files={"file": ("call-device.mp3", self._audio_bytes(), "audio/mpeg")},
         )
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["recording_source"], "DEVICE")
+        data = response.json()
+        self.assertEqual(data["recording_source"], "DEVICE")
+        self.assertEqual(data["recording_status"], "AVAILABLE")
+        self.assertEqual(data["recording_duration_seconds"], 30)
+        self.assertIsNotNone(data["recording_consent_at"])
+        self.assertIsNotNone(data["recording_verified_at"])
+        self.assertEqual(len(data["recording_checksum"]), 64)
+
+    def test_device_upload_requires_explicit_consent(self):
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            data={"source": "DEVICE", "duration_seconds": "30"},
+            files={"file": ("call-device.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("consent is required", response.text)
+
+    def test_device_upload_requires_actual_duration(self):
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            data={"source": "DEVICE", "consent": "true"},
+            files={"file": ("call-device.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("duration is required", response.text)
+
+    def test_device_upload_rejects_wrong_duration(self):
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            data={
+                "source": "DEVICE",
+                "consent": "true",
+                "duration_seconds": "5",
+            },
+            files={"file": ("wrong-call.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("does not match", response.text)
+
+        db = self.Session()
+        call = db.query(CallLog).filter(CallLog.id == self.call_id).first()
+        self.assertEqual(call.recording_status, "VERIFICATION_FAILED")
+        self.assertIsNone(call.recording_url)
+        db.close()
+
+    def test_reuploading_identical_bytes_is_idempotent(self):
+        first = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            files={"file": ("call.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        second = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            files={"file": ("call-copy.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(
+            first.json()["recording_url"], second.json()["recording_url"]
+        )
+        self.assertEqual(second.json()["recording_status"], "AVAILABLE")
+
+    def test_recording_status_can_be_reported_but_not_forced_available(self):
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording-status",
+            json={"status": "PENDING_SYNC", "detail": "Waiting for device file"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["recording_status"], "PENDING_SYNC")
+
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording-status",
+            json={"status": "UPLOAD_FAILED", "detail": "Network error"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["recording_status"], "UPLOAD_FAILED")
+
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording-status",
+            json={"status": "AVAILABLE"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_verified_recording_cannot_be_marked_failed(self):
+        upload = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            files={"file": ("call.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(upload.status_code, 200, upload.text)
+
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording-status",
+            json={"status": "UPLOAD_FAILED"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["recording_status"], "AVAILABLE")
 
     def test_upload_rejects_non_mobile_call(self):
         db = self.Session()

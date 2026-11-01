@@ -7,10 +7,13 @@ import io.flutter.embedding.engine.FlutterEngine
 
 class MainActivity : FlutterActivity() {
     private var mobileSimCallManager: MobileSimCallManager? = null
+    private var mobileCallRecordingManager: MobileCallRecordingManager? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         mobileSimCallManager = MobileSimCallManager(this, flutterEngine.dartExecutor.binaryMessenger)
+        mobileCallRecordingManager =
+            MobileCallRecordingManager(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,7 +31,11 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        mobileSimCallManager?.onActivityResult(requestCode, resultCode, data)
+        val handledByRecorder =
+            mobileCallRecordingManager?.onActivityResult(requestCode, resultCode, data) == true
+        if (!handledByRecorder) {
+            mobileSimCallManager?.onActivityResult(requestCode, resultCode, data)
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -41,6 +48,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        mobileCallRecordingManager?.dispose()
+        mobileCallRecordingManager = null
         mobileSimCallManager?.dispose()
         mobileSimCallManager = null
         super.onDestroy()
