@@ -28,6 +28,8 @@ import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -542,7 +544,11 @@ class MobileSimCallManager(
         try {
             val player = MediaPlayer()
             mediaPlayer = player
-            val headers = if (token.isNullOrBlank()) {
+            // Managed /uploads/ files are public static assets; sending an
+            // Authorization header to them makes some Samsung media stacks
+            // fail the HTTP request. External PBX URLs keep the header.
+            val isManagedUpload = Uri.parse(url).path.orEmpty().contains("/uploads/")
+            val headers = if (token.isNullOrBlank() || isManagedUpload) {
                 emptyMap()
             } else {
                 mapOf("Authorization" to "Bearer $token")
@@ -555,10 +561,15 @@ class MobileSimCallManager(
             player.setOnCompletionListener { releaseMediaPlayer() }
             player.setOnErrorListener { _, what, extra ->
                 releaseMediaPlayer()
-                complete(
-                    "PLAYBACK_FAILED",
-                    "Unable to play this recording ($what/$extra).",
-                )
+                // Report the real HTTP failure (404/405/403...) instead of an
+                // opaque Android media code. This runs off the UI thread.
+                Thread {
+                    val probe = probeRecordingUrl(url, headers)
+                    complete(
+                        "PLAYBACK_FAILED",
+                        "Unable to play this recording ($what/$extra)$probe",
+                    )
+                }.start()
                 true
             }
             player.prepareAsync()
@@ -578,6 +589,35 @@ class MobileSimCallManager(
     private fun stopRecordingPlayback(result: MethodChannel.Result) {
         releaseMediaPlayer()
         result.success(true)
+    }
+
+    /**
+     * Best-effort HTTP probe used only after MediaPlayer fails, so the user and
+     * support see a real status code instead of an opaque media error.
+     */
+    private fun probeRecordingUrl(url: String, headers: Map<String, String>): String {
+        return try {
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 8_000
+                requestMethod = "GET"
+                setRequestProperty("Range", "bytes=0-0")
+                headers.forEach { (key, value) -> setRequestProperty(key, value) }
+            }
+            val code = connection.responseCode
+            val type = connection.contentType.orEmpty()
+            connection.disconnect()
+            buildString {
+                append("; HTTP ")
+                append(code)
+                if (type.isNotBlank()) {
+                    append(", ")
+                    append(type)
+                }
+            }
+        } catch (error: Exception) {
+            "; ${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+        }
     }
 
     private fun releaseMediaPlayer() {

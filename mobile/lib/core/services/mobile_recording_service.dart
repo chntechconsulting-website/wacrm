@@ -197,7 +197,22 @@ class MobileRecordingService {
   }
 
   /// Opens an in-app playback dialog for a verified recording.
-  static Future<void> play(BuildContext context, int callId) async {
+  ///
+  /// Playback must use the stored media URL. The upload endpoint
+  /// (`/calls/{id}/recording`) only accepts POST, so pointing MediaPlayer at it
+  /// fails with an opaque Android media error.
+  static Future<void> play(BuildContext context, {required String? url}) async {
+    final resolved = resolveRecordingUrl(url);
+    if (resolved == null) {
+      if (context.mounted) {
+        _showError(
+          context,
+          'This call has no playable recording URL yet. Wait for the upload '
+          'to finish and refresh.',
+        );
+      }
+      return;
+    }
     final token = await TokenStorage.getToken();
     if (token == null || token.isEmpty) {
       if (context.mounted) _showError(context, 'Your session has expired.');
@@ -207,11 +222,35 @@ class MobileRecordingService {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _RecordingPlaybackDialog(
-        url: ApiEndpoints.ivrCallRecording(callId),
-        token: token,
-      ),
+      builder: (_) => _RecordingPlaybackDialog(url: resolved, token: token),
     );
+  }
+
+  /// Turns an API recording URL into something MediaPlayer can open.
+  ///
+  /// - Stored `/uploads/...` paths are absolute.
+  /// - URLs that point at another origin's `/uploads/` are rebased onto the
+  ///   configured backend, so a recording uploaded by a dev/staging server is
+  ///   not played from the production domain (and vice versa).
+  /// - External recording providers (S3, Oracle, PBX) are left untouched.
+  static String? resolveRecordingUrl(String? rawUrl) {
+    final raw = (rawUrl ?? '').trim();
+    if (raw.isEmpty) return null;
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return null;
+    if (!uri.hasScheme) {
+      return '${ApiEndpoints.baseUrl.replaceAll(RegExp(r'/+$'), '')}$raw';
+    }
+    final base = Uri.tryParse(ApiEndpoints.baseUrl);
+    final isManagedUpload = uri.path.contains('/uploads/');
+    if (isManagedUpload && base != null && base.host.isNotEmpty) {
+      if (uri.host != base.host || uri.port != base.port) {
+        final authority = base.hasPort ? '${base.host}:${base.port}' : base.host;
+        final query = uri.hasQuery ? '?${uri.query}' : '';
+        return '${base.scheme}://$authority${uri.path}$query';
+      }
+    }
+    return raw;
   }
 
   static void _showError(BuildContext context, String message) {

@@ -40,6 +40,21 @@
 - A real recording URL always wins over a stale failure status.
 - Capability payload parsing, OEM diagnostics and automatic-vs-manual flags.
 - Consent is stored per employee, independent between employees, and revocable.
+- Playback resolves the stored media URL (never the POST upload endpoint) and
+  rebases managed `/uploads/...` links onto the configured backend, while
+  leaving external PBX storage URLs untouched.
+
+## 2a. On-device issues found and fixed (Samsung)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `Unable to play this recording (1/-1015)` on a call marked **Available** | The mobile player opened `POST /api/ivr/calls/{id}/recording` (the upload endpoint) instead of the stored `recording_url`. | Play now uses the call's `recording_url`; absolute, rebased or external URLs are resolved before MediaPlayer opens them. |
+| Picker cancellation showed “No unambiguous device recording was found” | Native picker returned `null` for both cancel and no-match. | Cancellation is a distinct result; backing out is silent. |
+| Samsung recordings were not found by automatic search | Discovery was gated on already-readable recordings and only queried one volume. | Discovery uses read-only audio access and queries every external volume; capability sheet reports readable count and folder hints. |
+
+Playback failures now include the HTTP status and content type from a
+best-effort probe, making server-side 403/404/405 failures diagnosable without
+ADB.
 
 ## 3. Physical-device test plan (NOT RUN – hardware unavailable)
 

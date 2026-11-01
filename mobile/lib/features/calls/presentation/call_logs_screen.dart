@@ -939,7 +939,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                         onTap: () =>
                                             MobileRecordingService.play(
                                               context,
-                                              call.id,
+                                              url: call.recordingUrl,
                                             ),
                                       ),
                                     _recordingAction(

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile/core/constants/api_endpoints.dart';
 import 'package:mobile/core/services/mobile_recording_service.dart';
 
 void main() {
@@ -27,6 +28,42 @@ void main() {
       expect(recording.size, 0);
       expect(recording.mimeType, 'audio/*');
       expect(recording.sizeLabel, '0 B');
+    });
+  });
+
+  group('resolveRecordingUrl', () {
+    test('returns null when no recording URL is stored', () {
+      expect(MobileRecordingService.resolveRecordingUrl(null), isNull);
+      expect(MobileRecordingService.resolveRecordingUrl('   '), isNull);
+    });
+
+    test('keeps an absolute managed upload URL', () {
+      final resolved = MobileRecordingService.resolveRecordingUrl(
+        'https://www.wapluscrm.in/uploads/recordings/12/call.m4a',
+      );
+      expect(
+        resolved,
+        'https://www.wapluscrm.in/uploads/recordings/12/call.m4a',
+      );
+    });
+
+    test('rebases managed uploads onto the configured backend', () {
+      ApiEndpoints.baseUrl = 'http://192.168.1.20:8000';
+      addTearDown(() => ApiEndpoints.baseUrl = ApiEndpoints.productionBaseUrl);
+
+      final resolved = MobileRecordingService.resolveRecordingUrl(
+        'https://www.wapluscrm.in/uploads/recordings/12/call.m4a',
+      );
+      expect(resolved, 'http://192.168.1.20:8000/uploads/recordings/12/call.m4a');
+    });
+
+    test('leaves external PBX recordings untouched', () {
+      const external =
+          'https://bmxrx2cviyka.compat.objectstorage.ap-mumbai-1.oraclecloud.com/doocti/call.mp3';
+      expect(
+        MobileRecordingService.resolveRecordingUrl(external),
+        external,
+      );
     });
   });
 }
