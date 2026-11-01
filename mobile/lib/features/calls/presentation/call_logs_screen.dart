@@ -232,27 +232,42 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     final capability = await MobileCallRecordingManager.capability();
     if (!mounted) return;
 
-    ImportedCallRecording? recording;
-    if (capability.hasAutomaticDiscovery) {
-      final choice = await showModalBottomSheet<String>(
-        context: context,
-        backgroundColor: AppColors.card,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-        ),
-        builder: (ctx) => SafeArea(
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 8),
-              ListTile(
-                leading: const Icon(Icons.manage_search_rounded),
-                title: const Text('Find on this device'),
-                subtitle: const Text(
-                  'Search readable MediaStore recordings for this exact call',
+              if (capability.audioPermission)
+                ListTile(
+                  leading: const Icon(Icons.manage_search_rounded),
+                  title: const Text('Find on this device'),
+                  subtitle: Text(
+                    capability.mediaStoreRecordingCount > 0
+                        ? '${capability.mediaStoreRecordingCount} readable recording(s) '
+                              'in Android media storage. Only an exact match is attached.'
+                        : 'No readable recordings in Android media storage yet. '
+                              'Use Choose a file instead.',
+                  ),
+                  onTap: () => Navigator.pop(ctx, 'auto'),
+                )
+              else
+                ListTile(
+                  leading: const Icon(Icons.lock_open_rounded),
+                  title: const Text('Allow audio file search'),
+                  subtitle: const Text(
+                    'Grant read-only audio access so WACRM can look for the '
+                    'dialer recording. You can still use the file picker.',
+                  ),
+                  onTap: () => Navigator.pop(ctx, 'grant'),
                 ),
-                onTap: () => Navigator.pop(ctx, 'auto'),
-              ),
               ListTile(
                 leading: const Icon(Icons.folder_open_rounded),
                 title: const Text('Choose a recording file'),
@@ -261,46 +276,96 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                 ),
                 onTap: () => Navigator.pop(ctx, 'file'),
               ),
-              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Text(
+                  capability.mediaStoreRecordingCount == 0 &&
+                          capability.audioPermission
+                      ? 'Samsung/Vivo/Oppo may keep recordings in a folder '
+                            'Android media scan does not index. In that case use '
+                            'Choose a file or share from the phone recorder app.'
+                      : 'WACRM never records calls. It only imports a file your '
+                            'phone already created.',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    height: 1.4,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-      );
-      if (choice == 'auto') {
-        final rawStarted = call.startedAt ?? call.createdAt;
-        final started = rawStarted == null
-            ? null
-            : DateTime.tryParse(rawStarted)?.toUtc();
-        if (started != null) {
-          recording = await MobileCallRecordingManager.findRecordingForCall(
-            phone: call.customerNumber,
-            startedAt: started,
-            endedAt: call.endedAt == null
-                ? null
-                : DateTime.tryParse(call.endedAt!)?.toUtc(),
-            durationSeconds: call.durationSeconds,
-          );
-        }
-      } else if (choice == 'file') {
-        recording = await _pickRecordingSafely();
-      }
-    } else {
-      recording = await _pickRecordingSafely();
-    }
+      ),
+    );
+    if (!mounted || choice == null) return;
 
-    if (!mounted) return;
-    if (recording == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No unambiguous device recording was found for this call. '
-            'Nothing was attached.',
+    if (choice == 'grant') {
+      final status = await MobileSimCallService.requestPermissions();
+      if (!mounted) return;
+      if (status.readMediaAudio) {
+        await _attachRecording(call);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Audio access was not granted. You can still import through '
+              'Choose a file.',
+            ),
+            backgroundColor: Color(0xFFB45309),
           ),
-          backgroundColor: Color(0xFFB45309),
-        ),
-      );
+        );
+      }
       return;
     }
+
+    ImportedCallRecording? recording;
+    if (choice == 'auto') {
+      final rawStarted = call.startedAt ?? call.createdAt;
+      final started = rawStarted == null
+          ? null
+          : DateTime.tryParse(rawStarted);
+      if (started == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This call has no start time, so a recording cannot be matched '
+              'safely. Nothing was attached.',
+            ),
+            backgroundColor: Color(0xFFB45309),
+          ),
+        );
+        return;
+      }
+      recording = await MobileCallRecordingManager.findRecordingForCall(
+        phone: call.customerNumber,
+        startedAt: started,
+        endedAt: call.endedAt == null
+            ? null
+            : DateTime.tryParse(call.endedAt!),
+        durationSeconds: call.durationSeconds,
+      );
+      if (recording == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No unambiguous device recording was found for this call. '
+              'Nothing was attached. Try Choose a file instead.',
+            ),
+            backgroundColor: Color(0xFFB45309),
+          ),
+        );
+        return;
+      }
+    } else {
+      final picked = await _pickRecordingSafely();
+      if (!mounted) return;
+      if (picked.cancelled || picked.recording == null) return;
+      recording = picked.recording;
+    }
+
+    if (!mounted || recording == null) return;
 
     final outcome = await MobileCallRecordingManager.upload(
       callId: call.id,
@@ -323,7 +388,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     await context.read<CallsProvider>().fetchCalls(showLoading: false);
   }
 
-  Future<ImportedCallRecording?> _pickRecordingSafely() async {
+  Future<RecordingPickResult> _pickRecordingSafely() async {
     try {
       return await MobileCallRecordingManager.pickRecordingFile();
     } on PlatformException catch (error) {
@@ -338,7 +403,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
           ),
         );
       }
-      return null;
+      return RecordingPickResult.empty;
     }
   }
 
@@ -391,6 +456,18 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                 'Audio permission',
                 capability.audioPermission ? 'Granted' : 'Not granted',
               ),
+              _capabilityRow(
+                'Readable recordings',
+                capability.audioPermission
+                    ? '${capability.mediaStoreRecordingCount} in media storage'
+                    : 'Unavailable until audio access is granted',
+              ),
+              _capabilityRow(
+                'Recording folders',
+                capability.recordingFolderHints.isEmpty
+                    ? 'None detected'
+                    : capability.recordingFolderHints.join(', '),
+              ),
               const SizedBox(height: 10),
               const Text(
                 RecordingConsentService.disclosureText,
@@ -412,12 +489,36 @@ class _CallLogsScreenState extends State<CallLogsScreen>
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () {
+              final diagnostics = [
+                'device=${capability.platformLabel}',
+                'android=${capability.androidVersion} (API ${capability.androidSdk})',
+                'oem=${capability.oemFamily}',
+                'dialer=${capability.nativeDialerPackage ?? "unknown"}',
+                'audioPermission=${capability.audioPermission}',
+                'capability=${capability.recordingCapability}',
+                'readableRecordings=${capability.mediaStoreRecordingCount}',
+                'folders=${capability.recordingFolderHints.join("|")}',
+                'recorders=${capability.oemRecorderPackages.join("|")}',
+                'notes=${capability.notes.join(" | ")}',
+              ].join('\n');
+              Clipboard.setData(ClipboardData(text: diagnostics));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Recording diagnostics copied.'),
+                  backgroundColor: Color(0xFF10B981),
+                ),
+              );
+            },
+            child: const Text('Copy diagnostics'),
+          ),
           if (!capability.audioPermission)
             TextButton(
               onPressed: () async {
-                await MobileSimCallService.requestPermissions();
+                final status = await MobileSimCallService.requestPermissions();
                 if (ctx.mounted) Navigator.pop(ctx);
-                _showRecordingCapability();
+                if (status.readMediaAudio) _showRecordingCapability();
               },
               child: const Text('Grant audio access'),
             ),

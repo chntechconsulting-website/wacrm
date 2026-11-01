@@ -152,85 +152,170 @@ class MobileCallRecordingManager(
         }
     }
 
-    private fun recentRecordings(limit: Int = 5): List<Map<String, Any?>> {
-        if (!hasAudioPermission()) return emptyList()
-        val sinceSec =
-            (System.currentTimeMillis() - RECENT_WINDOW_DAYS * 24L * 60L * 60L * 1000L) / 1000L
-        val rows = mutableListOf<Map<String, Any?>>()
-        val projection = arrayOf(
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.DATE_MODIFIED,
-            MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.MIME_TYPE,
-        )
-        val selection = buildString {
-            append(MediaStore.Audio.Media.IS_MUSIC).append(" = 0")
-            append(" AND ").append(MediaStore.Audio.Media.DATE_MODIFIED).append(" >= ?")
-            append(" AND ").append(MediaStore.Audio.Media.DURATION).append(" > 0")
+    /**
+     * MediaStore audio row, read across every readable external volume.
+     * Only metadata is read; file contents are opened later, after a unique
+     * match and after the employee has consented.
+     */
+    private data class AudioRow(
+        val uri: Uri,
+        val name: String,
+        val durationMs: Long,
+        val modifiedMs: Long,
+        val size: Long,
+        val mimeType: String,
+        val relativePath: String,
+    )
+
+    private fun audioVolumes(): List<String> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return listOf(MediaStore.VOLUME_EXTERNAL)
         }
-        try {
-            activity.contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                selection,
-                arrayOf(sinceSec.toString()),
-                "${MediaStore.Audio.Media.DATE_MODIFIED} DESC",
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
-                val nameIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
-                val durationIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
-                val modifiedIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
-                val sizeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
-                val mimeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
-                while (cursor.moveToNext() && rows.size < limit) {
-                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
-                    if (id <= 0L) continue
-                    rows.add(
-                        mapOf(
-                            "id" to id,
-                            "name" to if (nameIndex >= 0) cursor.getString(nameIndex) else null,
-                            "durationMs" to if (durationIndex >= 0) {
-                                cursor.getLong(durationIndex)
-                            } else {
-                                0L
-                            },
-                            "modifiedMs" to (
-                                (if (modifiedIndex >= 0) cursor.getLong(modifiedIndex) else 0L) *
-                                    1000L
-                                ),
-                            "size" to if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L,
-                            "mimeType" to if (mimeIndex >= 0) {
-                                cursor.getString(mimeIndex)
-                            } else {
-                                null
-                            },
-                        ),
-                    )
-                }
+        return try {
+            MediaStore.getExternalVolumeNames(activity).toList().ifEmpty {
+                listOf(MediaStore.VOLUME_EXTERNAL)
             }
         } catch (_: Exception) {
-            return emptyList()
+            listOf(MediaStore.VOLUME_EXTERNAL)
         }
-        return rows
+    }
+
+    private fun volumeUri(volume: String): Uri {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Audio.Media.getContentUri(volume)
+        } else {
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        }
+    }
+
+    private fun queryAudioRows(
+        sinceSec: Long,
+        untilSec: Long,
+        limit: Int = 200,
+    ): List<AudioRow> {
+        if (!hasAudioPermission()) return emptyList()
+        val projection = buildList {
+            add(MediaStore.Audio.Media._ID)
+            add(MediaStore.Audio.Media.DISPLAY_NAME)
+            add(MediaStore.Audio.Media.DURATION)
+            add(MediaStore.Audio.Media.DATE_MODIFIED)
+            add(MediaStore.Audio.Media.SIZE)
+            add(MediaStore.Audio.Media.MIME_TYPE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(MediaStore.Audio.Media.RELATIVE_PATH)
+            }
+        }.toTypedArray()
+        val selection = buildString {
+            append(MediaStore.Audio.Media.IS_MUSIC).append(" = 0")
+            append(" AND ").append(MediaStore.Audio.Media.DURATION).append(" > 0")
+            append(" AND ").append(MediaStore.Audio.Media.DATE_MODIFIED)
+            append(" >= ? AND ").append(MediaStore.Audio.Media.DATE_MODIFIED).append(" <= ?")
+        }
+        val rows = mutableListOf<AudioRow>()
+        val seen = mutableSetOf<String>()
+        for (volume in audioVolumes()) {
+            try {
+                activity.contentResolver.query(
+                    volumeUri(volume),
+                    projection,
+                    selection,
+                    arrayOf(sinceSec.toString(), untilSec.toString()),
+                    "${MediaStore.Audio.Media.DATE_MODIFIED} DESC",
+                )?.use { cursor ->
+                    val idIndex = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
+                    val nameIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+                    val durationIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                    val modifiedIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
+                    val sizeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
+                    val mimeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                    val pathIndex = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+                    } else {
+                        -1
+                    }
+                    while (cursor.moveToNext() && rows.size < limit) {
+                        val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
+                        if (id <= 0L) continue
+                        val uri = Uri.withAppendedPath(volumeUri(volume), id.toString())
+                        if (!seen.add(uri.toString())) continue
+                        rows.add(
+                            AudioRow(
+                                uri = uri,
+                                name = (if (nameIndex >= 0) {
+                                    cursor.getString(nameIndex)
+                                } else {
+                                    null
+                                }).orEmpty(),
+                                durationMs = if (durationIndex >= 0) {
+                                    cursor.getLong(durationIndex)
+                                } else {
+                                    0L
+                                },
+                                modifiedMs =
+                                    (if (modifiedIndex >= 0) {
+                                        cursor.getLong(modifiedIndex)
+                                    } else {
+                                        0L
+                                    }) * 1000L,
+                                size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L,
+                                mimeType = (if (mimeIndex >= 0) {
+                                    cursor.getString(mimeIndex)
+                                } else {
+                                    null
+                                }).orEmpty(),
+                                relativePath = if (pathIndex >= 0) {
+                                    cursor.getString(pathIndex).orEmpty()
+                                } else {
+                                    ""
+                                },
+                            ),
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // A volume can be unmounted, ejected or policy-protected; keep
+                // querying the remaining volumes rather than failing entirely.
+            }
+        }
+        return rows.sortedByDescending { it.modifiedMs }
     }
 
     private fun buildCapability(): Map<String, Any?> {
         val family = oemFamily()
         val audioPermission = hasAudioPermission()
-        val recents = recentRecordings()
-        val automaticSync = audioPermission && recents.isNotEmpty()
+        val nowSec = System.currentTimeMillis() / 1000L
+        val sinceSec = nowSec - RECENT_WINDOW_DAYS * 24L * 60L * 60L
+        val readableRows = if (audioPermission) {
+            queryAudioRows(sinceSec, nowSec + 60L, limit = 200)
+        } else {
+            emptyList()
+        }
+        val recents = readableRows.take(5).map { row ->
+            mapOf(
+                "id" to row.uri.lastPathSegment,
+                "name" to row.name,
+                "durationMs" to row.durationMs,
+                "modifiedMs" to row.modifiedMs,
+                "size" to row.size,
+                "mimeType" to row.mimeType,
+                "relativePath" to row.relativePath,
+            )
+        }
+        val folderHints = readableRows
+            .map { it.relativePath.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(8)
+        // "Automatic discovery" is an ability, not a promise: it means the app
+        // is allowed to query MediaStore. Whether a matching recording exists is
+        // decided per call by the strict matcher.
+        val automaticSync = audioPermission
         val recorderPackages = installedRecorderPackages()
         val oemRecordingMayExist = family in setOf(
             "SAMSUNG", "VIVO", "OPPO", "REALME", "ONEPLUS", "XIAOMI", "HUAWEI",
             "HONOR", "MOTOROLA", "OTHER",
         )
-        val capability = when {
-            automaticSync -> "AUTOMATIC_MEDIASTORE"
-            oemRecordingMayExist -> "MANUAL_IMPORT_ONLY"
-            else -> "MANUAL_IMPORT_ONLY"
-        }
+        val capability = if (automaticSync) "AUTOMATIC_MEDIASTORE" else "MANUAL_IMPORT_ONLY"
         val notes = buildList {
             add(
                 "Android has no public API that lets a third-party app record " +
@@ -244,11 +329,20 @@ class MobileCallRecordingManager(
                         "file picker still works."
                 )
             }
-            if (recents.isEmpty()) {
+            if (audioPermission && readableRows.isEmpty()) {
                 add(
-                    "No recent MediaStore recordings were found. If the OEM " +
-                        "dialer records calls, its folder may be private; use " +
-                        "manual import or the OEM recorder's share action."
+                    "No recent readable MediaStore recordings were found. If the " +
+                        "OEM dialer records calls, its folder may not be indexed by " +
+                        "Android media scan; use Choose a file or share from the " +
+                        "OEM recorder instead."
+                )
+            }
+            if (family == "SAMSUNG") {
+                add(
+                    "Samsung One UI typically stores call recordings in " +
+                        "Recordings/Call. If they do not appear in the search, use " +
+                        "Choose a file (Storage Access Framework) or Samsung's " +
+                        "recorder share action."
                 )
             }
             if (recorderPackages.isEmpty()) {
@@ -283,6 +377,8 @@ class MobileCallRecordingManager(
             "recordingCapability" to capability,
             "automaticSyncSupported" to automaticSync,
             "manualImportSupported" to true,
+            "mediaStoreRecordingCount" to readableRows.size,
+            "recordingFolderHints" to folderHints,
             "recentMediaStoreRecordings" to recents,
             "notes" to notes,
         )
@@ -300,7 +396,14 @@ class MobileCallRecordingManager(
         pendingPickResult = result
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "audio/*"
+            // Some OEM recorders save .3gp/.m4a under video or generic types;
+            // listing audio plus the common call-recording containers keeps the
+            // file visible without requesting broad storage access.
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("audio/*", "video/3gpp", "application/ogg"),
+            )
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
@@ -321,7 +424,9 @@ class MobileCallRecordingManager(
         pendingPickResult = null
         val uri = data?.data
         if (resultCode != Activity.RESULT_OK || uri == null) {
-            pending.success(null)
+            // Distinct from "no match": the employee simply backed out of the
+            // system picker and nothing should be reported as a failure.
+            pending.success(mapOf("cancelled" to true))
             return true
         }
         try {
@@ -365,95 +470,26 @@ class MobileCallRecordingManager(
         val callDurationMs = durationSeconds * 1000L
         val callEnd = if (endedAt > 0L) endedAt else startedAt + callDurationMs
         val phoneKey = phone.replace(Regex("[^0-9]"), "").takeLast(10)
-        val toleranceMs = maxOf(6_000L, (callDurationMs * 0.15).toLong())
-        val minModifiedSec = (startedAt - 120_000L) / 1000L
-        val maxModifiedSec = (callEnd + 600_000L) / 1000L
+        val toleranceMs = maxOf(8_000L, (callDurationMs * 0.20).toLong())
+        // Some dialers finalise/scan the file shortly after the call ends.
+        val minModifiedSec = (startedAt - 180_000L) / 1000L
+        val maxModifiedSec = (callEnd + 900_000L) / 1000L
 
-        data class Candidate(
-            val uri: Uri,
-            val name: String,
-            val durationMs: Long,
-            val modifiedMs: Long,
-            val size: Long,
-            val mimeType: String,
-        )
-
-        val candidates = mutableListOf<Candidate>()
-        val projection = arrayOf(
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.DATE_MODIFIED,
-            MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.MIME_TYPE,
-        )
-        val selection = buildString {
-            append(MediaStore.Audio.Media.IS_MUSIC).append(" = 0")
-            append(" AND ").append(MediaStore.Audio.Media.DURATION).append(" > 0")
-            append(" AND ").append(MediaStore.Audio.Media.DATE_MODIFIED).append(" >= ?")
-            append(" AND ").append(MediaStore.Audio.Media.DATE_MODIFIED).append(" <= ?")
-        }
-        try {
-            activity.contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                selection,
-                arrayOf(minModifiedSec.toString(), maxModifiedSec.toString()),
-                "${MediaStore.Audio.Media.DATE_MODIFIED} DESC",
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
-                val nameIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
-                val durationIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
-                val modifiedIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
-                val sizeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
-                val mimeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
-                var inspected = 0
-                while (cursor.moveToNext() && inspected < 200) {
-                    inspected += 1
-                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
-                    if (id <= 0L) continue
-                    val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
-                    if (size < MIN_RECORDING_BYTES || size > MAX_RECORDING_BYTES) continue
-                    val durationMs =
-                        if (durationIndex >= 0) cursor.getLong(durationIndex) else 0L
-                    if (durationMs <= 0L) continue
-                    val modifiedMs =
-                        (if (modifiedIndex >= 0) cursor.getLong(modifiedIndex) else 0L) * 1000L
-                    val name =
-                        (if (nameIndex >= 0) cursor.getString(nameIndex) else null)
-                            .orEmpty()
-                    val mime =
-                        (if (mimeIndex >= 0) cursor.getString(mimeIndex) else null)
-                            .orEmpty()
-
-                    val durationDelta = kotlin.math.abs(durationMs - callDurationMs)
-                    if (durationDelta > toleranceMs) continue
-
-                    val nameDigits = name.replace(Regex("[^0-9]"), "")
-                    val nameMatches = phoneKey.isNotBlank() && nameDigits.contains(phoneKey)
-                    val timeClose = kotlin.math.abs(modifiedMs - callEnd) <= 120_000L
-                    val exactDuration = durationDelta <= 3_000L
-                    if (!nameMatches && !(exactDuration && timeClose)) continue
-
-                    candidates.add(
-                        Candidate(
-                            uri = Uri.withAppendedPath(
-                                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                                id.toString(),
-                            ),
-                            name = name,
-                            durationMs = durationMs,
-                            modifiedMs = modifiedMs,
-                            size = size,
-                            mimeType = mime,
-                        ),
-                    )
-                }
+        // Read-only metadata lookup across every accessible volume. The file
+        // itself is opened only after the match is proven unique.
+        val candidates = queryAudioRows(minModifiedSec, maxModifiedSec, limit = 200)
+            .filter { row ->
+                val durationDelta = kotlin.math.abs(row.durationMs - callDurationMs)
+                val nameDigits = row.name.replace(Regex("[^0-9]"), "")
+                val nameMatches = phoneKey.isNotBlank() && nameDigits.contains(phoneKey)
+                val durationMatches = durationDelta <= toleranceMs
+                val exactDuration = durationDelta <= 5_000L
+                val timeClose = kotlin.math.abs(row.modifiedMs - callEnd) <= 600_000L
+                row.size in MIN_RECORDING_BYTES..MAX_RECORDING_BYTES &&
+                    row.durationMs > 0L &&
+                    durationMatches &&
+                    (nameMatches || (exactDuration && timeClose))
             }
-        } catch (_: Exception) {
-            result.success(null)
-            return
-        }
 
         if (candidates.size != 1) {
             result.success(null)

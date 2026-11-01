@@ -73,6 +73,8 @@ void main() {
         'recordingCapability': 'AUTOMATIC_MEDIASTORE',
         'automaticSyncSupported': true,
         'manualImportSupported': true,
+        'mediaStoreRecordingCount': 12,
+        'recordingFolderHints': ['Recordings/Call/'],
         'recentMediaStoreRecordings': [
           {'name': 'CallRecord_9999999999.m4a', 'durationMs': 30000},
         ],
@@ -81,6 +83,8 @@ void main() {
 
       expect(capability.hasAutomaticDiscovery, isTrue);
       expect(capability.platformLabel, 'vivo V2310');
+      expect(capability.mediaStoreRecordingCount, 12);
+      expect(capability.recordingFolderHints, ['Recordings/Call/']);
       expect(capability.recentMediaStoreRecordings, hasLength(1));
       expect(capability.notes.single, contains('OEM'));
     });

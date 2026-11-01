@@ -94,6 +94,8 @@ class RecordingCapability {
   final String recordingCapability;
   final bool automaticSyncSupported;
   final bool manualImportSupported;
+  final int mediaStoreRecordingCount;
+  final List<String> recordingFolderHints;
   final List<Map<String, dynamic>> recentMediaStoreRecordings;
   final List<String> notes;
 
@@ -115,6 +117,8 @@ class RecordingCapability {
     this.recordingCapability = 'MANUAL_IMPORT_ONLY',
     this.automaticSyncSupported = false,
     this.manualImportSupported = true,
+    this.mediaStoreRecordingCount = 0,
+    this.recordingFolderHints = const [],
     this.recentMediaStoreRecordings = const [],
     this.notes = const [],
   });
@@ -145,6 +149,12 @@ class RecordingCapability {
           .toString(),
       automaticSyncSupported: map['automaticSyncSupported'] == true,
       manualImportSupported: map['manualImportSupported'] != false,
+      mediaStoreRecordingCount:
+          (map['mediaStoreRecordingCount'] as num?)?.toInt() ?? 0,
+      recordingFolderHints:
+          (map['recordingFolderHints'] as List? ?? const [])
+              .map((item) => item.toString())
+              .toList(),
       recentMediaStoreRecordings: recents,
       notes: (map['notes'] as List? ?? const [])
           .map((item) => item.toString())
@@ -214,6 +224,17 @@ enum RecordingUploadOutcome {
   uploadFailed,
 }
 
+/// Result of an explicit SAF import attempt. Cancellation is deliberately
+/// separate from “no match” so backing out of the picker is silent.
+class RecordingPickResult {
+  final ImportedCallRecording? recording;
+  final bool cancelled;
+
+  const RecordingPickResult({this.recording, this.cancelled = false});
+
+  static const RecordingPickResult empty = RecordingPickResult();
+}
+
 /// Separate Flutter module for Mobile SIM call recording import and sync.
 ///
 /// This module never records audio. It only asks Android for capability data,
@@ -245,13 +266,18 @@ class MobileCallRecordingManager {
 
   /// Opens SAF. The employee explicitly chooses a file; persistent read access
   /// is requested but a verified cache copy is used for the upload.
-  static Future<ImportedCallRecording?> pickRecordingFile() async {
-    if (!isSupported) return null;
+  static Future<RecordingPickResult> pickRecordingFile() async {
+    if (!isSupported) return RecordingPickResult.empty;
     final map = await _channel.invokeMethod<Map<dynamic, dynamic>>(
       'pickRecordingFile',
     );
-    if (map == null) return null;
-    return ImportedCallRecording.fromMap(Map<String, dynamic>.from(map));
+    if (map == null) return RecordingPickResult.empty;
+    final decoded = Map<String, dynamic>.from(map);
+    if (decoded['cancelled'] == true) {
+      return const RecordingPickResult(cancelled: true);
+    }
+    if (decoded['path'] == null) return RecordingPickResult.empty;
+    return RecordingPickResult(recording: ImportedCallRecording.fromMap(decoded));
   }
 
   /// Strict automatic lookup. Returns null unless exactly one file matches the
@@ -527,7 +553,7 @@ extension RecordingCapabilitySummary on RecordingCapability {
 
   String get automaticSyncLabel => automaticSyncSupported
       ? 'Automatic MediaStore discovery available'
-      : 'Manual import only (no readable recordings yet)';
+      : 'Manual import only (audio access not granted)';
 
   String get oemSupportLabel {
     switch (oemRecordingSupport) {

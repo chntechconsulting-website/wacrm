@@ -44,10 +44,12 @@
 | `audioPermission` | `READ_MEDIA_AUDIO` (Android 13+) or `READ_EXTERNAL_STORAGE` (≤ Android 12) granted |
 | `safSupported` | Always true on supported Android versions |
 | `mediaStoreAccessible` | Audio permission present |
+| `mediaStoreRecordingCount` | Readable non-music audio rows in the last 30 days (diagnostics only) |
+| `recordingFolderHints` | `RELATIVE_PATH` values seen for those rows, e.g. `Recordings/Call/` |
 | `oemRecordingMayExist` | OEM is known to ship dialer recording on some models/regions |
 | `oemRecordingSupport` | Honest label; no public API is claimed |
-| `recordingCapability` | `AUTOMATIC_MEDIASTORE` or `MANUAL_IMPORT_ONLY` |
-| `automaticSyncSupported` | True only when audio permission is present **and** readable recordings were actually found |
+| `recordingCapability` | `AUTOMATIC_MEDIASTORE` (audio access granted) or `MANUAL_IMPORT_ONLY` |
+| `automaticSyncSupported` | True when read-only audio media access is granted; an individual call may still have no matching file |
 | `manualImportSupported` | Always true |
 | `recentMediaStoreRecordings` | Up to 5 recently modified, non-music audio rows (diagnostics only) |
 | `notes` | Human-readable limitations for the capability sheet |
@@ -116,7 +118,22 @@ Record one row per tested device:
 | Playback verified in web CRM? | |
 | Notes / region / carrier | |
 
-## 6. Expected limitations
+## 6. On-device diagnostics (Samsung first)
+
+Open the shield icon in the Calls app bar → **Copy diagnostics**. It returns the
+device/OS identity, OEM family, dialer package, audio-permission state, readable
+recording count, recording folder hints and any OEM warnings. Use it to fill the
+per-device template and to report a failed import.
+
+If `Readable recordings` is 0 while the Samsung dialer has produced files, the
+recording folder is not indexed by Android media scan. Use **Choose a recording
+file** (SAF) or share the file from Samsung's recorder app. This is a device
+limitation, not an upload failure.
+
+Backing out of the system file picker is treated as a cancellation and does not
+show a “no recording found” error.
+
+## 7. Expected limitations
 
 - **No universal automatic SIM recording.** The app can only see files Android
   exposes; some OEMs keep recordings private.
