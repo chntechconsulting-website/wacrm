@@ -24,7 +24,9 @@ import {
   Pause,
   Database,
   UploadCloud,
-  Volume2
+  Volume2,
+  Smartphone,
+  Cloud
 } from 'lucide-react';
 import { formatLocalDateTime } from '../../utils/dateUtils';
 import { isUsableDuration, probeAudioDuration, rewindAfterProbe } from '../../utils/audioUtils';
@@ -1054,9 +1056,9 @@ const CallLogsPage = () => {
               onChange={(e) => setProviderFilter(e.target.value)}
               className="call-select"
             >
-              <option value="">All Telephony Providers</option>
-              <option value="DOOCTI">Doocti Telephony</option>
-              <option value="MOBILE_SIM">Mobile SIM (Device Dialer)</option>
+              <option value="">All Call Sources</option>
+              <option value="DOOCTI">Doocti / WebRTC</option>
+              <option value="MOBILE">Mobile SIM (Device Dialer)</option>
               <option value="Smartflo">Tata Smartflo</option>
               <option value="CloudShope">CloudShope</option>
               <option value="TWILIO">Twilio</option>
@@ -1093,6 +1095,7 @@ const CallLogsPage = () => {
             <thead>
               <tr>
                 <th style={{ width: '110px' }}>Direction</th>
+                <th style={{ width: '100px' }}>Source</th>
                 <th style={{ minWidth: '220px' }}>Lead / Customer Phone</th>
                 <th style={{ minWidth: '180px' }}>Agent & Extension</th>
                 <th style={{ minWidth: '150px' }}>Timestamp</th>
@@ -1106,7 +1109,7 @@ const CallLogsPage = () => {
             <tbody>
               {loading && callLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="table-empty-state">
                       <RefreshCw size={28} className="spin" style={{ margin: '0 auto', color: '#2563eb' }} />
                       <div className="table-empty-title">Loading IVR telephony logs...</div>
@@ -1116,7 +1119,7 @@ const CallLogsPage = () => {
                 </tr>
               ) : callLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ padding: '36px 16px', background: '#f8fafc' }}>
+                  <td colSpan={10} style={{ padding: '36px 16px', background: '#f8fafc' }}>
                     <PingoEmptyState
                       pose="inspect"
                       height={120}
@@ -1143,8 +1146,14 @@ const CallLogsPage = () => {
                   const leadName = log.lead_name || (log.lead_id ? `Prospect #${log.lead_id}` : (customerNum ? 'Direct Caller' : 'Call'));
                   const targetPhone = customerNum || '—';
                   const providerName = (log.provider || 'DOOCTI').toUpperCase();
-                  const isDoocti = providerName.includes('DOOCTI');
-                  const isSmartflo = providerName.includes('SMARTFLO');
+                  const callSource = String(
+                    log.call_source ||
+                      ((providerName.includes('MOBILE') ||
+                        providerName.includes('DIRECT'))
+                        ? 'MOBILE'
+                        : 'DOOCTI')
+                  ).toUpperCase();
+                  const isMobileSource = callSource === 'MOBILE';
 
                   return (
                     <tr key={log.id}>
@@ -1161,6 +1170,33 @@ const CallLogsPage = () => {
                             OUTBOUND
                           </span>
                         )}
+                      </td>
+
+                      {/* Call Source */}
+                      <td>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            padding: '3px 8px',
+                            borderRadius: '12px',
+                            fontSize: '0.72rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.02em',
+                            backgroundColor: isMobileSource ? '#ecfdf5' : '#eff6ff',
+                            color: isMobileSource ? '#047857' : '#1d4ed8',
+                            border: `1px solid ${isMobileSource ? '#a7f3d0' : '#bfdbfe'}`,
+                          }}
+                          title={
+                            isMobileSource
+                              ? 'Call placed or received on the employee mobile SIM'
+                              : 'Call handled through DooCTI / WebRTC'
+                          }
+                        >
+                          {isMobileSource ? <Smartphone size={11} /> : <Cloud size={11} />}
+                          {callSource}
+                        </span>
                       </td>
 
                       {/* Lead / Customer Phone */}
@@ -1278,7 +1314,7 @@ const CallLogsPage = () => {
                               </span>
                             );
                           }
-                          return <span className="no-recording-text">No recording available</span>;
+                          return <span className="no-recording-text">Recording Unavailable</span>;
                         })()}
                       </td>
 

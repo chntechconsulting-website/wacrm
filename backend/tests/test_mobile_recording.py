@@ -143,6 +143,9 @@ class TestMobileRecordingUpload(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["recording_url"].endswith(".mp3"))
         self.assertEqual(data["recording_status"], "RECORDING_AVAILABLE")
+        self.assertEqual(data["call_source"], "MOBILE")
+        self.assertIsNone(data["native_call_reference"])
+        self.assertEqual(data["recording_source"], "UPLOAD")
 
         db = self.Session()
         call = db.query(CallLog).filter(CallLog.id == self.call_id).first()
@@ -157,6 +160,15 @@ class TestMobileRecordingUpload(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("not a supported audio", response.text)
+
+    def test_upload_marks_device_source(self):
+        response = self.client.post(
+            f"/api/ivr/calls/{self.call_id}/recording",
+            data={"source": "DEVICE"},
+            files={"file": ("call-device.mp3", self._audio_bytes(), "audio/mpeg")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["recording_source"], "DEVICE")
 
     def test_upload_rejects_non_mobile_call(self):
         db = self.Session()

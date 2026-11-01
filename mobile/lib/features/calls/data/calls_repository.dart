@@ -92,6 +92,7 @@ class CallsRepository {
     int? simSlot,
     String? simPhoneNumber,
     String? callSource,
+    String? nativeCallReference,
   }) async {
     final effectivePhone = customerPhone ?? customerNumber ?? '';
     final body = {
@@ -112,6 +113,8 @@ class CallsRepository {
       if (simSlot != null) 'sim_slot': simSlot,
       if (simPhoneNumber != null) 'sim_phone_number': simPhoneNumber,
       if (callSource != null) 'call_source': callSource,
+      if (nativeCallReference != null)
+        'native_call_reference': nativeCallReference,
     };
 
     try {

@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile/core/services/device_call_log_sync_service.dart';
 import 'package:mobile/core/services/mobile_sim_call_service.dart';
+import 'package:mobile/features/calls/models/call_log_model.dart';
 
 void main() {
   group('Mobile SIM call result parsing', () {
@@ -8,6 +10,7 @@ void main() {
         'callId': 'SIM_123_abcd',
         'callReference': 'SIM_123_abcd',
         'deviceCallLogId': '9977',
+        'nativeCallReference': 'MOBILE_device_9977',
         'leadId': 42,
         'customerPhone': '+91 98765 43210',
         'contactName': 'Test Customer',
@@ -29,6 +32,7 @@ void main() {
       expect(result.callId, 'SIM_123_abcd');
       expect(result.callReference, 'SIM_123_abcd');
       expect(result.deviceCallLogId, '9977');
+      expect(result.nativeCallReference, 'MOBILE_device_9977');
       expect(result.leadId, 42);
       expect(result.customerPhone, '+91 98765 43210');
       expect(result.callStatus, 'COMPLETED');
@@ -114,6 +118,70 @@ void main() {
         expect(id, startsWith('SIM_'));
         expect(id.length, greaterThan(10));
       }
+    });
+  });
+
+  group('Call source', () {
+    test('maps mobile providers to MOBILE and others to DOOCTI', () {
+      final mobile = CallLogModel.fromJson(<String, dynamic>{
+        'id': 1,
+        'customer_phone': '9999999999',
+        'call_status': 'COMPLETED',
+        'provider': 'MOBILE_SIM',
+      });
+      final doocti = CallLogModel.fromJson(<String, dynamic>{
+        'id': 2,
+        'customer_phone': '9999999999',
+        'call_status': 'COMPLETED',
+        'provider': 'DOOCTI',
+        'call_source': 'DOOCTI',
+      });
+
+      expect(mobile.source, 'MOBILE');
+      expect(mobile.isMobile, isTrue);
+      expect(doocti.source, 'DOOCTI');
+      expect(doocti.isDoocti, isTrue);
+    });
+
+    test('prefers the backend call_source over the storage provider', () {
+      final call = CallLogModel.fromJson(<String, dynamic>{
+        'id': 3,
+        'customer_phone': '9999999999',
+        'call_status': 'MISSED',
+        'provider': 'MOBILE_SIM',
+        'call_source': 'DOOCTI',
+      });
+
+      expect(call.source, 'DOOCTI');
+    });
+  });
+
+  group('Device call-log entry', () {
+    test('parses direction, status and native reference', () {
+      final entry = DeviceCallLogEntry.fromMap(<String, dynamic>{
+        'nativeCallReference': 'MOBILE_device_123',
+        'deviceCallLogId': 123,
+        'phone': '+91 98765 43210',
+        'direction': 'inbound',
+        'status': 'missed',
+        'durationSeconds': 0,
+        'startedAt': '2026-10-31T05:26:56.000Z',
+      });
+
+      expect(entry.isUsable, isTrue);
+      expect(entry.nativeReference, 'MOBILE_device_123');
+      expect(entry.direction, 'INBOUND');
+      expect(entry.status, 'MISSED');
+      expect(entry.startedDateTime, isNotNull);
+    });
+
+    test('rejects rows without a phone or native reference', () {
+      final entry = DeviceCallLogEntry.fromMap(<String, dynamic>{
+        'phone': '',
+        'direction': 'OUTBOUND',
+      });
+
+      expect(entry.isUsable, isFalse);
     });
   });
 }

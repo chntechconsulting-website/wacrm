@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/services/device_call_log_sync_service.dart';
 import '../../core/services/mobile_sim_call_service.dart';
 import '../../core/widgets/wacrm_drawer.dart';
 import '../../core/widgets/wacrm_wave_nav_bar.dart';
@@ -38,7 +39,7 @@ class MainNavigationShellState extends State<MainNavigationShell>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<NotificationsProvider>().fetchNotifications();
       _attachMobileSimCallSync();
-      _recoverPendingMobileSimCall();
+      _runDeviceSync();
     });
   }
 
@@ -51,7 +52,27 @@ class MainNavigationShellState extends State<MainNavigationShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _recoverPendingMobileSimCall();
+      _runDeviceSync();
+    }
+  }
+
+  /// The live result always syncs first; only then may native history run, so
+  /// the same call cannot be logged twice.
+  Future<void> _runDeviceSync() async {
+    await _recoverPendingMobileSimCall();
+    await _syncDeviceCallHistory();
+  }
+
+  Future<void> _syncDeviceCallHistory() async {
+    if (!mounted || !DeviceCallLogSyncService.isSupported) return;
+    final user = context.read<AuthProvider>().currentUser;
+    try {
+      await DeviceCallLogSyncService.sync(
+        context.read<CallsProvider>(),
+        employeeKey: user?.id.toString() ?? 'default',
+      );
+    } catch (_) {
+      // Optional sync; never disturb the UI when the OS denies access.
     }
   }
 
@@ -76,6 +97,23 @@ class MainNavigationShellState extends State<MainNavigationShell>
     if (!mounted) return;
     final callsProvider = context.read<CallsProvider>();
     final synced = await MobileSimCallService.syncResult(result, callsProvider);
+    if (!mounted) return;
+    // The native history pass deliberately re-reads this row: the backend
+    // recognizes the already tracked attempt by its native reference and
+    // updates it in place, which also gives the OEM recorder time to finish
+    // writing the file before the recording matcher runs.
+    if (synced) {
+      final rowId = MobileSimCallService.callRowId(result.callId);
+      if (rowId != null) {
+        final uploaded = await DeviceCallLogSyncService.attachRecordingForLiveResult(
+          result: result,
+          callId: rowId,
+        );
+        if (uploaded && mounted) {
+          await callsProvider.fetchCalls(showLoading: false);
+        }
+      }
+    }
     if (!mounted) return;
 
     final contact = (result.contactName?.trim().isNotEmpty ?? false)

@@ -23,6 +23,11 @@ class CallLogResponse(BaseModel):
     employee_id: Optional[int] = None
     provider: str
     provider_call_id: str
+    # Display-level source. Storage keeps the historic provider values so old
+    # filters/integrations keep working, while every client can rely on this
+    # field to show exactly MOBILE or DOOCTI.
+    call_source: Optional[str] = None
+    native_call_reference: Optional[str] = None
     from_number: str
     to_number: str
     customer_phone: Optional[str] = None

@@ -339,7 +339,8 @@ class IVRService:
         sim_label: Optional[str] = None,
         sim_slot: Optional[int] = None,
         sim_phone_number: Optional[str] = None,
-        call_source: Optional[str] = None
+        call_source: Optional[str] = None,
+        native_call_reference: Optional[str] = None
     ) -> CallLog:
         """
         Logs a direct or manual phone call (device fallback / mobile SIM dial).
@@ -378,6 +379,13 @@ class IVRService:
         }
 
         client_call_id = str(client_call_id or "").strip()
+        native_ref = str(native_call_reference or "").strip()
+        if native_ref and len(native_ref) > 100:
+            raise ValueError("native_call_reference must be 100 characters or fewer.")
+        # For device-history sync the native row id is the idempotency key. A
+        # retry of the same native row updates the same CRM record.
+        if native_ref and not client_call_id:
+            client_call_id = native_ref
 
         is_mobile_sim = (
             str(call_source or "").strip().upper() == "MOBILE_SIM"
@@ -420,6 +428,24 @@ class IVRService:
             if lead:
                 target_phone = lead.phone or lead.whatsapp_number or ""
 
+        # Device call-history rows do not know the CRM lead. Match the existing
+        # lead by normalized phone so mobile, web and admin views stay unified.
+        if lead_id is None and target_phone:
+            try:
+                from sqlalchemy import inspect as sa_inspect
+                from utils.phone import find_existing_lead_by_phone
+
+                if sa_inspect(db.get_bind()).has_table("leads"):
+                    matched_lead = find_existing_lead_by_phone(db, target_phone)
+                    if matched_lead is not None:
+                        lead_id = matched_lead.id
+            except Exception:
+                # Phone enrichment is best-effort and must never block logging.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
         emp_phone = str(sim_phone_number or employee_phone or "").strip()
         if not emp_phone and current_employee_id:
             emp = db.query(Employee).filter(Employee.id == current_employee_id).first()
@@ -437,6 +463,57 @@ class IVRService:
             ):
                 raise ValueError("This call record belongs to another employee.")
 
+        def find_tracked_duplicate() -> Optional[CallLog]:
+            """
+            Finds the single in-app tracked SIM attempt that the same native
+            call-log row represents. Strict phone + direction + start-time
+            matching means a history row can never absorb an unrelated call.
+            The native row is authoritative for duration/status, so the tracked
+            row is updated in place instead of creating a duplicate.
+            """
+            if not native_ref or not target_phone or start_arg is None:
+                return None
+            if current_employee_id is None:
+                return None
+            try:
+                from utils.phone import normalize_phone
+
+                clean_target = normalize_phone(target_phone)
+                if not clean_target:
+                    return None
+                window_start = start_arg - datetime.timedelta(seconds=60)
+                window_end = start_arg + datetime.timedelta(seconds=60)
+                candidates = (
+                    db.query(CallLog)
+                    .filter(
+                        CallLog.employee_id == current_employee_id,
+                        CallLog.provider.in_(["MOBILE_SIM", "DIRECT_DIAL"]),
+                        CallLog.provider_call_id != client_call_id,
+                        CallLog.call_direction == direction,
+                        CallLog.started_at.isnot(None),
+                        CallLog.started_at >= window_start,
+                        CallLog.started_at <= window_end,
+                    )
+                    .all()
+                )
+                matches = []
+                for candidate in candidates:
+                    candidate_phone = (
+                        candidate.to_number
+                        if direction == "OUTBOUND"
+                        else candidate.from_number
+                    )
+                    if normalize_phone(candidate_phone) == clean_target:
+                        matches.append(candidate)
+                if len(matches) == 1:
+                    return matches[0]
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            return None
+
         # Idempotency: a device retry must reuse the already-saved call record.
         # Final results update the pending attempt in place; a late attempt event
         # must never downgrade a completed call.
@@ -444,6 +521,8 @@ class IVRService:
             existing = db.query(CallLog).filter(
                 CallLog.provider_call_id == client_call_id
             ).first()
+            if not existing and native_ref:
+                existing = find_tracked_duplicate()
             if existing:
                 validate_existing(existing)
 
@@ -453,7 +532,12 @@ class IVRService:
                     return existing
 
                 if target_phone:
-                    existing.to_number = target_phone
+                    if direction == "INBOUND":
+                        existing.from_number = target_phone
+                        if emp_phone:
+                            existing.to_number = emp_phone
+                    else:
+                        existing.to_number = target_phone
                 if lead_id is not None:
                     existing.lead_id = lead_id
                 existing.call_status = status
@@ -561,8 +645,8 @@ class IVRService:
             employee_id=current_employee_id,
             provider=provider_name,
             provider_call_id=provider_call_id,
-            from_number=emp_phone,
-            to_number=target_phone,
+            from_number=(target_phone if direction == "INBOUND" else emp_phone),
+            to_number=(emp_phone if direction == "INBOUND" else target_phone),
             call_status=status,
             call_direction=direction,
             duration_seconds=duration_seconds,

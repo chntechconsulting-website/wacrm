@@ -13,6 +13,8 @@ class CallLogModel {
   final String? notes;
   final String? employeeName;
   final String? provider;
+  final String? callSource;
+  final String? nativeCallReference;
   final String? simLabel;
   final String? createdAt;
 
@@ -31,11 +33,26 @@ class CallLogModel {
     this.notes,
     this.employeeName,
     this.provider,
+    this.callSource,
+    this.nativeCallReference,
     this.simLabel,
     this.createdAt,
   });
 
   bool get isMobileSim => (provider ?? '').toUpperCase().contains('MOBILE_SIM');
+
+  /// Display-level source. The backend sends `call_source`; older responses
+  /// fall back to the provider so a SIM call can never appear as DooCTI.
+  String get source {
+    final explicit = (callSource ?? '').trim().toUpperCase();
+    if (explicit == 'MOBILE' || explicit == 'DOOCTI') return explicit;
+    return isMobileSim || (provider ?? '').toUpperCase().contains('DIRECT_DIAL')
+        ? 'MOBILE'
+        : 'DOOCTI';
+  }
+
+  bool get isMobile => source == 'MOBILE';
+  bool get isDoocti => source == 'DOOCTI';
 
   bool get hasRecording =>
       recordingUrl != null && recordingUrl!.trim().isNotEmpty;
@@ -65,6 +82,8 @@ class CallLogModel {
       notes: json['notes'],
       employeeName: json['employee_name'],
       provider: json['provider'],
+      callSource: json['call_source'],
+      nativeCallReference: json['native_call_reference'],
       simLabel: json['sim_label'],
       createdAt: json['created_at'] ?? json['started_at'],
     );

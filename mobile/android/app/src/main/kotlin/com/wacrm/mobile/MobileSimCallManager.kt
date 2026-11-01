@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.CallLog
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.telecom.PhoneAccountHandle
@@ -109,6 +110,15 @@ class MobileSimCallManager(
         val phoneAccountId: String?,
     )
 
+    private data class RecordingCandidate(
+        val uri: Uri,
+        val name: String,
+        val durationMs: Long,
+        val modifiedMs: Long,
+        val size: Long,
+        val mimeType: String,
+    )
+
     init {
         channel.setMethodCallHandler(this)
         recoverInterruptedCall()
@@ -125,6 +135,8 @@ class MobileSimCallManager(
             "clearPendingResult" -> clearPendingResult(call, result)
             "pickRecordingFile" -> pickRecordingFile(result)
             "consumeSharedRecordingFile" -> consumeSharedRecordingFile(result)
+            "getRecentDeviceCalls" -> getRecentDeviceCalls(call, result)
+            "findDeviceRecording" -> findDeviceRecording(call, result)
             "playRecording" -> playRecording(call, result)
             "stopRecordingPlayback" -> stopRecordingPlayback(result)
             else -> result.notImplemented()
@@ -229,6 +241,23 @@ class MobileSimCallManager(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             add(Manifest.permission.READ_PHONE_NUMBERS)
         }
+        // Read-only access to audio already produced by the OEM recorder.
+        // WACRM never records calls itself.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    private fun hasMediaAudioPermission(): Boolean {
+        return when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                hasPermission(Manifest.permission.READ_MEDIA_AUDIO)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
+                hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+            else -> true
+        }
     }
 
     private fun hasPermission(permission: String): Boolean {
@@ -241,6 +270,7 @@ class MobileSimCallManager(
             "callPhone" to hasPermission(Manifest.permission.CALL_PHONE),
             "readPhoneState" to hasPermission(Manifest.permission.READ_PHONE_STATE),
             "readCallLog" to hasPermission(Manifest.permission.READ_CALL_LOG),
+            "readMediaAudio" to hasMediaAudioPermission(),
             "readPhoneNumbers" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 hasPermission(Manifest.permission.READ_PHONE_NUMBERS)
             } else {
@@ -952,6 +982,297 @@ class MobileSimCallManager(
         }
     }
 
+    // ------------------------------------------------------------------
+    // Native call-history synchronization
+    // ------------------------------------------------------------------
+
+    private fun androidId(): String {
+        return try {
+            Settings.Secure.getString(
+                activity.contentResolver,
+                Settings.Secure.ANDROID_ID,
+            ).orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun nativeReferenceFor(callLogId: Long): String? {
+        if (callLogId <= 0L) return null
+        val device = androidId().ifBlank { "device" }
+        return "MOBILE_${device}_${callLogId}".take(100)
+    }
+
+    /**
+     * Returns recent device call-log rows (incoming, outgoing and missed) so
+     * the CRM can synchronize SIM history automatically. Only telephony rows
+     * are returned: VoIP/SIP accounts and WACRM's own connection service are
+     * excluded so a DooCTI/WebRTC call can never be re-labelled as MOBILE.
+     */
+    @SuppressLint("MissingPermission")
+    private fun getRecentDeviceCalls(call: MethodCall, result: MethodChannel.Result) {
+        if (!hasPermission(Manifest.permission.READ_CALL_LOG)) {
+            result.error(
+                "PERMISSION_DENIED",
+                "Call-log access has not been granted.",
+                null,
+            )
+            return
+        }
+        val since = call.argument<Number>("sinceMillis")?.toLong()
+            ?: (System.currentTimeMillis() - 24L * 60 * 60 * 1000)
+        val limit = (call.argument<Number>("limit")?.toInt() ?: 200)
+            .coerceIn(1, 500)
+
+        val projection = arrayOf(
+            CallLog.Calls._ID,
+            CallLog.Calls.DATE,
+            CallLog.Calls.DURATION,
+            CallLog.Calls.TYPE,
+            CallLog.Calls.NUMBER,
+            CallLog.Calls.PHONE_ACCOUNT_ID,
+            CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME,
+            CallLog.Calls.CACHED_NAME,
+        )
+
+        try {
+            val rows = mutableListOf<Map<String, Any?>>()
+            activity.contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                projection,
+                "${CallLog.Calls.DATE} >= ?",
+                arrayOf(since.toString()),
+                "${CallLog.Calls.DATE} DESC",
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndex(CallLog.Calls._ID)
+                val dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE)
+                val durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION)
+                val typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE)
+                val numberIndex = cursor.getColumnIndex(CallLog.Calls.NUMBER)
+                val accountIndex = cursor.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
+                val componentIndex =
+                    cursor.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
+                val nameIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+
+                while (cursor.moveToNext() && rows.size < limit) {
+                    val type = if (typeIndex >= 0) cursor.getInt(typeIndex) else 0
+                    if (
+                        type != CallLog.Calls.INCOMING_TYPE &&
+                        type != CallLog.Calls.OUTGOING_TYPE &&
+                        type != CallLog.Calls.MISSED_TYPE &&
+                        type != CallLog.Calls.REJECTED_TYPE
+                    ) {
+                        continue
+                    }
+                    val component =
+                        if (componentIndex >= 0) cursor.getString(componentIndex) else null
+                    val account =
+                        if (accountIndex >= 0) cursor.getString(accountIndex) else null
+                    if (!isTelephonyCall(component, account)) continue
+
+                    val number =
+                        (if (numberIndex >= 0) cursor.getString(numberIndex) else null)
+                            ?.trim()
+                            .orEmpty()
+                    if (number.isBlank()) continue
+
+                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
+                    val nativeRef = nativeReferenceFor(id) ?: continue
+                    val date = if (dateIndex >= 0) cursor.getLong(dateIndex) else 0L
+                    val duration = if (durationIndex >= 0) {
+                        cursor.getInt(durationIndex).coerceAtLeast(0)
+                    } else {
+                        0
+                    }
+                    val direction = if (type == CallLog.Calls.OUTGOING_TYPE) {
+                        "OUTBOUND"
+                    } else {
+                        "INBOUND"
+                    }
+                    val status = when {
+                        type == CallLog.Calls.MISSED_TYPE -> "MISSED"
+                        type == CallLog.Calls.REJECTED_TYPE -> "REJECTED"
+                        duration > 0 -> "COMPLETED"
+                        direction == "OUTBOUND" -> "NO_ANSWER"
+                        else -> "MISSED"
+                    }
+                    rows.add(
+                        mapOf(
+                            "nativeCallReference" to nativeRef,
+                            "deviceCallLogId" to id,
+                            "phone" to number,
+                            "direction" to direction,
+                            "type" to type,
+                            "status" to status,
+                            "durationSeconds" to if (status == "COMPLETED") duration else 0,
+                            "startedAt" to isoUtc(date),
+                            "endedAt" to isoUtc(
+                                if (duration > 0) date + duration * 1000L else date,
+                            ),
+                            "simAccountId" to account?.takeIf { it.isNotBlank() },
+                            "contactName" to (
+                                if (nameIndex >= 0) cursor.getString(nameIndex) else null
+                                )?.takeIf { it.isNotBlank() },
+                        ),
+                    )
+                }
+            }
+            result.success(rows)
+        } catch (error: Exception) {
+            result.error("CALL_LOG_READ_FAILED", error.message, null)
+        }
+    }
+
+    /**
+     * SIP/VoIP and WACRM's own connection service rows are not SIM calls.
+     * Everything else is the device's real cellular call log.
+     */
+    private fun isTelephonyCall(component: String?, accountId: String?): Boolean {
+        val marker = "${component.orEmpty()} ${accountId.orEmpty()}".lowercase()
+        if (marker.isBlank()) return true
+        if (marker.contains("com.wacrm.mobile")) return false
+        if (marker.contains("sip") || marker.contains("voip")) return false
+        if (marker.contains("webrtc")) return false
+        return true
+    }
+
+    // ------------------------------------------------------------------
+    // Device recording discovery (read-only, opt-in)
+    // ------------------------------------------------------------------
+
+    /**
+     * Looks for exactly one existing audio file that can be attributed to the
+     * given native call. If zero or more than one candidate matches, nothing is
+     * returned: the CRM must show "Recording Unavailable" rather than attach
+     * another call's audio. WACRM never records audio itself.
+     */
+    private fun findDeviceRecording(call: MethodCall, result: MethodChannel.Result) {
+        val phone = call.argument<String>("phone").orEmpty()
+        val startedAt = call.argument<Number>("startedAtMillis")?.toLong() ?: 0L
+        val endedAt = call.argument<Number>("endedAtMillis")?.toLong() ?: 0L
+        val durationSeconds = call.argument<Number>("durationSeconds")?.toInt() ?: 0
+        if (phone.isBlank() || durationSeconds <= 0 || startedAt <= 0L) {
+            result.success(null)
+            return
+        }
+        if (!hasMediaAudioPermission()) {
+            result.success(null)
+            return
+        }
+
+        val callDurationMs = durationSeconds * 1000L
+        val callEnd = if (endedAt > 0L) endedAt else startedAt + callDurationMs
+        val phoneDigits = phone.replace(Regex("[^0-9]"), "")
+        val phoneKey = phoneDigits.takeLast(10)
+        val toleranceMs = maxOf(6_000L, (callDurationMs * 0.15).toLong())
+        val minModifiedSec = (startedAt - 120_000L) / 1000L
+        val maxModifiedSec = (callEnd + 600_000L) / 1000L
+
+        val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.DATE_MODIFIED,
+            MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.MIME_TYPE,
+        )
+        val selection = buildString {
+            append(MediaStore.Audio.Media.IS_MUSIC).append(" = 0")
+            append(" AND ").append(MediaStore.Audio.Media.DURATION).append(" > 0")
+            append(" AND ").append(MediaStore.Audio.Media.DATE_MODIFIED).append(" >= ?")
+            append(" AND ").append(MediaStore.Audio.Media.DATE_MODIFIED).append(" <= ?")
+        }
+
+        try {
+            val candidates = mutableListOf<RecordingCandidate>()
+            activity.contentResolver.query(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                arrayOf(minModifiedSec.toString(), maxModifiedSec.toString()),
+                "${MediaStore.Audio.Media.DATE_MODIFIED} DESC",
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
+                val nameIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+                val durationIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                val modifiedIndex =
+                    cursor.getColumnIndex(MediaStore.Audio.Media.DATE_MODIFIED)
+                val sizeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
+                val mimeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+
+                var inspected = 0
+                while (cursor.moveToNext() && inspected < 200) {
+                    inspected += 1
+                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
+                    if (id <= 0L) continue
+                    val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+                    if (size < 1024L || size > MAX_RECORDING_BYTES) continue
+                    val durationMs =
+                        if (durationIndex >= 0) cursor.getLong(durationIndex) else 0L
+                    if (durationMs <= 0L) continue
+                    val modifiedMs =
+                        (if (modifiedIndex >= 0) cursor.getLong(modifiedIndex) else 0L) * 1000L
+                    val name =
+                        (if (nameIndex >= 0) cursor.getString(nameIndex) else null)
+                            .orEmpty()
+                    val mime =
+                        (if (mimeIndex >= 0) cursor.getString(mimeIndex) else null)
+                            .orEmpty()
+
+                    val durationDelta = kotlin.math.abs(durationMs - callDurationMs)
+                    if (durationDelta > toleranceMs) continue
+
+                    val nameDigits = name.replace(Regex("[^0-9]"), "")
+                    val nameMatches =
+                        phoneKey.isNotBlank() && nameDigits.contains(phoneKey)
+                    val timeClose = kotlin.math.abs(modifiedMs - callEnd) <= 120_000L
+                    val exactDuration = durationDelta <= 3_000L
+                    if (!nameMatches && !(exactDuration && timeClose)) continue
+
+                    val uri = Uri.withAppendedPath(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        id.toString(),
+                    )
+                    candidates.add(
+                        RecordingCandidate(uri, name, durationMs, modifiedMs, size, mime),
+                    )
+                }
+            }
+
+            // Ambiguity is never resolved by guessing.
+            if (candidates.size != 1) {
+                result.success(null)
+                return
+            }
+            val chosen = candidates.first()
+            if (!chosen.mimeType.startsWith("audio/") && chosen.mimeType.isNotBlank()) {
+                result.success(null)
+                return
+            }
+            val copied = copyRecordingToCache(chosen.uri)
+            result.success(
+                copied + mapOf(
+                    "source" to "DEVICE",
+                    "matchedBy" to if (
+                        chosen.name.replace(Regex("[^0-9]"), "").contains(phoneKey)
+                    ) {
+                        "filename"
+                    } else {
+                        "duration_and_time"
+                    },
+                ),
+            )
+        } catch (_: Exception) {
+            // MediaStore is not readable on this device/format; degrade to
+            // "Recording Unavailable" rather than risk a wrong attachment.
+            result.success(null)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Dial number normalization
+    // ------------------------------------------------------------------
+
     /**
      * Converts a CRM-stored number into a dial-safe string. Leads are often
      * saved as "+91 98765 43210" or "+91-98765-43210"; ACTION_CALL rejects
@@ -1035,6 +1356,7 @@ class MobileSimCallManager(
             "callId" to current.callId,
             "callReference" to current.callId,
             "deviceCallLogId" to deviceLog?.id?.takeIf { it > 0L },
+            "nativeCallReference" to deviceLog?.id?.let { nativeReferenceFor(it) },
             "leadId" to current.leadId,
             "customerPhone" to current.phone,
             "contactName" to current.contactName,

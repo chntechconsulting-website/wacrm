@@ -14,6 +14,7 @@ import '../../../core/widgets/wacrm_button.dart';
 import '../../../core/widgets/wacrm_card.dart';
 import '../../../core/widgets/wacrm_text_field.dart';
 import '../providers/calls_provider.dart';
+import '../models/call_log_model.dart';
 import 'dialer_screen.dart';
 
 class CallLogsScreen extends StatefulWidget {
@@ -64,14 +65,14 @@ class _CallLogsScreenState extends State<CallLogsScreen>
 
       final provider = context.read<CallsProvider>();
       var mobileCalls = provider.calls
-          .where((call) => call.isMobileSim)
+          .where((call) => call.isMobile)
           .take(12)
           .toList();
       if (mobileCalls.isEmpty) {
         await provider.fetchCalls(showLoading: false);
         if (!mounted) return;
         mobileCalls = provider.calls
-            .where((call) => call.isMobileSim)
+            .where((call) => call.isMobile)
             .take(12)
             .toList();
       }
@@ -371,6 +372,21 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     );
   }
 
+  Widget _callSourceBadge(CallLogModel call) {
+    final isMobile = call.isMobile;
+    return WacrmBadge(
+      label: isMobile ? 'MOBILE' : 'DOOCTI',
+      icon: isMobile ? Icons.smartphone_rounded : Icons.cloud_rounded,
+      backgroundColor: isMobile
+          ? const Color(0xFFECFDF5)
+          : const Color(0xFFEFF6FF),
+      textColor: isMobile
+          ? const Color(0xFF047857)
+          : const Color(0xFF1D4ED8),
+      fontSize: 9.5,
+    );
+  }
+
   Widget _recordingAction({
     required IconData icon,
     required String label,
@@ -506,6 +522,8 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                       ),
                                     ),
                                   ),
+                                  _callSourceBadge(call),
+                                  const SizedBox(width: 6),
                                   WacrmBadge.status(call.callStatus),
                                 ],
                               ),
@@ -525,7 +543,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                   color: AppColors.textLight,
                                 ),
                               ),
-                              if (call.isMobileSim) ...[
+                              if (call.isMobile) ...[
                                 const SizedBox(height: 4),
                                 Row(
                                   children: [
@@ -538,7 +556,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                     Flexible(
                                       child: Text(
                                         '${call.simLabel ?? 'Mobile SIM'}'
-                                        '${call.hasRecording ? ' • Recording attached' : ' • Recording unavailable'}',
+                                        '${call.hasRecording ? ' • Recording attached' : ' • Recording Unavailable'}',
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(

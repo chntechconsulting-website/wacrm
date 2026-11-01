@@ -48,12 +48,14 @@ class MobileSimPermissionStatus {
   final bool readPhoneState;
   final bool readCallLog;
   final bool readPhoneNumbers;
+  final bool readMediaAudio;
 
   const MobileSimPermissionStatus({
     required this.callPhone,
     required this.readPhoneState,
     required this.readCallLog,
     required this.readPhoneNumbers,
+    required this.readMediaAudio,
   });
 
   bool get hasRequired => callPhone && readPhoneState;
@@ -71,6 +73,7 @@ class MobileSimPermissionStatus {
       readPhoneState: map['readPhoneState'] == true,
       readCallLog: map['readCallLog'] == true,
       readPhoneNumbers: map['readPhoneNumbers'] == true,
+      readMediaAudio: map['readMediaAudio'] == true,
     );
   }
 }
@@ -80,6 +83,7 @@ class MobileSimCallResult {
   final String callId;
   final String? callReference;
   final String? deviceCallLogId;
+  final String? nativeCallReference;
   final int? leadId;
   final String customerPhone;
   final String? contactName;
@@ -101,6 +105,7 @@ class MobileSimCallResult {
     required this.callId,
     this.callReference,
     this.deviceCallLogId,
+    this.nativeCallReference,
     this.leadId,
     required this.customerPhone,
     this.contactName,
@@ -139,6 +144,7 @@ class MobileSimCallResult {
       callId: _asString(map['callId']) ?? '',
       callReference: _asString(map['callReference']),
       deviceCallLogId: _asString(map['deviceCallLogId']),
+      nativeCallReference: _asString(map['nativeCallReference']),
       leadId: _asInt(map['leadId']),
       customerPhone: _asString(map['customerPhone']) ?? '',
       contactName: _asString(map['contactName']),
@@ -173,6 +179,7 @@ class MobileSimCallService {
   static bool _handlerAttached = false;
 
   static final Set<String> _syncedCallIds = <String>{};
+  static final Map<String, int> _callRowIds = <String, int>{};
   static final Map<String, Future<bool>> _syncFutures =
       <String, Future<bool>>{};
 
@@ -373,13 +380,16 @@ class MobileSimCallService {
     return future;
   }
 
+  /// CRM row id created/updated for a live call result.
+  static int? callRowId(String callId) => _callRowIds[callId];
+
   static Future<bool> _syncResultInternal(
     MobileSimCallResult result,
     CallsProvider callsProvider,
   ) async {
     final repository = CallsRepository();
     try {
-      await repository.logManualCall(
+      final response = await repository.logManualCall(
         customerNumber: result.customerPhone,
         callStatus: result.callStatus,
         durationSeconds: result.durationSeconds,
@@ -396,8 +406,11 @@ class MobileSimCallService {
         simSlot: result.simSlot,
         simPhoneNumber: result.simPhoneNumber,
         callSource: 'MOBILE_SIM',
+        nativeCallReference: result.nativeCallReference,
       );
       _syncedCallIds.add(result.callId);
+      final rowId = _asInt(response?['id']);
+      if (rowId != null) _callRowIds[result.callId] = rowId;
       await clearPendingResult(result.callId);
       await callsProvider.fetchCalls(showLoading: false);
       return true;
@@ -448,6 +461,46 @@ class MobileSimCallService {
 
   static Future<void> stopRecordingPlayback() async {
     await _channel.invokeMethod<bool>('stopRecordingPlayback');
+  }
+
+  /// Returns recent native call-log rows. Requires READ_CALL_LOG; the native
+  /// layer reports PERMISSION_DENIED when it is missing.
+  static Future<List<Map<String, dynamic>>> getRecentDeviceCalls({
+    required DateTime since,
+    int limit = 200,
+  }) async {
+    final response = await _channel.invokeMethod<List<dynamic>>(
+      'getRecentDeviceCalls',
+      {
+        'sinceMillis': since.toUtc().millisecondsSinceEpoch,
+        'limit': limit,
+      },
+    );
+    if (response == null) return <Map<String, dynamic>>[];
+    return response.whereType<Map>().map((item) {
+      return Map<String, dynamic>.from(item);
+    }).toList();
+  }
+
+  /// Looks for exactly one device audio file that matches this native call.
+  /// Returns null when no unambiguous recording exists.
+  static Future<Map<String, dynamic>?> findDeviceRecording({
+    required String phone,
+    required DateTime startedAt,
+    DateTime? endedAt,
+    required int durationSeconds,
+  }) async {
+    final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'findDeviceRecording',
+      {
+        'phone': phone,
+        'startedAtMillis': startedAt.toUtc().millisecondsSinceEpoch,
+        'endedAtMillis': endedAt?.toUtc().millisecondsSinceEpoch,
+        'durationSeconds': durationSeconds,
+      },
+    );
+    if (response == null || response.isEmpty) return null;
+    return Map<String, dynamic>.from(response);
   }
 
   static String newCallId() {

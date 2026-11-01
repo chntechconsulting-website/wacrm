@@ -98,6 +98,82 @@ class TestMobileCallAttemptLifecycle(unittest.TestCase):
         call = self._attempt(call_status="SOMETHING_UNKNOWN")
         self.assertEqual(call.call_status, "FAILED")
 
+    def test_inbound_mobile_call_stores_customer_as_caller(self):
+        call = self._attempt(
+            client_call_id="SIM_INBOUND_1",
+            call_direction="INBOUND",
+            call_status="MISSED",
+            duration_seconds=0,
+        )
+        self.assertEqual(call.call_direction, "INBOUND")
+        self.assertEqual(call.from_number, self.phone)
+        self.assertEqual(call.to_number, "+919111122233")
+
+    def test_native_history_reference_is_idempotent(self):
+        first = self._attempt(
+            client_call_id=None,
+            native_call_reference="MOBILE_DEVICE_1_9988",
+            call_status="COMPLETED",
+            duration_seconds=18,
+            ended_at=datetime.now(),
+        )
+        second = self._attempt(
+            client_call_id=None,
+            native_call_reference="MOBILE_DEVICE_1_9988",
+            call_status="COMPLETED",
+            duration_seconds=18,
+            ended_at=datetime.now(),
+        )
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(self.db.query(CallLog).count(), 1)
+
+    def test_native_history_reuses_the_in_app_tracked_attempt(self):
+        tracked = self._attempt(
+            client_call_id="SIM_TRACKED_1",
+            current_employee_id=7,
+        )
+        tracked_id = tracked.id
+
+        native = self._attempt(
+            client_call_id=None,
+            native_call_reference="MOBILE_DEVICE_7_4242",
+            current_employee_id=7,
+            call_status="COMPLETED",
+            duration_seconds=33,
+            started_at=datetime.now(),
+            ended_at=datetime.now(),
+        )
+
+        self.assertEqual(native.id, tracked_id)
+        self.assertEqual(native.call_status, "COMPLETED")
+        self.assertEqual(native.duration_seconds, 33)
+        self.assertEqual(self.db.query(CallLog).count(), 1)
+
+    def test_late_live_result_reuses_the_native_history_row(self):
+        native = self._attempt(
+            client_call_id=None,
+            native_call_reference="MOBILE_DEVICE_9_5151",
+            current_employee_id=9,
+            call_status="COMPLETED",
+            duration_seconds=24,
+            started_at=datetime.now(),
+            ended_at=datetime.now(),
+        )
+        native_id = native.id
+
+        late_live = self._attempt(
+            client_call_id="SIM_LATE_9",
+            native_call_reference="MOBILE_DEVICE_9_5151",
+            current_employee_id=9,
+            call_status="COMPLETED",
+            duration_seconds=24,
+            started_at=datetime.now(),
+            ended_at=datetime.now(),
+        )
+
+        self.assertEqual(late_live.id, native_id)
+        self.assertEqual(self.db.query(CallLog).count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -193,6 +193,10 @@ class ManualCallLogRequest(BaseModel):
     sim_slot: Optional[int] = None
     sim_phone_number: Optional[str] = None
     call_source: Optional[str] = None
+    # Stable identifier of the exact native call-log row on the device. Used
+    # only for device-history sync, so retries cannot create duplicates and a
+    # history row can be reconciled with an already tracked in-app call.
+    native_call_reference: Optional[str] = None
 
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
@@ -266,6 +270,7 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
 
     provider_upper = str(call.provider or "").upper()
     is_device_dial = provider_upper in ("MOBILE_SIM", "DIRECT_DIAL")
+    call_source = "MOBILE" if is_device_dial else "DOOCTI"
 
     from services.doocti_recording_service import DooctiRecordingService
 
@@ -348,6 +353,13 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         employee_id=call.employee_id,
         provider=call.provider,
         provider_call_id=call.provider_call_id,
+        call_source=call_source,
+        native_call_reference=(
+            call.provider_call_id
+            if is_device_dial
+            and str(call.provider_call_id or "").startswith("MOBILE_")
+            else None
+        ),
         from_number=call.from_number,
         to_number=call.to_number,
         customer_phone=cust_phone,
@@ -653,7 +665,8 @@ def log_manual_call_endpoint(
             sim_label=body.sim_label,
             sim_slot=body.sim_slot,
             sim_phone_number=body.sim_phone_number,
-            call_source=body.call_source
+            call_source=body.call_source,
+            native_call_reference=body.native_call_reference,
         )
         return build_call_log_response(call_log, db)
     except ValueError as e:
@@ -667,6 +680,7 @@ async def upload_mobile_call_recording(
     call_id: str,
     file: UploadFile = File(...),
     duration_seconds: Optional[int] = Form(None),
+    source: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -783,7 +797,10 @@ async def upload_mobile_call_recording(
 
     call.recording_url = f"/uploads/{_RECORDING_MANAGED_PREFIX}/{call.id}/{target.name}"
     call.recording_id = target.stem
-    call.recording_source = "UPLOAD"
+    recording_source = str(source or "UPLOAD").strip().upper()
+    call.recording_source = (
+        recording_source if recording_source in ("UPLOAD", "DEVICE") else "UPLOAD"
+    )
     call.recording_attached_at = get_ist_now()
     if duration_seconds is not None:
         try:
@@ -1110,7 +1127,15 @@ def list_call_logs(
         else:
             query = query.filter(CallLog.call_status.ilike(f"%{call_status}%"))
     if provider:
-        query = query.filter(CallLog.provider.ilike(f"%{provider}%"))
+        p_clean = provider.strip().upper()
+        if p_clean == "MOBILE":
+            query = query.filter(
+                CallLog.provider.in_(["MOBILE_SIM", "DIRECT_DIAL"])
+            )
+        elif p_clean == "DOOCTI":
+            query = query.filter(CallLog.provider.ilike("%DOOCTI%"))
+        else:
+            query = query.filter(CallLog.provider.ilike(f"%{provider}%"))
 
     if search:
         s_clean = search.strip()

@@ -76,6 +76,30 @@ class MobileRecordingService {
     MobileSimCallService.setSharedRecordingHandler(handler);
   }
 
+  /// Uploads an already-validated recording without UI. Used by automatic
+  /// device-history sync after a single unambiguous file was matched.
+  static Future<bool> uploadForCall({
+    required int callId,
+    required PickedRecording recording,
+    String source = 'DEVICE',
+  }) async {
+    if (!File(recording.path).existsSync()) return false;
+    try {
+      await _client.postMultipart(
+        ApiEndpoints.ivrCallRecording(callId),
+        file: File(recording.path),
+        fields: {
+          'source': source,
+          if (recording.durationSeconds != null)
+            'duration_seconds': '${recording.durationSeconds}',
+        },
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Confirms and uploads a recording for [callId]. The backend verifies the
   /// audio signature and only then links it to the call.
   static Future<bool> attachToCall(
