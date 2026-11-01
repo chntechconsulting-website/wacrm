@@ -78,6 +78,8 @@ class MobileSimPermissionStatus {
 /// Result produced by the native Android layer when a device call ends.
 class MobileSimCallResult {
   final String callId;
+  final String? callReference;
+  final String? deviceCallLogId;
   final int? leadId;
   final String customerPhone;
   final String? contactName;
@@ -97,6 +99,8 @@ class MobileSimCallResult {
 
   const MobileSimCallResult({
     required this.callId,
+    this.callReference,
+    this.deviceCallLogId,
     this.leadId,
     required this.customerPhone,
     this.contactName,
@@ -133,6 +137,8 @@ class MobileSimCallResult {
   factory MobileSimCallResult.fromMap(Map<dynamic, dynamic> map) {
     return MobileSimCallResult(
       callId: _asString(map['callId']) ?? '',
+      callReference: _asString(map['callReference']),
+      deviceCallLogId: _asString(map['deviceCallLogId']),
       leadId: _asInt(map['leadId']),
       customerPhone: _asString(map['customerPhone']) ?? '',
       contactName: _asString(map['contactName']),
@@ -163,6 +169,7 @@ class MobileSimCallService {
   );
 
   static Future<void> Function(MobileSimCallResult result)? _onCallEnded;
+  static void Function(Map<String, dynamic> recording)? _onSharedRecording;
   static bool _handlerAttached = false;
 
   static final Set<String> _syncedCallIds = <String>{};
@@ -171,11 +178,10 @@ class MobileSimCallService {
 
   static bool get isSupported => Platform.isAndroid;
 
-  /// Registers the native -> Flutter callback. Call once from the app shell.
-  static void attach({
-    required Future<void> Function(MobileSimCallResult result) onCallEnded,
-  }) {
-    _onCallEnded = onCallEnded;
+  /// Installs one channel handler that dispatches both call results and
+  /// shared-recording events. Installing a second handler (for example from
+  /// the Call Logs tab) must never disconnect call-end synchronisation.
+  static void _ensureChannelHandler() {
     if (_handlerAttached) return;
     _handlerAttached = true;
 
@@ -188,8 +194,29 @@ class MobileSimCallService {
         if (handler != null) {
           await handler(result);
         }
+      } else if (call.method == 'recordingShared' && call.arguments is Map) {
+        _onSharedRecording?.call(
+          Map<String, dynamic>.from(call.arguments as Map),
+        );
       }
+      return null;
     });
+  }
+
+  /// Registers the native -> Flutter callback. Call once from the app shell.
+  static void attach({
+    required Future<void> Function(MobileSimCallResult result) onCallEnded,
+  }) {
+    _onCallEnded = onCallEnded;
+    _ensureChannelHandler();
+  }
+
+  /// Returns the current permission state without opening a system prompt.
+  static Future<MobileSimPermissionStatus> permissionStatus() async {
+    final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getCallPermissionStatus',
+    );
+    return MobileSimPermissionStatus.fromMap(response ?? const {});
   }
 
   static Future<MobileSimPermissionStatus> requestPermissions() async {
@@ -197,6 +224,75 @@ class MobileSimCallService {
       'requestCallPermissions',
     );
     return MobileSimPermissionStatus.fromMap(response ?? const {});
+  }
+
+  /// Creates the pending CRM call record *before* the Android dialer starts.
+  ///
+  /// The returned call id is the single reference used by the native tracker
+  /// and every later sync, so the completed result updates this row instead of
+  /// inserting a duplicate. A network failure never blocks the call: the same
+  /// id is reused when the final result is delivered.
+  static Future<String> beginAttempt({
+    required String phone,
+    int? leadId,
+    String? contactName,
+    SimAccount? sim,
+  }) async {
+    final callId = newCallId();
+    final startedAt = DateTime.now().toUtc().toIso8601String();
+    try {
+      await CallsRepository()
+          .logManualCall(
+            customerPhone: phone,
+            callStatus: 'INITIATED',
+            durationSeconds: 0,
+            leadId: leadId,
+            notes: 'Mobile SIM call attempt from device dialer.',
+            clientCallId: callId,
+            callDirection: 'OUTBOUND',
+            startedAt: startedAt,
+            simAccountId: sim == null ? null : 'subId:${sim.subscriptionId}',
+            simLabel: sim?.label,
+            simSlot: sim?.slotIndex,
+            simPhoneNumber: sim?.phoneNumber,
+            callSource: 'MOBILE_SIM',
+          )
+          .timeout(const Duration(seconds: 6));
+    } catch (_) {
+      // Offline / slow CRM: the native result still carries this same call id
+      // and will create (or update) the row when connectivity returns.
+    }
+    return callId;
+  }
+
+  /// Closes a pending attempt that never reached the Android dialer.
+  static Future<void> failAttempt({
+    required String callId,
+    required String phone,
+    int? leadId,
+    String? contactName,
+    String? reason,
+  }) async {
+    try {
+      await CallsRepository()
+          .logManualCall(
+            customerPhone: phone,
+            callStatus: 'FAILED',
+            durationSeconds: 0,
+            leadId: leadId,
+            notes: reason == null || reason.trim().isEmpty
+                ? 'Mobile SIM call could not be started.'
+                : 'Mobile SIM call could not be started: $reason',
+            clientCallId: callId,
+            callDirection: 'OUTBOUND',
+            startedAt: DateTime.now().toUtc().toIso8601String(),
+            endedAt: DateTime.now().toUtc().toIso8601String(),
+            callSource: 'MOBILE_SIM',
+          )
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // The pending row can be reconciled later; never block the UI.
+    }
   }
 
   static Future<List<SimAccount>> getSimAccounts() async {
@@ -331,19 +427,12 @@ class MobileSimCallService {
   }
 
   /// Called when Android delivers a shared recording while the app is open.
+  /// This keeps the call-end handler installed on the same channel.
   static void setSharedRecordingHandler(
     void Function(Map<String, dynamic> recording)? handler,
   ) {
-    if (handler == null) {
-      _channel.setMethodCallHandler(null);
-      return;
-    }
-    _channel.setMethodCallHandler((call) async {
-      if (call.method == 'recordingShared' && call.arguments is Map) {
-        handler(Map<String, dynamic>.from(call.arguments as Map));
-      }
-      return null;
-    });
+    _onSharedRecording = handler;
+    _ensureChannelHandler();
   }
 
   /// Plays an authenticated recording through the device's media player.

@@ -6,6 +6,8 @@ void main() {
     test('parses the native call-result map', () {
       final result = MobileSimCallResult.fromMap(<dynamic, dynamic>{
         'callId': 'SIM_123_abcd',
+        'callReference': 'SIM_123_abcd',
+        'deviceCallLogId': '9977',
         'leadId': 42,
         'customerPhone': '+91 98765 43210',
         'contactName': 'Test Customer',
@@ -25,6 +27,8 @@ void main() {
       });
 
       expect(result.callId, 'SIM_123_abcd');
+      expect(result.callReference, 'SIM_123_abcd');
+      expect(result.deviceCallLogId, '9977');
       expect(result.leadId, 42);
       expect(result.customerPhone, '+91 98765 43210');
       expect(result.callStatus, 'COMPLETED');
@@ -98,6 +102,18 @@ void main() {
       expect(status.hasRequired, isFalse);
       expect(status.missingRequired, contains('Phone calling'));
       expect(status.missingRequired, contains('Phone state / SIM info'));
+    });
+  });
+
+  group('Call reference', () {
+    test('generates a unique reference for every attempt', () {
+      final ids = List.generate(50, (_) => MobileSimCallService.newCallId());
+
+      expect(ids.toSet().length, ids.length);
+      for (final id in ids) {
+        expect(id, startsWith('SIM_'));
+        expect(id.length, greaterThan(10));
+      }
     });
   });
 }

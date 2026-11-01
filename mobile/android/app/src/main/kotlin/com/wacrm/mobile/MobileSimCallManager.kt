@@ -102,6 +102,7 @@ class MobileSimCallManager(
     )
 
     private data class DeviceCallInfo(
+        val id: Long,
         val date: Long,
         val duration: Int,
         val type: Int,
@@ -115,6 +116,7 @@ class MobileSimCallManager(
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getCallPermissionStatus" -> result.success(permissionMap())
             "requestCallPermissions" -> requestCallPermissions(result)
             "getSimAccounts" -> getSimAccounts(result)
             "startCall" -> startCall(call, result)
@@ -902,8 +904,9 @@ class MobileSimCallManager(
     private fun queryDeviceCallLog(current: ActiveCall): DeviceCallInfo? {
         if (!hasPermission(Manifest.permission.READ_CALL_LOG)) return null
 
-        val since = current.startAt - 2_000L
+        val since = current.startAt - 5_000L
         val projection = arrayOf(
+            CallLog.Calls._ID,
             CallLog.Calls.DATE,
             CallLog.Calls.DURATION,
             CallLog.Calls.TYPE,
@@ -919,6 +922,7 @@ class MobileSimCallManager(
                 arrayOf(since.toString()),
                 "${CallLog.Calls.DATE} DESC",
             )?.use { cursor ->
+                val idIndex = cursor.getColumnIndex(CallLog.Calls._ID)
                 val dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE)
                 val durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION)
                 val typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE)
@@ -931,11 +935,15 @@ class MobileSimCallManager(
                     val number = if (numberIndex >= 0) cursor.getString(numberIndex) else null
                     if (!numbersMatch(number, current.phone)) continue
 
+                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
                     val date = if (dateIndex >= 0) cursor.getLong(dateIndex) else current.startAt
+                    // The device row must belong to this attempt, not an older
+                    // call to the same number. Allow a small clock skew window.
+                    if (date > 0 && date < current.startAt - 30_000L) continue
                     val duration = if (durationIndex >= 0) cursor.getInt(durationIndex) else 0
                     val type = if (typeIndex >= 0) cursor.getInt(typeIndex) else 0
                     val accountId = if (accountIndex >= 0) cursor.getString(accountIndex) else null
-                    return DeviceCallInfo(date, duration, type, accountId)
+                    return DeviceCallInfo(id, date, duration, type, accountId)
                 }
                 null
             }
@@ -996,14 +1004,21 @@ class MobileSimCallManager(
                 deviceLog.type == CallLog.Calls.MISSED_TYPE -> "MISSED"
                 deviceLog.type == CallLog.Calls.REJECTED_TYPE -> "REJECTED"
                 durationSeconds > 0 -> "COMPLETED"
-                else -> "NO_ANSWER"
+                deviceLog.type == CallLog.Calls.OUTGOING_TYPE -> "NO_ANSWER"
+                else -> "FAILED"
             }
         } else {
             durationAccuracy = "estimated"
             startedAt = current.startAt
             val activeFrom = current.offhookAt ?: current.startAt
             durationSeconds = ((endAt - activeFrom) / 1000L).toInt().coerceAtLeast(0)
-            status = if (current.sawOffhook && durationSeconds > 0) "COMPLETED" else "NO_ANSWER"
+            status = when {
+                // OFFHOOK is the only signal that proves the call connected.
+                current.sawOffhook && durationSeconds > 0 -> "COMPLETED"
+                current.sawOffhook -> "ANSWERED"
+                current.sawRinging -> "NO_ANSWER"
+                else -> "FAILED"
+            }
         }
 
         if (status != "COMPLETED" && status != "ANSWERED") {
@@ -1018,6 +1033,8 @@ class MobileSimCallManager(
 
         return mapOf(
             "callId" to current.callId,
+            "callReference" to current.callId,
+            "deviceCallLogId" to deviceLog?.id?.takeIf { it > 0L },
             "leadId" to current.leadId,
             "customerPhone" to current.phone,
             "contactName" to current.contactName,
@@ -1168,11 +1185,35 @@ class MobileSimCallManager(
                 simLabel = json.optString("simLabel", "").takeIf { it.isNotBlank() },
                 simPhoneNumber = json.optString("simPhoneNumber", "").takeIf { it.isNotBlank() },
                 startAt = startAt,
-                offhookAt = startAt,
-                sawOffhook = true,
+                // Recovery after process death has no live telephony evidence.
+                // Only a matching device call-log row may prove the call
+                // connected; otherwise the attempt stays unverified.
+                offhookAt = null,
+                sawOffhook = false,
             )
 
-            val deviceLog = queryDeviceCallLog(current) ?: return
+            val deviceLog = queryDeviceCallLog(current)
+            if (deviceLog == null) {
+                // Without READ_CALL_LOG we cannot recover a duration. Mark the
+                // attempt unverified (FAILED), never COMPLETED, once the phone
+                // is idle and the call is safely over.
+                val callState = try {
+                    (activity.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager)?.callState
+                } catch (_: Exception) {
+                    null
+                }
+                if (
+                    callState != null &&
+                    callState == TelephonyManager.CALL_STATE_IDLE &&
+                    System.currentTimeMillis() - startAt >= 5 * 60 * 1000L
+                ) {
+                    current.endAt = System.currentTimeMillis()
+                    current.finalized = true
+                    savePendingResult(buildCallResult(current))
+                    clearActiveCall()
+                }
+                return
+            }
             if (deviceLog.duration <= 0 && deviceLog.type == CallLog.Calls.OUTGOING_TYPE) {
                 // A zero-duration outgoing call is a completed attempt, not a
                 // finished conversation; leave it for the live flow if possible.

@@ -31,7 +31,15 @@ from utils.timezone import get_ist_now
 
 logger = logging.getLogger("wacrm.call_sync")
 
-ACTIVE_CALL_STATUSES: List[str] = ["RINGING", "CONNECTING", "ANSWERED", "INITIATED", "INITIATING"]
+ACTIVE_CALL_STATUSES: List[str] = [
+    "RINGING",
+    "CONNECTING",
+    "ANSWERED",
+    "INITIATED",
+    "INITIATING",
+    "PENDING",
+    "DIALING",
+]
 
 # DooCTI answers/records only when a call is actually connected. A ring that never
 # connected never produces audio, so the presence of a recording is proof of answer.
@@ -40,38 +48,51 @@ STALE_AFTER_MINUTES = 30
 
 def _finalize_one(db, call: CallLog, dry_run: bool = False) -> Dict[str, Any]:
     started_at = call.started_at or call.created_at or get_ist_now()
+    is_device_dial = str(call.provider or "").upper() in ("MOBILE_SIM", "DIRECT_DIAL")
 
     rec_url = (call.recording_url or "").strip() or None
     if rec_url and ("127.0.0.1" in rec_url or "localhost" in rec_url):
         rec_url = None
 
-    claimed = False
-    if not rec_url:
-        try:
-            rec_url = DooctiRecordingService.claim_unambiguous_recording(call, db)
-            claimed = bool(rec_url)
-        except Exception as exc:
-            logger.debug(f"[CallSync] Recording lookup failed for CallLog ID={call.id}: {exc}")
-            rec_url = None
-
-    duration = 0
-    if rec_url:
-        try:
-            duration = int(DooctiRecordingService.resolve_audio_duration(rec_url) or 0)
-        except Exception as exc:
-            logger.debug(f"[CallSync] Duration resolution failed for CallLog ID={call.id}: {exc}")
-            duration = 0
-
-    if duration > 0:
-        status = "COMPLETED"
-        answered_at = started_at
-        ended_at = started_at + datetime.timedelta(seconds=duration)
-        source = "recording"
-    else:
-        status = "MISSED" if (call.call_direction or "").upper() == "INBOUND" else "NO_ANSWER"
+    # Device-dialed calls are never recorded by the CRM, and their recordings
+    # must never be sourced from the DooCTI bucket. Without a synced device
+    # result the outcome is genuinely unverified, so it is closed as FAILED
+    # rather than being guessed as completed.
+    if is_device_dial:
+        duration = 0
+        status = "FAILED"
         answered_at = None
         ended_at = started_at
-        source = "no_evidence"
+        source = "unverified_device_attempt"
+        claimed = False
+    else:
+        claimed = False
+        if not rec_url:
+            try:
+                rec_url = DooctiRecordingService.claim_unambiguous_recording(call, db)
+                claimed = bool(rec_url)
+            except Exception as exc:
+                logger.debug(f"[CallSync] Recording lookup failed for CallLog ID={call.id}: {exc}")
+                rec_url = None
+
+        duration = 0
+        if rec_url:
+            try:
+                duration = int(DooctiRecordingService.resolve_audio_duration(rec_url) or 0)
+            except Exception as exc:
+                logger.debug(f"[CallSync] Duration resolution failed for CallLog ID={call.id}: {exc}")
+                duration = 0
+
+        if duration > 0:
+            status = "COMPLETED"
+            answered_at = started_at
+            ended_at = started_at + datetime.timedelta(seconds=duration)
+            source = "recording"
+        else:
+            status = "MISSED" if (call.call_direction or "").upper() == "INBOUND" else "NO_ANSWER"
+            answered_at = None
+            ended_at = started_at
+            source = "no_evidence"
 
     if dry_run:
         return {
@@ -183,6 +204,10 @@ def recover_terminal_calls_with_recordings(
             CallLog.recording_url.is_(None),
             or_(CallLog.duration_seconds.is_(None), CallLog.duration_seconds <= 0),
             CallLog.created_at >= since,
+            or_(
+                CallLog.provider.is_(None),
+                ~CallLog.provider.in_(["MOBILE_SIM", "DIRECT_DIAL"]),
+            ),
         )
         .order_by(desc(CallLog.id))
         .limit(limit)

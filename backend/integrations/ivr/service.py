@@ -350,31 +350,75 @@ class IVRService:
         """
         import uuid
 
+        ATTEMPT_STATUSES = {
+            "INITIATED",
+            "INITIATING",
+            "PENDING",
+            "DIALING",
+            "RINGING",
+            "CONNECTING",
+        }
+        TERMINAL_STATUSES = {
+            "COMPLETED",
+            "CONNECTED",
+            "MISSED",
+            "REJECTED",
+            "NO_ANSWER",
+            "BUSY",
+            "FAILED",
+            "CANCELLED",
+        }
+        UNANSWERED_STATUSES = {
+            "MISSED",
+            "REJECTED",
+            "NO_ANSWER",
+            "BUSY",
+            "FAILED",
+            "CANCELLED",
+        }
+
         client_call_id = str(client_call_id or "").strip()
 
-        # Idempotency: a device retry must return the already-saved call record.
-        if client_call_id:
-            existing = db.query(CallLog).filter(
-                CallLog.provider_call_id == client_call_id
-            ).first()
-            if existing:
-                if (existing.provider or "").upper() not in ("MOBILE_SIM", "DIRECT_DIAL"):
-                    raise ValueError("This call id is already used by another telephony record.")
-                if (
-                    current_employee_id is not None
-                    and existing.employee_id != current_employee_id
-                ):
-                    raise ValueError("This call record belongs to another employee.")
-                return existing
+        is_mobile_sim = (
+            str(call_source or "").strip().upper() == "MOBILE_SIM"
+            or bool(sim_account_id or sim_label)
+            or sim_slot is not None
+        )
+
+        direction = str(call_direction or "OUTBOUND").strip().upper()
+        if direction not in ("INBOUND", "OUTBOUND"):
+            direction = "OUTBOUND"
+
+        status = str(call_status or "COMPLETED").strip().upper().replace(" ", "_")
+        if status == "UNANSWERED":
+            status = "NO_ANSWER"
+        # Keep the historic API behaviour for clients that send ANSWERED.
+        if status == "ANSWERED":
+            status = "COMPLETED"
+        if status not in ATTEMPT_STATUSES and status not in TERMINAL_STATUSES:
+            # Never invent a completed call for a device flow we cannot verify.
+            status = "FAILED" if is_mobile_sim else "COMPLETED"
+
+        is_attempt = status in ATTEMPT_STATUSES
+
+        try:
+            duration_seconds = max(0, int(duration_seconds or 0))
+        except (TypeError, ValueError):
+            duration_seconds = 0
+
+        if is_attempt or status in UNANSWERED_STATUSES:
+            duration_seconds = 0
+
+        now = get_ist_now()
+        start_arg = IVRService._naive_ist(started_at)
+        end_arg = IVRService._naive_ist(ended_at)
+        answered_arg = IVRService._naive_ist(answered_at)
 
         target_phone = str(customer_phone or "").strip()
         if not target_phone and lead_id:
             lead = db.query(Lead).filter(Lead.id == lead_id).first()
             if lead:
                 target_phone = lead.phone or lead.whatsapp_number or ""
-
-        if not target_phone:
-            raise ValueError("Customer phone number is required to log a call.")
 
         emp_phone = str(sim_phone_number or employee_phone or "").strip()
         if not emp_phone and current_employee_id:
@@ -384,58 +428,131 @@ class IVRService:
         if not emp_phone:
             emp_phone = "+919876500000"
 
-        is_mobile_sim = (
-            str(call_source or "").strip().upper() == "MOBILE_SIM"
-            or bool(sim_account_id or sim_label)
-            or sim_slot is not None
-        )
+        def validate_existing(existing: CallLog) -> None:
+            if (existing.provider or "").upper() not in ("MOBILE_SIM", "DIRECT_DIAL"):
+                raise ValueError("This call id is already used by another telephony record.")
+            if (
+                current_employee_id is not None
+                and existing.employee_id != current_employee_id
+            ):
+                raise ValueError("This call record belongs to another employee.")
+
+        # Idempotency: a device retry must reuse the already-saved call record.
+        # Final results update the pending attempt in place; a late attempt event
+        # must never downgrade a completed call.
+        if client_call_id:
+            existing = db.query(CallLog).filter(
+                CallLog.provider_call_id == client_call_id
+            ).first()
+            if existing:
+                validate_existing(existing)
+
+                previous_status = str(existing.call_status or "").upper()
+                existing_is_attempt = previous_status in ATTEMPT_STATUSES
+                if is_attempt and not existing_is_attempt:
+                    return existing
+
+                if target_phone:
+                    existing.to_number = target_phone
+                if lead_id is not None:
+                    existing.lead_id = lead_id
+                existing.call_status = status
+                existing.duration_seconds = duration_seconds
+                existing.call_direction = direction
+
+                if is_attempt:
+                    existing.started_at = start_arg or existing.started_at or now
+                    existing.answered_at = None
+                    existing.ended_at = None
+                else:
+                    end_dt = end_arg or now
+                    if start_arg:
+                        existing.started_at = start_arg
+                    if not existing.started_at:
+                        existing.started_at = end_dt - datetime.timedelta(
+                            seconds=duration_seconds
+                        )
+                    if existing.started_at > end_dt:
+                        existing.started_at = end_dt - datetime.timedelta(
+                            seconds=duration_seconds
+                        )
+                    existing.ended_at = end_dt
+                    if status in ("COMPLETED", "CONNECTED"):
+                        existing.answered_at = (
+                            answered_arg
+                            or end_dt - datetime.timedelta(seconds=duration_seconds)
+                        )
+                    else:
+                        existing.answered_at = None
+
+                if recording_url is not None:
+                    existing.recording_url = str(recording_url).strip() or None
+                if sim_account_id:
+                    existing.sim_account_id = str(sim_account_id).strip() or None
+                if sim_label:
+                    existing.sim_label = str(sim_label).strip() or None
+                if sim_slot is not None:
+                    existing.sim_slot = sim_slot
+                if notes is not None:
+                    existing.notes = notes
+
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    raise
+                db.refresh(existing)
+
+                # Log a lead activity only on the pending -> final transition,
+                # so retries of the same final result do not duplicate activity.
+                activity_lead_id = lead_id if lead_id is not None else existing.lead_id
+                if activity_lead_id and existing_is_attempt and not is_attempt:
+                    dur_msg = f" (Duration: {duration_seconds}s)" if duration_seconds else ""
+                    sim_msg = f" via {sim_label or existing.sim_label}" if (sim_label or existing.sim_label) else ""
+                    db.add(LeadActivity(
+                        lead_id=activity_lead_id,
+                        performed_by=current_employee_id,
+                        activity_type="CALL_LOGGED",
+                        description=(
+                            f"Mobile SIM call{sim_msg} to {target_phone or existing.to_number} - "
+                            f"Status: {status}{dur_msg}."
+                        ),
+                    ))
+                    db.commit()
+
+                return existing
+
+        if not target_phone:
+            raise ValueError("Customer phone number is required to log a call.")
+
         provider_name = "MOBILE_SIM" if is_mobile_sim else "DIRECT_DIAL"
-
-        direction = str(call_direction or "OUTBOUND").strip().upper()
-        if direction not in ("INBOUND", "OUTBOUND"):
-            direction = "OUTBOUND"
-
-        status = str(call_status or "COMPLETED").strip().upper().replace(" ", "_")
-        if status == "UNANSWERED":
-            status = "NO_ANSWER"
-        if status == "ANSWERED":
-            status = "COMPLETED"
-        if status not in (
-            "COMPLETED", "CONNECTED", "MISSED", "REJECTED", "NO_ANSWER",
-            "BUSY", "FAILED", "CANCELLED"
-        ):
-            status = "COMPLETED"
-
-        try:
-            duration_seconds = max(0, int(duration_seconds or 0))
-        except (TypeError, ValueError):
-            duration_seconds = 0
-
-        if status in ("MISSED", "REJECTED", "NO_ANSWER", "BUSY", "FAILED", "CANCELLED"):
-            duration_seconds = 0
-
-        now = get_ist_now()
-        end_dt = IVRService._naive_ist(ended_at) or now
-        if started_at:
-            start_dt = IVRService._naive_ist(started_at)
-        else:
-            start_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
-        if not start_dt or start_dt > end_dt:
-            start_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
-
-        answered_dt = IVRService._naive_ist(answered_at)
-        if status in ("COMPLETED", "CONNECTED"):
-            if not answered_dt:
-                answered_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
-        else:
-            answered_dt = None
-
         provider_call_id = client_call_id or f"DIRECT_{uuid.uuid4().hex[:10].upper()}"
+
+        if is_attempt:
+            start_dt = start_arg or now
+            end_dt = None
+            answered_dt = None
+        else:
+            end_dt = end_arg or now
+            if start_arg:
+                start_dt = start_arg
+            else:
+                start_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
+            if not start_dt or start_dt > end_dt:
+                start_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
+            answered_dt = answered_arg
+            if status in ("COMPLETED", "CONNECTED"):
+                if not answered_dt:
+                    answered_dt = end_dt - datetime.timedelta(seconds=duration_seconds)
+            else:
+                answered_dt = None
 
         if is_mobile_sim:
             default_note = "Mobile SIM call from device dialer."
             if sim_label:
                 default_note = f"Mobile SIM call via {sim_label}."
+            if is_attempt:
+                default_note = "Mobile SIM call attempt placed from the device dialer."
         else:
             default_note = f"Direct Device / Manual Call ({status})."
 
@@ -462,25 +579,19 @@ class IVRService:
         try:
             db.commit()
         except IntegrityError:
-            # Concurrent retry with the same client_call_id: return the winner.
+            # Concurrent retry with the same client_call_id: reuse the winner.
             db.rollback()
             if client_call_id:
                 existing = db.query(CallLog).filter(
                     CallLog.provider_call_id == client_call_id
                 ).first()
                 if existing:
-                    if (existing.provider or "").upper() not in ("MOBILE_SIM", "DIRECT_DIAL"):
-                        raise ValueError("This call id is already used by another telephony record.")
-                    if (
-                        current_employee_id is not None
-                        and existing.employee_id != current_employee_id
-                    ):
-                        raise ValueError("This call record belongs to another employee.")
+                    validate_existing(existing)
                     return existing
             raise
         db.refresh(call_log)
 
-        if lead_id:
+        if lead_id and not is_attempt:
             dur_msg = f" (Duration: {duration_seconds}s)" if duration_seconds else ""
             note_msg = f" Notes: {notes}" if notes else ""
             if is_mobile_sim:

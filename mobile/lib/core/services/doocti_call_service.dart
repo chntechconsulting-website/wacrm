@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../constants/app_colors.dart';
 import '../utils/phone_utils.dart';
 import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
+import 'mobile_sim_dialer.dart';
 
 class DooctiCallService {
   static final CallsRepository _callsRepository = CallsRepository();
@@ -72,7 +72,28 @@ class DooctiCallService {
     final callerDid = extInfo['caller_did']?.toString() ?? 'DooCTI PBX';
 
     if (!isRegistered || station.isEmpty) {
-      _showExtensionRequiredDialog(context, cleanPhone, contactName);
+      // No PBX extension is mapped for this employee. Route the quick-call
+      // through the same tracked Mobile SIM flow as the dial pad, so the call
+      // is recorded in CRM before the Android dialer opens and its result is
+      // reconciled afterwards.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No DooCTI extension is mapped. Using your Mobile SIM and logging '
+            'this call to CRM.',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      await MobileSimDialer.start(
+        context,
+        phone: cleanPhone,
+        leadId: leadId,
+        contactName: contactName,
+        missingNumberMessage:
+            'No valid phone number saved for this contact. '
+            'Update the number or use the dial pad.',
+      );
       return;
     }
 
@@ -84,59 +105,6 @@ class DooctiCallService {
       contactName: contactName,
       station: station,
       callerDid: callerDid,
-    );
-  }
-
-  static void _showExtensionRequiredDialog(
-    BuildContext context,
-    String cleanPhone,
-    String? contactName,
-  ) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.phonelink_ring_rounded, color: AppColors.primary, size: 28),
-            SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'DooCTI Extension Required',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ],
-        ),
-        content: Text(
-          'Your CRM user account does not have a registered DooCTI PBX extension. '
-          'To route calls via DooCTI, please ask your administrator to map your extension (e.g. 1281, 1282, 1283, 1286).\n\n'
-          'Would you like to place a direct phone call using your device instead?',
-          style: const TextStyle(fontSize: 13, color: AppColors.textMuted, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: AppColors.textMuted)),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.navy,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            icon: const Icon(Icons.call, size: 16),
-            label: const Text('Direct Device Call'),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              final uri = Uri.parse('tel:$cleanPhone');
-              if (await canLaunchUrl(uri)) {
-                await launchUrl(uri);
-              }
-            },
-          ),
-        ],
-      ),
     );
   }
 

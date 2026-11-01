@@ -74,7 +74,7 @@ class CallsRepository {
     await _client.post(ApiEndpoints.initiateCall, body: body);
   }
 
-  Future<void> logManualCall({
+  Future<Map<String, dynamic>?> logManualCall({
     String? customerNumber,
     String? customerPhone,
     required String callStatus,
@@ -115,13 +115,17 @@ class CallsRepository {
     };
 
     try {
-      await _client.post(ApiEndpoints.manualCall, body: body);
+      final response = await _client.post(ApiEndpoints.manualCall, body: body);
+      return response is Map<String, dynamic> ? response : null;
     } on ApiException catch (e) {
       if (e.statusCode == 404 || e.statusCode == 405) {
-        await _client.post(ApiEndpoints.manualCallLegacy, body: body);
-      } else {
-        rethrow;
+        final response = await _client.post(
+          ApiEndpoints.manualCallLegacy,
+          body: body,
+        );
+        return response is Map<String, dynamic> ? response : null;
       }
+      rethrow;
     }
   }
 }

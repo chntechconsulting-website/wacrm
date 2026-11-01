@@ -12,6 +12,11 @@ import 'mobile_sim_call_service.dart';
 class MobileSimDialer {
   const MobileSimDialer._();
 
+  /// The optional call-log prompt is offered once per app run. Repeatedly
+  /// asking after a denial is poor UX and Android may not show the system
+  /// prompt at all, so the CRM keeps logging with an estimated duration.
+  static bool _optionalCallLogPrompted = false;
+
   /// Returns true when the device call was launched.
   static Future<bool> start(
     BuildContext context, {
@@ -40,14 +45,10 @@ class MobileSimDialer {
       return false;
     }
 
+    String? attemptCallId;
     try {
-      final permissions = await MobileSimCallService.requestPermissions();
-      if (!context.mounted) return false;
-
-      if (!permissions.hasRequired) {
-        _showPermissionDialog(context, permissions);
-        return false;
-      }
+      final permissions = await _ensurePermissions(context);
+      if (permissions == null || !context.mounted) return false;
 
       final sims = await MobileSimCallService.getSimAccounts();
       if (!context.mounted) return false;
@@ -66,9 +67,19 @@ class MobileSimDialer {
           : await _showSimPicker(context, sims);
       if (selectedSim == null || !context.mounted) return false;
 
+      // Persist the attempt before ACTION_CALL. The native tracker and the
+      // final sync both use this exact call id, so the later result updates
+      // this row instead of creating a duplicate.
+      attemptCallId = await MobileSimCallService.beginAttempt(
+        phone: number,
+        leadId: leadId,
+        contactName: contactName,
+        sim: selectedSim,
+      );
+
       await MobileSimCallService.startCall(
         phone: number,
-        callId: MobileSimCallService.newCallId(),
+        callId: attemptCallId,
         leadId: leadId,
         contactName: contactName,
         sim: selectedSim,
@@ -82,7 +93,8 @@ class MobileSimDialer {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Calling $number from ${selectedSim.label}.$durationNote',
+            'Calling $number from ${selectedSim.label}. '
+            'This call is being logged to CRM.$durationNote',
           ),
           backgroundColor: const Color(0xFF10B981),
           duration: const Duration(seconds: 4),
@@ -90,6 +102,15 @@ class MobileSimDialer {
       );
       return true;
     } on PlatformException catch (error) {
+      if (attemptCallId != null) {
+        await MobileSimCallService.failAttempt(
+          callId: attemptCallId,
+          phone: number,
+          leadId: leadId,
+          contactName: contactName,
+          reason: error.message ?? error.code,
+        );
+      }
       if (!context.mounted) return false;
       if (error.code == 'CALL_IN_PROGRESS') {
         _showMessage(
@@ -116,10 +137,104 @@ class MobileSimDialer {
       }
       return false;
     } catch (error) {
+      if (attemptCallId != null) {
+        await MobileSimCallService.failAttempt(
+          callId: attemptCallId,
+          phone: number,
+          leadId: leadId,
+          contactName: contactName,
+          reason: error.toString(),
+        );
+      }
       if (!context.mounted) return false;
       _showMessage(context, 'Unable to start the mobile SIM call: $error');
       return false;
     }
+  }
+
+  /// Explains why Android asks for phone access before the system prompt is
+  /// shown. Call-log access remains optional; without it the CRM estimates the
+  /// duration and keeps the call as unverified until the device result arrives.
+  static Future<MobileSimPermissionStatus?> _ensurePermissions(
+    BuildContext context,
+  ) async {
+    var status = await MobileSimCallService.permissionStatus();
+    if (!context.mounted) return null;
+
+    if (!status.hasRequired) {
+      final proceed = await _showPermissionRationale(
+        context,
+        status,
+        required: true,
+      );
+      if (!proceed || !context.mounted) return null;
+      // The native request includes the optional call-log permission, so do not
+      // show a second rationale prompt for it in the same flow.
+      _optionalCallLogPrompted = true;
+      status = await MobileSimCallService.requestPermissions();
+      if (!context.mounted) return null;
+      if (!status.hasRequired) {
+        _showPermissionDialog(context, status);
+        return null;
+      }
+    }
+
+    if (!status.readCallLog && !_optionalCallLogPrompted) {
+      _optionalCallLogPrompted = true;
+      final allowCallLog = await _showPermissionRationale(
+        context,
+        status,
+        required: false,
+      );
+      if (allowCallLog && context.mounted) {
+        status = await MobileSimCallService.requestPermissions();
+        if (!context.mounted) return null;
+      }
+    }
+    return status;
+  }
+
+  static Future<bool> _showPermissionRationale(
+    BuildContext context,
+    MobileSimPermissionStatus permissions, {
+    required bool required,
+  }) async {
+    final missing = required
+        ? permissions.missingRequired.join(', ')
+        : 'Call log access';
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          required ? 'Phone access required' : 'Improve call accuracy',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          required
+              ? 'WACRM needs $missing to place this call from your SIM and '
+                    'track when it ends.\n\n'
+                    'The CRM stores the call attempt, direction, timestamp and '
+                    'final result. It never records audio.'
+              : 'Allow $missing so WACRM can read the exact talk duration and '
+                    'final status from this device.\n\n'
+                    'Android may restrict call-log access. Without it, the call '
+                    'is still logged with an estimated duration and is never '
+                    'marked completed unless the device confirms it.',
+          style: const TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(required ? 'Cancel' : 'Not now'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(required ? 'Continue' : 'Allow'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
   }
 
   static Future<SimAccount?> _showSimPicker(
