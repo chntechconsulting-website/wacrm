@@ -34,10 +34,7 @@ void main() {
         OfficeSimService.callMatches(mapping, simAccountId: 'subId:2'),
         isTrue,
       );
-      expect(
-        OfficeSimService.callMatches(mapping, subscriptionId: 2),
-        isTrue,
-      );
+      expect(OfficeSimService.callMatches(mapping, subscriptionId: 2), isTrue);
       expect(
         OfficeSimService.callMatches(mapping, simAccountId: 'subId:1'),
         isFalse,
@@ -71,7 +68,10 @@ void main() {
 
     test('never falls back to slot or phone number', () {
       final mapping = _mapping();
-      expect(OfficeSimService.callMatches(mapping, simAccountId: null), isFalse);
+      expect(
+        OfficeSimService.callMatches(mapping, simAccountId: null),
+        isFalse,
+      );
       expect(OfficeSimService.callMatches(mapping, simAccountId: ''), isFalse);
       expect(
         OfficeSimService.callMatches(mapping, simAccountId: '+919876543210'),
@@ -132,10 +132,14 @@ void main() {
         phoneAccountComponent: _component,
         simFingerprint: 'c',
       );
-      expect(OfficeSimService.matchSim(mapping, [sim])?.phoneAccountId,
-          'account-2');
-      expect(OfficeSimService.callMatches(mapping, simAccountId: sim.identityToken),
-          isTrue);
+      expect(
+        OfficeSimService.matchSim(mapping, [sim])?.phoneAccountId,
+        'account-2',
+      );
+      expect(
+        OfficeSimService.callMatches(mapping, simAccountId: sim.identityToken),
+        isTrue,
+      );
     });
   });
 
@@ -169,10 +173,7 @@ void main() {
         phoneAccountId: 'account-9',
         phoneAccountComponent: _component,
       );
-      expect(
-        sim.identityToken,
-        'phoneAccount:$_component#account-9',
-      );
+      expect(sim.identityToken, 'phoneAccount:$_component#account-9');
     });
   });
 
@@ -209,6 +210,94 @@ void main() {
     });
   });
 
+  group('Incremental call-log baseline', () {
+    test('only rows strictly after the composite baseline are eligible', () {
+      final baselineDate = 1700000000000;
+      final baselineId = 500;
+
+      DeviceCallLogEntry row({int? date, int? id}) {
+        final rowDate = date ?? baselineDate;
+        final rowId = id ?? baselineId;
+        return DeviceCallLogEntry.fromMap({
+          'nativeCallReference': 'native-$rowId',
+          'deviceCallLogId': rowId,
+          'dateMillis': rowDate,
+          'phone': '+919876543210',
+          'direction': 'INBOUND',
+          'status': 'COMPLETED',
+          'durationSeconds': 10,
+          'simIdentity': 'subId:2',
+          'simSubscriptionId': 2,
+        });
+      }
+
+      expect(
+        row(
+          date: baselineDate - 1,
+        ).isAfterBaseline(baselineDateMs: baselineDate, baselineId: baselineId),
+        isFalse,
+      );
+      expect(
+        row(
+          date: baselineDate,
+          id: 499,
+        ).isAfterBaseline(baselineDateMs: baselineDate, baselineId: baselineId),
+        isFalse,
+      );
+      expect(
+        row(
+          date: baselineDate,
+          id: 500,
+        ).isAfterBaseline(baselineDateMs: baselineDate, baselineId: baselineId),
+        isFalse,
+      );
+      expect(
+        row(
+          date: baselineDate,
+          id: 501,
+        ).isAfterBaseline(baselineDateMs: baselineDate, baselineId: baselineId),
+        isTrue,
+      );
+      expect(
+        row(
+          date: baselineDate + 1,
+          id: 1,
+        ).isAfterBaseline(baselineDateMs: baselineDate, baselineId: baselineId),
+        isTrue,
+      );
+    });
+
+    test('a row without a native cursor can never be proven newer', () {
+      final entry = DeviceCallLogEntry.fromMap({
+        'nativeCallReference': 'native-x',
+        'phone': '+919876543210',
+        'direction': 'INBOUND',
+        'status': 'COMPLETED',
+        'simIdentity': 'subId:2',
+      });
+      expect(entry.dateMillis, isNull);
+      expect(entry.isAfterBaseline(baselineDateMs: 0, baselineId: 0), isFalse);
+    });
+
+    test(
+      'derives dateMillis from startedAt when the native field is absent',
+      () {
+        final entry = DeviceCallLogEntry.fromMap({
+          'nativeCallReference': 'native-y',
+          'phone': '+919876543210',
+          'direction': 'OUTBOUND',
+          'status': 'COMPLETED',
+          'startedAt': '2026-11-02T10:00:00.000Z',
+          'simIdentity': 'subId:2',
+        });
+        expect(
+          entry.dateMillis,
+          DateTime.utc(2026, 11, 2, 10).millisecondsSinceEpoch,
+        );
+      },
+    );
+  });
+
   group('Office SIM mapping JSON', () {
     test('round-trips configuration including verification state', () {
       final mapping = OfficeSimMapping.fromJson({
@@ -228,6 +317,46 @@ void main() {
       expect(mapping.isVerified, isFalse);
       expect(mapping.verificationReason, 'SIM replaced');
       expect(OfficeSimMapping.fromJson(mapping.toJson()).subscriptionId, 2);
+    });
+
+    test('round-trips sync session fields and states', () {
+      final mapping = OfficeSimMapping.fromJson({
+        'id': 4,
+        'employee_id': 9,
+        'subscription_id': 2,
+        'sim_fingerprint': 'f' * 64,
+        'status': 'VERIFIED',
+        'sync_status': 'PAUSED',
+        'sync_activated_at': '2026-11-02T10:00:00',
+        'sync_baseline_date_ms': 1700000000000,
+        'sync_baseline_id': 500,
+        'sync_watermark_date_ms': 1700000009000,
+        'sync_watermark_id': 509,
+        'last_successful_sync_at': '2026-11-02T10:05:00',
+      });
+      expect(mapping.syncStatus, 'PAUSED');
+      expect(mapping.syncPaused, isTrue);
+      expect(mapping.syncActive, isFalse);
+      expect(mapping.syncBaselineDateMs, 1700000000000);
+      expect(mapping.syncBaselineId, 500);
+      expect(mapping.syncWatermarkDateMs, 1700000009000);
+      expect(mapping.syncWatermarkId, 509);
+      expect(mapping.syncActivatedAt, isNotNull);
+      expect(mapping.lastSuccessfulSyncAt, isNotNull);
+
+      final restored = OfficeSimMapping.fromJson(mapping.toJson());
+      expect(restored.syncStatus, 'PAUSED');
+      expect(restored.syncBaselineId, 500);
+      expect(restored.syncWatermarkDateMs, 1700000009000);
+    });
+
+    test('REQUIRES_SIM_VERIFICATION is treated as needing re-verification', () {
+      final mapping = OfficeSimMapping.fromJson({
+        'status': 'REQUIRES_VERIFICATION',
+        'sync_status': 'REQUIRES_SIM_VERIFICATION',
+      });
+      expect(mapping.syncRequiresVerification, isTrue);
+      expect(mapping.syncActive, isFalse);
     });
   });
 }

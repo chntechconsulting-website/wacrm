@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -38,6 +38,24 @@ class OfficeSimMapping(Base):
     status = Column(String(30), nullable=False, default="VERIFIED", index=True)
     verification_reason = Column(String(255), nullable=True)
     verified_at = Column(DateTime, nullable=True)
+
+    # Incremental call-log sync session. The device establishes a baseline at
+    # activation/resume, so historical call-log rows are never imported.
+    # NOT_CONFIGURED | ACTIVE | PAUSED | REQUIRES_SIM_VERIFICATION
+    sync_status = Column(
+        String(30),
+        nullable=False,
+        default="NOT_CONFIGURED",
+        server_default="NOT_CONFIGURED",
+        index=True,
+    )
+    sync_activated_at = Column(DateTime, nullable=True)
+    sync_baseline_date_ms = Column(BigInteger, nullable=True)
+    sync_baseline_id = Column(BigInteger, nullable=True)
+    sync_watermark_date_ms = Column(BigInteger, nullable=True)
+    sync_watermark_id = Column(BigInteger, nullable=True)
+    last_successful_sync_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=get_ist_now, nullable=False)
     updated_at = Column(
         DateTime,
@@ -47,3 +65,4 @@ class OfficeSimMapping(Base):
     )
 
     employee = relationship("Employee", backref="office_sim_mapping")
+

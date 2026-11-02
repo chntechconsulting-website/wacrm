@@ -145,6 +145,8 @@ class MobileSimCallManager(
             "pickRecordingFile" -> pickRecordingFile(result)
             "consumeSharedRecordingFile" -> consumeSharedRecordingFile(result)
             "getRecentDeviceCalls" -> getRecentDeviceCalls(call, result)
+            "getDeviceCallLogBaseline" -> getDeviceCallLogBaseline(result)
+            "getDeviceCallsIncremental" -> getDeviceCallsIncremental(call, result)
             "findDeviceRecording" -> findDeviceRecording(call, result)
             "playRecording" -> playRecording(call, result)
             "stopRecordingPlayback" -> stopRecordingPlayback(result)
@@ -1290,6 +1292,7 @@ class MobileSimCallManager(
                             "direction" to direction,
                             "type" to type,
                             "status" to status,
+                            "dateMillis" to date,
                             "durationSeconds" to if (status == "COMPLETED") duration else 0,
                             "startedAt" to isoUtc(date),
                             "endedAt" to isoUtc(
@@ -1310,6 +1313,202 @@ class MobileSimCallManager(
                 }
             }
             result.success(rows)
+        } catch (error: Exception) {
+            result.error("CALL_LOG_READ_FAILED", error.message, null)
+        }
+    }
+
+    /**
+     * Returns the newest Android call-log row so the CRM can establish an
+     * incremental-sync baseline without importing any history. Uses the whole
+     * telephony call log, not the filtered CRM subset.
+     */
+    @SuppressLint("MissingPermission")
+    private fun getDeviceCallLogBaseline(result: MethodChannel.Result) {
+        if (!hasPermission(Manifest.permission.READ_CALL_LOG)) {
+            result.error(
+                "PERMISSION_DENIED",
+                "Call-log access has not been granted.",
+                null,
+            )
+            return
+        }
+        val projection = arrayOf(CallLog.Calls._ID, CallLog.Calls.DATE)
+        try {
+            activity.contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                projection,
+                null,
+                null,
+                "${CallLog.Calls.DATE} DESC, ${CallLog.Calls._ID} DESC",
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idIndex = cursor.getColumnIndex(CallLog.Calls._ID)
+                    val dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE)
+                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
+                    val date = if (dateIndex >= 0) cursor.getLong(dateIndex) else 0L
+                    result.success(
+                        mapOf(
+                            "dateMillis" to date.coerceAtLeast(0L),
+                            "callLogId" to id.coerceAtLeast(0L),
+                        ),
+                    )
+                    return
+                }
+            }
+            result.success(mapOf("dateMillis" to 0L, "callLogId" to 0L))
+        } catch (error: Exception) {
+            result.error("CALL_LOG_READ_FAILED", error.message, null)
+        }
+    }
+
+    /**
+     * Returns call-log rows strictly after the composite (DATE, _ID) cursor in
+     * ascending order. The optional grace window re-reads recent rows so a
+     * delayed Android insert is not missed; callers dedupe by native reference.
+     */
+    @SuppressLint("MissingPermission")
+    private fun getDeviceCallsIncremental(call: MethodCall, result: MethodChannel.Result) {
+        if (!hasPermission(Manifest.permission.READ_CALL_LOG)) {
+            result.error(
+                "PERMISSION_DENIED",
+                "Call-log access has not been granted.",
+                null,
+            )
+            return
+        }
+        val afterDate = (call.argument<Number>("afterDateMillis")?.toLong() ?: 0L)
+            .coerceAtLeast(0L)
+        val afterId = (call.argument<Number>("afterId")?.toLong() ?: 0L)
+            .coerceAtLeast(0L)
+        val grace = (call.argument<Number>("graceMillis")?.toLong() ?: 0L)
+            .coerceAtLeast(0L)
+        val limit = (call.argument<Number>("limit")?.toInt() ?: 250)
+            .coerceIn(1, 500)
+        val lower = (afterDate - grace).coerceAtLeast(0L)
+
+        val projection = arrayOf(
+            CallLog.Calls._ID,
+            CallLog.Calls.DATE,
+            CallLog.Calls.DURATION,
+            CallLog.Calls.TYPE,
+            CallLog.Calls.NUMBER,
+            CallLog.Calls.PHONE_ACCOUNT_ID,
+            CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME,
+            CallLog.Calls.CACHED_NAME,
+        )
+
+        try {
+            val rows = mutableListOf<Map<String, Any?>>()
+            val activeSubs = activeSubscriptionInfos()
+            activity.contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                projection,
+                "${CallLog.Calls.DATE} >= ?",
+                arrayOf(lower.toString()),
+                "${CallLog.Calls.DATE} ASC, ${CallLog.Calls._ID} ASC",
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndex(CallLog.Calls._ID)
+                val dateIndex = cursor.getColumnIndex(CallLog.Calls.DATE)
+                val durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION)
+                val typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE)
+                val numberIndex = cursor.getColumnIndex(CallLog.Calls.NUMBER)
+                val accountIndex = cursor.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
+                val componentIndex =
+                    cursor.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_COMPONENT_NAME)
+                val nameIndex = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+
+                while (cursor.moveToNext() && rows.size < limit) {
+                    val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
+                    val date = if (dateIndex >= 0) cursor.getLong(dateIndex) else 0L
+                    if (grace > 0L) {
+                        if (date < lower) continue
+                    } else if (
+                        date < afterDate ||
+                        (date == afterDate && id <= afterId)
+                    ) {
+                        continue
+                    }
+                    val type = if (typeIndex >= 0) cursor.getInt(typeIndex) else 0
+                    val direction = callDirectionForType(type) ?: continue
+                    val component =
+                        if (componentIndex >= 0) cursor.getString(componentIndex) else null
+                    val account =
+                        if (accountIndex >= 0) cursor.getString(accountIndex) else null
+                    if (!isTelephonyCall(component, account)) continue
+
+                    val number =
+                        (if (numberIndex >= 0) cursor.getString(numberIndex) else null)
+                            ?.trim()
+                            .orEmpty()
+                    if (number.isBlank()) continue
+
+                    val nativeRef = nativeReferenceFor(id) ?: continue
+                    val duration = if (durationIndex >= 0) {
+                        cursor.getInt(durationIndex).coerceAtLeast(0)
+                    } else {
+                        0
+                    }
+                    val status = when (type) {
+                        CallLog.Calls.MISSED_TYPE -> "MISSED"
+                        CallLog.Calls.REJECTED_TYPE,
+                        CallLog.Calls.BLOCKED_TYPE -> "REJECTED"
+                        else -> when {
+                            duration > 0 -> "COMPLETED"
+                            direction == "OUTBOUND" -> "NO_ANSWER"
+                            else -> "MISSED"
+                        }
+                    }
+                    val resolvedSubscriptionId = resolveSubscriptionIdForCall(account, component)
+                    val subscriptionInfo = resolvedSubscriptionId?.let { subId ->
+                        activeSubs.firstOrNull { it.subscriptionId == subId }
+                    }
+                    val simIdentity = when {
+                        resolvedSubscriptionId != null -> "subId:$resolvedSubscriptionId"
+                        !account.isNullOrBlank() && !component.isNullOrBlank() ->
+                            "phoneAccount:$component#$account"
+                        !account.isNullOrBlank() -> "phoneAccount:$account"
+                        else -> null
+                    }
+                    val simIdentityStatus = when {
+                        resolvedSubscriptionId != null -> "RESOLVED"
+                        !account.isNullOrBlank() -> "PHONE_ACCOUNT_ONLY"
+                        else -> "MISSING"
+                    }
+                    rows.add(
+                        mapOf(
+                            "nativeCallReference" to nativeRef,
+                            "deviceCallLogId" to id,
+                            "phone" to number,
+                            "direction" to direction,
+                            "type" to type,
+                            "status" to status,
+                            "dateMillis" to date,
+                            "durationSeconds" to if (status == "COMPLETED") duration else 0,
+                            "startedAt" to isoUtc(date),
+                            "endedAt" to isoUtc(
+                                if (duration > 0) date + duration * 1000L else date,
+                            ),
+                            "simAccountId" to account?.takeIf { it.isNotBlank() },
+                            "simAccountComponent" to component?.takeIf { it.isNotBlank() },
+                            "simSubscriptionId" to resolvedSubscriptionId,
+                            "simSlotIndex" to subscriptionInfo?.simSlotIndex,
+                            "simCarrierName" to subscriptionInfo?.carrierName?.toString(),
+                            "simIdentity" to simIdentity,
+                            "simIdentityStatus" to simIdentityStatus,
+                            "contactName" to (
+                                if (nameIndex >= 0) cursor.getString(nameIndex) else null
+                                )?.takeIf { it.isNotBlank() },
+                        ),
+                    )
+                }
+            }
+            result.success(
+                mapOf(
+                    "rows" to rows,
+                    "hasMore" to (rows.size >= limit),
+                ),
+            )
         } catch (error: Exception) {
             result.error("CALL_LOG_READ_FAILED", error.message, null)
         }

@@ -621,6 +621,8 @@ class MobileSimCallService {
 
   /// Returns recent native call-log rows. Requires READ_CALL_LOG; the native
   /// layer reports PERMISSION_DENIED when it is missing.
+  /// Returns recent native call-log rows. Requires READ_CALL_LOG; the native
+  /// layer reports PERMISSION_DENIED when it is missing.
   static Future<List<Map<String, dynamic>>> getRecentDeviceCalls({
     required DateTime since,
     int limit = 200,
@@ -633,6 +635,43 @@ class MobileSimCallService {
     return response.whereType<Map>().map((item) {
       return Map<String, dynamic>.from(item);
     }).toList();
+  }
+
+  static Future<Map<String, dynamic>?> getDeviceCallLogBaseline() async {
+    final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getDeviceCallLogBaseline',
+    );
+    if (response == null) return null;
+    return Map<String, dynamic>.from(response);
+  }
+
+  static Future<({List<Map<String, dynamic>> rows, bool hasMore})>
+  getDeviceCallsIncremental({
+    required int afterDateMillis,
+    required int afterId,
+    int graceMillis = 0,
+    int limit = 250,
+  }) async {
+    final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getDeviceCallsIncremental',
+      {
+        'afterDateMillis': afterDateMillis,
+        'afterId': afterId,
+        'graceMillis': graceMillis,
+        'limit': limit,
+      },
+    );
+    if (response == null) {
+      return (rows: <Map<String, dynamic>>[], hasMore: false);
+    }
+    final rawRows = response['rows'];
+    final rows = rawRows is List
+        ? rawRows
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList()
+        : <Map<String, dynamic>>[];
+    return (rows: rows, hasMore: response['hasMore'] == true);
   }
 
   /// Looks for exactly one device audio file that matches this native call.

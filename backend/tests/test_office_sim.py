@@ -277,6 +277,224 @@ class TestOfficeSimCallEnforcement(OfficeSimApiTestCase):
         self.assertEqual(response.status_code, 422, response.text)
 
 
+class TestOfficeSimSyncSession(OfficeSimApiTestCase):
+    """Incremental call-log sync must never import pre-activation history."""
+
+    def _activate(self, date_ms=1_700_000_000_000, call_id=500):
+        return self.client.post(
+            "/api/office-sim/sync/activate",
+            json={"baseline_date_ms": date_ms, "baseline_id": call_id},
+        )
+
+    def _history(self, *, date_ms, call_id, subscription_id=2, **overrides):
+        body = {
+            "customer_phone": "+919111122233",
+            "call_status": "COMPLETED",
+            "duration_seconds": 20,
+            "client_call_id": f"HIST_{date_ms}_{call_id}",
+            "call_direction": "INBOUND",
+            "call_source": "MOBILE_SIM",
+            "native_call_reference": f"native-{call_id}",
+            "sim_subscription_id": subscription_id,
+            "sync_origin": "HISTORY_SYNC",
+            "native_call_date_ms": date_ms,
+            "native_call_id": call_id,
+        }
+        body.update(overrides)
+        return self.client.post("/api/ivr/manual-call", json=body)
+
+    def test_activation_captures_baseline_and_watermark(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        response = self._activate()
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["sync_status"], "ACTIVE")
+        self.assertEqual(data["sync_baseline_date_ms"], 1_700_000_000_000)
+        self.assertEqual(data["sync_baseline_id"], 500)
+        self.assertEqual(data["sync_watermark_date_ms"], 1_700_000_000_000)
+        self.assertEqual(data["sync_watermark_id"], 500)
+        self.assertIsNotNone(data["sync_activated_at"])
+
+    def test_activation_requires_a_verified_mapping(self):
+        response = self._activate()
+        self.assertEqual(response.status_code, 404, response.text)
+
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self.client.post(
+            "/api/office-sim/status",
+            json={"status": "REQUIRES_VERIFICATION", "reason": "SIM replaced"},
+        )
+        blocked = self._activate()
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+
+    def test_history_rows_before_baseline_are_rejected(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate(date_ms=1_700_000_000_000, call_id=500)
+
+        older = self._history(date_ms=1_699_999_999_000, call_id=499)
+        self.assertEqual(older.status_code, 409, older.text)
+
+        same_instant_older_id = self._history(
+            date_ms=1_700_000_000_000, call_id=499
+        )
+        self.assertEqual(same_instant_older_id.status_code, 409)
+
+        baseline_row = self._history(date_ms=1_700_000_000_000, call_id=500)
+        self.assertEqual(baseline_row.status_code, 409, baseline_row.text)
+
+        db = self.Session()
+        try:
+            self.assertEqual(db.query(CallLog).count(), 0)
+        finally:
+            db.close()
+
+    def test_history_rows_after_baseline_are_accepted(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate(date_ms=1_700_000_000_000, call_id=500)
+
+        newer = self._history(date_ms=1_700_000_001_000, call_id=501)
+        self.assertEqual(newer.status_code, 201, newer.text)
+        self.assertEqual(newer.json()["call_direction"], "INBOUND")
+
+        same_instant_newer_id = self._history(
+            date_ms=1_700_000_000_000, call_id=501
+        )
+        self.assertEqual(same_instant_newer_id.status_code, 201)
+
+    def test_history_is_rejected_when_sync_is_not_active(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        not_enabled = self._history(date_ms=1_700_000_001_000, call_id=501)
+        self.assertEqual(not_enabled.status_code, 409, not_enabled.text)
+        self.assertIn("not active", not_enabled.text)
+
+        self._activate()
+        paused = self.client.post("/api/office-sim/sync/pause")
+        self.assertEqual(paused.status_code, 200, paused.text)
+        self.assertEqual(paused.json()["sync_status"], "PAUSED")
+
+        after_pause = self._history(date_ms=1_700_000_002_000, call_id=502)
+        self.assertEqual(after_pause.status_code, 409, after_pause.text)
+
+    def test_history_is_rejected_without_an_office_sim_mapping(self):
+        response = self._history(date_ms=1_700_000_001_000, call_id=501)
+        self.assertEqual(response.status_code, 409, response.text)
+
+    def test_personal_sim_history_is_rejected(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate()
+        response = self._history(
+            date_ms=1_700_000_001_000, call_id=501, subscription_id=1
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        db = self.Session()
+        try:
+            self.assertEqual(db.query(CallLog).count(), 0)
+        finally:
+            db.close()
+
+    def test_history_requires_native_cursor_fields(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate()
+        response = self._history(
+            date_ms=1_700_000_001_000,
+            call_id=501,
+            native_call_date_ms=None,
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_progress_watermark_is_monotonic(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate(date_ms=1_700_000_000_000, call_id=500)
+
+        forward = self.client.post(
+            "/api/office-sim/sync/progress",
+            json={
+                "watermark_date_ms": 1_700_000_010_000,
+                "watermark_id": 510,
+            },
+        )
+        self.assertEqual(forward.status_code, 200, forward.text)
+        self.assertIsNotNone(forward.json()["last_successful_sync_at"])
+
+        backwards = self.client.post(
+            "/api/office-sim/sync/progress",
+            json={
+                "watermark_date_ms": 1_700_000_005_000,
+                "watermark_id": 505,
+            },
+        )
+        self.assertEqual(backwards.status_code, 422, backwards.text)
+
+        before_baseline = self.client.post(
+            "/api/office-sim/sync/progress",
+            json={
+                "watermark_date_ms": 1_600_000_000_000,
+                "watermark_id": 1,
+            },
+        )
+        self.assertEqual(before_baseline.status_code, 422, before_baseline.text)
+
+    def test_progress_is_rejected_when_paused(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate()
+        self.client.post("/api/office-sim/sync/pause")
+        response = self.client.post(
+            "/api/office-sim/sync/progress",
+            json={
+                "watermark_date_ms": 1_700_000_010_000,
+                "watermark_id": 510,
+            },
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+
+    def test_resume_establishes_a_fresh_baseline(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate(date_ms=1_700_000_000_000, call_id=500)
+        self.client.post("/api/office-sim/sync/pause")
+
+        resumed = self.client.post(
+            "/api/office-sim/sync/resume",
+            json={
+                "baseline_date_ms": 1_700_000_020_000,
+                "baseline_id": 520,
+            },
+        )
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        data = resumed.json()
+        self.assertEqual(data["sync_status"], "ACTIVE")
+        self.assertEqual(data["sync_baseline_date_ms"], 1_700_000_020_000)
+        self.assertEqual(data["sync_watermark_id"], 520)
+
+        gap_call = self._history(date_ms=1_700_000_010_000, call_id=510)
+        self.assertEqual(gap_call.status_code, 409, gap_call.text)
+
+        after_resume = self._history(date_ms=1_700_000_021_000, call_id=521)
+        self.assertEqual(after_resume.status_code, 201, after_resume.text)
+
+    def test_reverification_resets_sync_to_not_configured(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate()
+        resaved = self.client.put("/api/office-sim", json=self._mapping_body())
+        self.assertEqual(resaved.status_code, 200, resaved.text)
+        data = resaved.json()
+        self.assertEqual(data["sync_status"], "NOT_CONFIGURED")
+        self.assertIsNone(data["sync_baseline_date_ms"])
+        self.assertIsNone(data["sync_watermark_date_ms"])
+
+    def test_requires_verification_clears_the_baseline(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        self._activate()
+        response = self.client.post(
+            "/api/office-sim/status",
+            json={"status": "REQUIRES_VERIFICATION", "reason": "SIM replaced"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["sync_status"], "REQUIRES_SIM_VERIFICATION")
+        self.assertIsNone(data["sync_baseline_date_ms"])
+        self.assertIsNone(data["sync_watermark_date_ms"])
+
+
 class TestMobileCallDirectionApi(OfficeSimApiTestCase):
     """API + database + response direction for every device call outcome."""
 
