@@ -18,6 +18,17 @@ STATUS_VERIFIED = "VERIFIED"
 STATUS_REQUIRES_VERIFICATION = "REQUIRES_VERIFICATION"
 VALID_STATUSES = {STATUS_VERIFIED, STATUS_REQUIRES_VERIFICATION}
 
+SYNC_NOT_CONFIGURED = "NOT_CONFIGURED"
+SYNC_ACTIVE = "ACTIVE"
+SYNC_PAUSED = "PAUSED"
+SYNC_REQUIRES_VERIFICATION = "REQUIRES_SIM_VERIFICATION"
+VALID_SYNC_STATUSES = {
+    SYNC_NOT_CONFIGURED,
+    SYNC_ACTIVE,
+    SYNC_PAUSED,
+    SYNC_REQUIRES_VERIFICATION,
+}
+
 
 class OfficeSimMappingRequest(BaseModel):
     subscription_id: Optional[int] = None
@@ -35,6 +46,16 @@ class OfficeSimStatusRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class OfficeSimSyncBaselineRequest(BaseModel):
+    baseline_date_ms: int = Field(ge=0)
+    baseline_id: int = Field(ge=0)
+
+
+class OfficeSimSyncProgressRequest(BaseModel):
+    watermark_date_ms: int = Field(ge=0)
+    watermark_id: int = Field(ge=0)
+
+
 class OfficeSimMappingResponse(BaseModel):
     configured: bool
     id: Optional[int] = None
@@ -50,6 +71,13 @@ class OfficeSimMappingResponse(BaseModel):
     status: str = "NOT_CONFIGURED"
     verification_reason: Optional[str] = None
     verified_at: Optional[datetime] = None
+    sync_status: str = SYNC_NOT_CONFIGURED
+    sync_activated_at: Optional[datetime] = None
+    sync_baseline_date_ms: Optional[int] = None
+    sync_baseline_id: Optional[int] = None
+    sync_watermark_date_ms: Optional[int] = None
+    sync_watermark_id: Optional[int] = None
+    last_successful_sync_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
 
@@ -124,6 +152,13 @@ def serialize_mapping(mapping: Optional[OfficeSimMapping]) -> OfficeSimMappingRe
         status=mapping.status or STATUS_REQUIRES_VERIFICATION,
         verification_reason=mapping.verification_reason,
         verified_at=mapping.verified_at,
+        sync_status=mapping.sync_status or SYNC_NOT_CONFIGURED,
+        sync_activated_at=mapping.sync_activated_at,
+        sync_baseline_date_ms=mapping.sync_baseline_date_ms,
+        sync_baseline_id=mapping.sync_baseline_id,
+        sync_watermark_date_ms=mapping.sync_watermark_date_ms,
+        sync_watermark_id=mapping.sync_watermark_id,
+        last_successful_sync_at=mapping.last_successful_sync_at,
         updated_at=mapping.updated_at,
     )
 
@@ -198,6 +233,16 @@ def save_office_sim(
     mapping.status = STATUS_VERIFIED
     mapping.verification_reason = None
     mapping.verified_at = now
+    # Re-verifying a SIM always invalidates the previous sync session. The
+    # employee must explicitly enable sync again, which captures a fresh
+    # baseline so calls made before re-verification are never imported.
+    mapping.sync_status = SYNC_NOT_CONFIGURED
+    mapping.sync_activated_at = None
+    mapping.sync_baseline_date_ms = None
+    mapping.sync_baseline_id = None
+    mapping.sync_watermark_date_ms = None
+    mapping.sync_watermark_id = None
+    mapping.last_successful_sync_at = None
     mapping.updated_at = now
 
     db.commit()
@@ -235,10 +280,131 @@ def update_office_sim_status(
     if new_status == STATUS_VERIFIED:
         mapping.verification_reason = None
         mapping.verified_at = get_ist_now()
+        if mapping.sync_status == SYNC_REQUIRES_VERIFICATION:
+            mapping.sync_status = SYNC_NOT_CONFIGURED
     else:
         mapping.verification_reason = (body.reason or "").strip()[:255] or (
             "The configured Office SIM identity changed on this device."
         )
+        mapping.sync_status = SYNC_REQUIRES_VERIFICATION
+        mapping.sync_baseline_date_ms = None
+        mapping.sync_baseline_id = None
+        mapping.sync_watermark_date_ms = None
+        mapping.sync_watermark_id = None
+    mapping.updated_at = get_ist_now()
+    db.commit()
+    db.refresh(mapping)
+    return serialize_mapping(mapping)
+
+
+@router.post("/sync/activate", response_model=OfficeSimMappingResponse)
+@router.post("/sync/resume", response_model=OfficeSimMappingResponse)
+def activate_office_sim_sync(
+    body: OfficeSimSyncBaselineRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Starts (or resumes) incremental synchronization from a device baseline.
+
+    The device sends the latest Android CallLog.Calls.DATE/_ID it can see. Only
+    rows strictly newer than this baseline are eligible, so enabling or
+    resuming sync never imports historical calls.
+    """
+    employee = _require_employee(current_user, db)
+    mapping = get_office_sim_mapping(db, employee.id)
+    if mapping is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Register your Office SIM before enabling call-log sync.",
+        )
+    if (mapping.status or "").upper() != STATUS_VERIFIED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The Office SIM must be verified before enabling call-log sync.",
+        )
+    now = get_ist_now()
+    mapping.sync_status = SYNC_ACTIVE
+    mapping.sync_activated_at = now
+    mapping.sync_baseline_date_ms = body.baseline_date_ms
+    mapping.sync_baseline_id = body.baseline_id
+    mapping.sync_watermark_date_ms = body.baseline_date_ms
+    mapping.sync_watermark_id = body.baseline_id
+    mapping.last_successful_sync_at = None
+    mapping.updated_at = now
+    db.commit()
+    db.refresh(mapping)
+    return serialize_mapping(mapping)
+
+
+@router.post("/sync/pause", response_model=OfficeSimMappingResponse)
+def pause_office_sim_sync(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stops automatic history import. The next resume establishes a new baseline."""
+    employee = _require_employee(current_user, db)
+    mapping = get_office_sim_mapping(db, employee.id)
+    if mapping is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No Office SIM is configured.",
+        )
+    if mapping.sync_status == SYNC_REQUIRES_VERIFICATION:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The Office SIM must be re-verified before sync can be paused.",
+        )
+    mapping.sync_status = SYNC_PAUSED
+    mapping.updated_at = get_ist_now()
+    db.commit()
+    db.refresh(mapping)
+    return serialize_mapping(mapping)
+
+
+@router.post("/sync/progress", response_model=OfficeSimMappingResponse)
+def update_office_sim_sync_progress(
+    body: OfficeSimSyncProgressRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Persists the last successfully processed native call-log watermark.
+
+    The watermark is monotonic and may never move behind the activation
+    baseline, which prevents a client bug from re-importing history.
+    """
+    employee = _require_employee(current_user, db)
+    mapping = get_office_sim_mapping(db, employee.id)
+    if mapping is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No Office SIM is configured.",
+        )
+    if mapping.sync_status != SYNC_ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Call-log sync is not active for this Office SIM.",
+        )
+    baseline_date = mapping.sync_baseline_date_ms or 0
+    baseline_id = mapping.sync_baseline_id or 0
+    if (body.watermark_date_ms, body.watermark_id) < (baseline_date, baseline_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The sync watermark cannot move behind the activation baseline.",
+        )
+    current = (
+        mapping.sync_watermark_date_ms or 0,
+        mapping.sync_watermark_id or 0,
+    )
+    if (body.watermark_date_ms, body.watermark_id) < current:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The sync watermark cannot move backwards.",
+        )
+    mapping.sync_watermark_date_ms = body.watermark_date_ms
+    mapping.sync_watermark_id = body.watermark_id
+    mapping.last_successful_sync_at = get_ist_now()
     mapping.updated_at = get_ist_now()
     db.commit()
     db.refresh(mapping)

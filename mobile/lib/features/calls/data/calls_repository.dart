@@ -94,6 +94,9 @@ class CallsRepository {
     String? simPhoneNumber,
     String? callSource,
     String? nativeCallReference,
+    String? syncOrigin,
+    int? nativeCallDateMs,
+    int? nativeCallId,
   }) async {
     final effectivePhone = customerPhone ?? customerNumber ?? '';
     final body = {
@@ -117,6 +120,9 @@ class CallsRepository {
       if (callSource != null) 'call_source': callSource,
       if (nativeCallReference != null)
         'native_call_reference': nativeCallReference,
+      if (syncOrigin != null) 'sync_origin': syncOrigin,
+      if (nativeCallDateMs != null) 'native_call_date_ms': nativeCallDateMs,
+      if (nativeCallId != null) 'native_call_id': nativeCallId,
     };
 
     try {

@@ -24,6 +24,13 @@ class OfficeSimMapping {
   final String simFingerprint;
   final String status;
   final String? verificationReason;
+  final String syncStatus;
+  final DateTime? syncActivatedAt;
+  final int? syncBaselineDateMs;
+  final int? syncBaselineId;
+  final int? syncWatermarkDateMs;
+  final int? syncWatermarkId;
+  final DateTime? lastSuccessfulSyncAt;
 
   const OfficeSimMapping({
     this.id,
@@ -38,9 +45,20 @@ class OfficeSimMapping {
     this.simFingerprint = '',
     this.status = 'REQUIRES_VERIFICATION',
     this.verificationReason,
+    this.syncStatus = 'NOT_CONFIGURED',
+    this.syncActivatedAt,
+    this.syncBaselineDateMs,
+    this.syncBaselineId,
+    this.syncWatermarkDateMs,
+    this.syncWatermarkId,
+    this.lastSuccessfulSyncAt,
   });
 
   bool get isVerified => status == 'VERIFIED';
+  bool get syncActive => syncStatus == 'ACTIVE';
+  bool get syncPaused => syncStatus == 'PAUSED';
+  bool get syncRequiresVerification =>
+      syncStatus == 'REQUIRES_SIM_VERIFICATION';
 
   String get label {
     if (displayName.trim().isNotEmpty) return displayName.trim();
@@ -62,6 +80,13 @@ class OfficeSimMapping {
       simFingerprint: (json['sim_fingerprint'] ?? '').toString(),
       status: (json['status'] ?? 'REQUIRES_VERIFICATION').toString(),
       verificationReason: json['verification_reason']?.toString(),
+      syncStatus: (json['sync_status'] ?? 'NOT_CONFIGURED').toString(),
+      syncActivatedAt: _parseDate(json['sync_activated_at']),
+      syncBaselineDateMs: (json['sync_baseline_date_ms'] as num?)?.toInt(),
+      syncBaselineId: (json['sync_baseline_id'] as num?)?.toInt(),
+      syncWatermarkDateMs: (json['sync_watermark_date_ms'] as num?)?.toInt(),
+      syncWatermarkId: (json['sync_watermark_id'] as num?)?.toInt(),
+      lastSuccessfulSyncAt: _parseDate(json['last_successful_sync_at']),
     );
   }
 
@@ -79,9 +104,26 @@ class OfficeSimMapping {
     'sim_fingerprint': simFingerprint,
     'status': status,
     'verification_reason': verificationReason,
+    'sync_status': syncStatus,
+    'sync_activated_at': syncActivatedAt?.toIso8601String(),
+    'sync_baseline_date_ms': syncBaselineDateMs,
+    'sync_baseline_id': syncBaselineId,
+    'sync_watermark_date_ms': syncWatermarkDateMs,
+    'sync_watermark_id': syncWatermarkId,
+    'last_successful_sync_at': lastSuccessfulSyncAt?.toIso8601String(),
   };
 
-  OfficeSimMapping copyWith({String? status, String? verificationReason}) {
+  OfficeSimMapping copyWith({
+    String? status,
+    String? verificationReason,
+    String? syncStatus,
+    DateTime? syncActivatedAt,
+    int? syncBaselineDateMs,
+    int? syncBaselineId,
+    int? syncWatermarkDateMs,
+    int? syncWatermarkId,
+    DateTime? lastSuccessfulSyncAt,
+  }) {
     return OfficeSimMapping(
       id: id,
       employeeId: employeeId,
@@ -95,8 +137,21 @@ class OfficeSimMapping {
       simFingerprint: simFingerprint,
       status: status ?? this.status,
       verificationReason: verificationReason ?? this.verificationReason,
+      syncStatus: syncStatus ?? this.syncStatus,
+      syncActivatedAt: syncActivatedAt ?? this.syncActivatedAt,
+      syncBaselineDateMs: syncBaselineDateMs ?? this.syncBaselineDateMs,
+      syncBaselineId: syncBaselineId ?? this.syncBaselineId,
+      syncWatermarkDateMs: syncWatermarkDateMs ?? this.syncWatermarkDateMs,
+      syncWatermarkId: syncWatermarkId ?? this.syncWatermarkId,
+      lastSuccessfulSyncAt: lastSuccessfulSyncAt ?? this.lastSuccessfulSyncAt,
     );
   }
+}
+
+DateTime? _parseDate(Object? raw) {
+  final text = (raw ?? '').toString().trim();
+  if (text.isEmpty) return null;
+  return DateTime.tryParse(text)?.toLocal();
 }
 
 enum OfficeSimState {
@@ -210,7 +265,51 @@ class OfficeSimService {
     return mapping;
   }
 
-  static Future<OfficeSimMapping?> markRequiresVerification(String reason) async {
+  static Future<OfficeSimMapping> activateSync({
+    required int baselineDateMs,
+    required int baselineId,
+    bool resume = false,
+  }) async {
+    final response = await _client.post(
+      resume
+          ? ApiEndpoints.officeSimSyncResume
+          : ApiEndpoints.officeSimSyncActivate,
+      body: {'baseline_date_ms': baselineDateMs, 'baseline_id': baselineId},
+    );
+    final mapping = OfficeSimMapping.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+    await _cache(mapping);
+    return mapping;
+  }
+
+  static Future<OfficeSimMapping> pauseSync() async {
+    final response = await _client.post(ApiEndpoints.officeSimSyncPause);
+    final mapping = OfficeSimMapping.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+    await _cache(mapping);
+    return mapping;
+  }
+
+  static Future<OfficeSimMapping> reportSyncProgress({
+    required int watermarkDateMs,
+    required int watermarkId,
+  }) async {
+    final response = await _client.post(
+      ApiEndpoints.officeSimSyncProgress,
+      body: {'watermark_date_ms': watermarkDateMs, 'watermark_id': watermarkId},
+    );
+    final mapping = OfficeSimMapping.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+    await _cache(mapping);
+    return mapping;
+  }
+
+  static Future<OfficeSimMapping?> markRequiresVerification(
+    String reason,
+  ) async {
     try {
       final response = await _client.post(
         ApiEndpoints.officeSimStatus,
@@ -231,6 +330,11 @@ class OfficeSimService {
     final updated = local.copyWith(
       status: 'REQUIRES_VERIFICATION',
       verificationReason: reason,
+      syncStatus: 'REQUIRES_SIM_VERIFICATION',
+      syncBaselineDateMs: 0,
+      syncBaselineId: 0,
+      syncWatermarkDateMs: 0,
+      syncWatermarkId: 0,
     );
     await _cache(updated);
     return updated;
@@ -255,7 +359,9 @@ class OfficeSimService {
   ///
   /// Any missing SIM, changed subscription/phone-account identity or changed
   /// fingerprint pauses synchronization and requires explicit re-verification.
-  static Future<OfficeSimEvaluation> evaluate({bool reportChange = true}) async {
+  static Future<OfficeSimEvaluation> evaluate({
+    bool reportChange = true,
+  }) async {
     if (kIsWeb || !Platform.isAndroid) {
       return const OfficeSimEvaluation(
         state: OfficeSimState.unsupported,
@@ -360,7 +466,8 @@ class OfficeSimService {
     }
     final token = (simAccountId ?? '').trim();
     if (token.isEmpty) return false;
-    if (mapping.subscriptionId != null && token == 'subId:${mapping.subscriptionId}') {
+    if (mapping.subscriptionId != null &&
+        token == 'subId:${mapping.subscriptionId}') {
       return true;
     }
     final account = (mapping.phoneAccountId ?? '').trim();

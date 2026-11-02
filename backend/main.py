@@ -284,6 +284,38 @@ async def startup_db_client():
             except Exception as ex:
                 print(f"Call logs column sync check: {ex}")
 
+            # employee_office_sim table schema sync (incremental call-log sync)
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM employee_office_sim"))
+                sim_cols = [row[0] for row in result.fetchall()]
+                if sim_cols:
+                    missing_sim_cols = {
+                        "sync_status": (
+                            "VARCHAR(30) NOT NULL DEFAULT 'NOT_CONFIGURED'"
+                        ),
+                        "sync_activated_at": "DATETIME NULL",
+                        "sync_baseline_date_ms": "BIGINT NULL",
+                        "sync_baseline_id": "BIGINT NULL",
+                        "sync_watermark_date_ms": "BIGINT NULL",
+                        "sync_watermark_id": "BIGINT NULL",
+                        "last_successful_sync_at": "DATETIME NULL",
+                    }
+                    for col_name, col_type in missing_sim_cols.items():
+                        if col_name not in sim_cols:
+                            conn.execute(
+                                text(
+                                    f"ALTER TABLE employee_office_sim "
+                                    f"ADD COLUMN {col_name} {col_type}"
+                                )
+                            )
+                            conn.commit()
+                            print(
+                                "Auto-added missing column "
+                                f"'{col_name}' to 'employee_office_sim'."
+                            )
+            except Exception as ex:
+                print(f"Office SIM column sync check: {ex}")
+
             # lead_assignments table schema sync
             try:
                 result = conn.execute(text("SHOW COLUMNS FROM lead_assignments"))

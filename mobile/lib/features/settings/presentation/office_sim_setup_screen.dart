@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/network/api_exceptions.dart';
+import '../../../core/services/device_call_log_sync_service.dart';
 import '../../../core/services/mobile_sim_call_service.dart';
 import '../../../core/services/office_sim_service.dart';
+import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/wacrm_button.dart';
 
 /// Lets an employee register the SIM card that belongs to the company.
@@ -25,6 +27,7 @@ class OfficeSimSetupScreen extends StatefulWidget {
 class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
   bool _loading = true;
   bool _saving = false;
+  bool _syncBusy = false;
   String? _error;
   String? _notice;
   MobileSimPermissionStatus? _permission;
@@ -44,7 +47,8 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
     if (!_isAndroid) {
       setState(() {
         _loading = false;
-        _error = 'Office SIM configuration is available in the Android app only.';
+        _error =
+            'Office SIM configuration is available in the Android app only.';
       });
       return;
     }
@@ -117,7 +121,9 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Office SIM verified. CRM call sync is now active.'),
+          content: Text(
+            'Office SIM verified. Enable call-log sync to import only new calls.',
+          ),
           backgroundColor: AppColors.success,
         ),
       );
@@ -168,6 +174,124 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
     });
   }
 
+  /// Enables or resumes incremental call-log sync.
+  ///
+  /// A baseline is captured *before* the backend activates the session, so
+  /// every call already present in Android's call log is excluded. Resuming
+  /// after a pause behaves identically: calls made while paused are skipped.
+  Future<void> _startSync({required bool resume}) async {
+    final mapping = _mapping;
+    if (mapping == null) {
+      setState(() => _notice = 'Save your Office SIM before enabling sync.');
+      return;
+    }
+    setState(() {
+      _syncBusy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      var permission = await MobileSimCallService.permissionStatus();
+      if (!permission.readCallLog) {
+        permission = await MobileSimCallService.requestPermissions();
+      }
+      if (!permission.readCallLog) {
+        if (!mounted) return;
+        setState(() {
+          _permission = permission;
+          _syncBusy = false;
+          _notice =
+              'Call-log access is required to synchronize calls. Allow it in '
+              'Android settings, then try again.';
+        });
+        await MobileSimCallService.openAppSettings();
+        return;
+      }
+
+      final baseline = await DeviceCallLogSyncService.captureBaseline();
+      if (baseline == null) {
+        if (!mounted) return;
+        setState(() {
+          _syncBusy = false;
+          _error =
+              'Unable to read the Android call log, so a safe sync baseline '
+              'could not be created. No calls were imported.';
+        });
+        return;
+      }
+
+      final updated = await OfficeSimService.activateSync(
+        baselineDateMs: baseline.dateMillis,
+        baselineId: baseline.callLogId,
+        resume: resume,
+      );
+      if (!mounted) return;
+      setState(() {
+        _mapping = updated;
+        _syncBusy = false;
+        _permission = permission;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            resume
+                ? 'Sync resumed. Calls made while paused will not be imported.'
+                : 'Sync enabled. Only calls received after now will be imported.',
+          ),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _error = error.message;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _error = 'Unable to enable call-log sync: $error';
+      });
+    }
+  }
+
+  Future<void> _pauseSync() async {
+    setState(() {
+      _syncBusy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      final updated = await OfficeSimService.pauseSync();
+      if (!mounted) return;
+      setState(() {
+        _mapping = updated;
+        _syncBusy = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sync paused. No calls will be imported until you resume.',
+          ),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _error = error.message;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _error = 'Unable to pause call-log sync: $error';
+      });
+    }
+  }
+
   SimAccount? _selectedSim() {
     for (final sim in _sims) {
       if (sim.subscriptionId == _selectedSubscriptionId) return sim;
@@ -210,12 +334,15 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
               )
             else ...[
               if (_error != null) _buildMessage(_error!, AppColors.danger),
-              if (_notice != null)
-                _buildMessage(_notice!, AppColors.warning),
+              if (_notice != null) _buildMessage(_notice!, AppColors.warning),
               if (_permission != null && !_permission!.readPhoneState)
                 _buildPermissionCard()
               else ...[
                 _buildMappingStatus(),
+                if (_mapping != null) ...[
+                  const SizedBox(height: 16),
+                  _buildSyncCard(_mapping!),
+                ],
                 const SizedBox(height: 16),
                 _buildSimList(),
                 const SizedBox(height: 18),
@@ -395,7 +522,10 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
           const SizedBox(height: 8),
           _buildDetailRow('SIM', mapping.label),
           if (mapping.simSlot != null)
-            _buildDetailRow('Slot', 'SIM ${mapping.simSlot! + 1} (display only)'),
+            _buildDetailRow(
+              'Slot',
+              'SIM ${mapping.simSlot! + 1} (display only)',
+            ),
           if ((mapping.phoneNumber ?? '').isNotEmpty)
             _buildDetailRow('Number', mapping.phoneNumber!),
           if (mapping.subscriptionId != null)
@@ -410,8 +540,7 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
                 style: TextStyle(fontSize: 11.5, color: AppColors.warning),
               ),
             ),
-          if (!verified &&
-              (mapping.verificationReason ?? '').trim().isNotEmpty)
+          if (!verified && (mapping.verificationReason ?? '').trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
@@ -428,6 +557,116 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
     );
   }
 
+  Widget _buildSyncCard(OfficeSimMapping mapping) {
+    final status = mapping.syncStatus;
+    final (label, color) = switch (status) {
+      'ACTIVE' => ('Sync active', AppColors.success),
+      'PAUSED' => ('Sync paused', AppColors.warning),
+      'REQUIRES_SIM_VERIFICATION' => (
+        'Re-verification required',
+        AppColors.danger,
+      ),
+      _ => ('Sync not enabled', AppColors.textMuted),
+    };
+    final canEnable =
+        mapping.isVerified &&
+        !mapping.syncActive &&
+        !mapping.syncRequiresVerification;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.sync_rounded, size: 18, color: color),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Enabling sync captures the current Android call log as a '
+            'baseline. Calls from before that moment, including calls made '
+            'while sync was paused, are never imported.',
+            style: TextStyle(
+              fontSize: 11.5,
+              height: 1.4,
+              color: AppColors.textMuted,
+            ),
+          ),
+          if (mapping.syncActivatedAt != null)
+            _buildDetailRow(
+              'Activated',
+              DateFormatter.formatDateTime(mapping.syncActivatedAt),
+            ),
+          if (mapping.lastSuccessfulSyncAt != null)
+            _buildDetailRow(
+              'Last sync',
+              DateFormatter.formatDateTime(mapping.lastSuccessfulSyncAt),
+            ),
+          if (mapping.syncBaselineDateMs != null &&
+              mapping.syncBaselineDateMs! > 0)
+            _buildDetailRow(
+              'Baseline',
+              DateFormatter.formatDateTime(
+                DateTime.fromMillisecondsSinceEpoch(
+                  mapping.syncBaselineDateMs!,
+                ),
+              ),
+            ),
+          if (mapping.syncRequiresVerification)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'Replace or re-verify the Office SIM below, then enable sync '
+                'again to create a fresh baseline.',
+                style: TextStyle(fontSize: 11.5, color: AppColors.warning),
+              ),
+            ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              if (canEnable)
+                Expanded(
+                  child: WacrmButton(
+                    text: mapping.syncPaused ? 'Resume sync' : 'Enable sync',
+                    icon: Icons.play_arrow_rounded,
+                    isLoading: _syncBusy,
+                    onPressed: _syncBusy
+                        ? null
+                        : () => _startSync(resume: mapping.syncPaused),
+                  ),
+                )
+              else if (mapping.syncActive)
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _syncBusy ? null : _pauseSync,
+                    icon: const Icon(Icons.pause_rounded, size: 18),
+                    label: const Text('Pause sync'),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDetailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -438,7 +677,10 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
             width: 100,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 11.5, color: AppColors.textMuted),
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: AppColors.textMuted,
+              ),
             ),
           ),
           Expanded(
