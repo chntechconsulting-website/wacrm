@@ -7,6 +7,7 @@ import '../../../core/services/doocti_call_service.dart';
 import '../../../core/services/mobile_call_recording_manager.dart';
 import '../../../core/services/mobile_recording_service.dart';
 import '../../../core/services/mobile_sim_call_service.dart';
+import '../../../core/services/office_sim_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
@@ -222,6 +223,35 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       context.read<AuthProvider>().currentUser?.id.toString() ?? 'default';
 
   Future<void> _attachRecording(CallLogModel call) async {
+    // Verify the call belongs to the registered Office SIM before the picker or
+    // matcher runs. Personal-SIM recordings must never be offered for import.
+    final mapping = await OfficeSimService.fetch();
+    if (mapping != null) {
+      final allowed =
+          mapping.isVerified &&
+          OfficeSimService.callMatches(
+            mapping,
+            simAccountId: call.simAccountId,
+            subscriptionId: call.simSubscriptionId,
+          );
+      if (!allowed) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              mapping.isVerified
+                  ? 'This call was not handled by your registered Office SIM. '
+                        'Its recording cannot be imported.'
+                  : 'Your Office SIM must be re-verified before recordings can '
+                        'be imported.',
+            ),
+            backgroundColor: const Color(0xFFB45309),
+          ),
+        );
+        return;
+      }
+    }
+
     final employeeKey = _employeeKey;
     final consented = await RecordingConsentService.ensureConsent(
       context,
@@ -372,6 +402,8 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       recording: recording,
       consent: true,
       callDurationSeconds: call.durationSeconds,
+      simAccountId: call.simAccountId,
+      simSubscriptionId: call.simSubscriptionId,
     );
     if (!mounted) return;
     final uploaded =

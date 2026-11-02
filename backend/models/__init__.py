@@ -17,6 +17,7 @@ from models.quotation import Quotation
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.role import Role, RolePermission
 from models.sales_target import SalesTarget
+from models.office_sim import OfficeSimMapping
 
 __all__ = [
     "Base",
@@ -48,5 +49,6 @@ __all__ = [
     "FinanceHandoff",
     "SupportHandoff",
     "WorkflowTimelineEvent",
-    "SalesTarget"
+    "SalesTarget",
+    "OfficeSimMapping",
 ]

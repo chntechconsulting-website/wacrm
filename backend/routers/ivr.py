@@ -44,6 +44,11 @@ from integrations.ivr.schemas import (
     IVRConfigStatusResponse
 )
 from integrations.ivr.webhook import handle_incoming_ivr_webhook
+from routers.office_sim import (
+    STATUS_VERIFIED,
+    get_office_sim_mapping,
+    sim_identity_matches,
+)
 
 router = APIRouter(prefix="/ivr", tags=["IVR Telephony Integration"])
 
@@ -733,6 +738,33 @@ def log_manual_call_endpoint(
     employee_id = employee.id if employee else None
     employee_phone = employee.phone if (employee and employee.phone) else None
 
+    # Fail closed: once an Office SIM is registered, a mobile call may only be
+    # logged if its native SIM identity matches that exact mapping. Personal SIM
+    # calls and calls with missing/ambiguous SIM metadata never reach the CRM.
+    is_device_sim_call = (
+        str(body.call_source or "").strip().upper() in ("MOBILE_SIM", "DIRECT_DIAL")
+        or bool((body.native_call_reference or "").strip())
+    )
+    if is_device_sim_call and employee_id is not None:
+        mapping = get_office_sim_mapping(db, employee_id)
+        if mapping is not None:
+            if (mapping.status or "").upper() != STATUS_VERIFIED:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "The Office SIM mapping requires verification on this "
+                        "device. Automatic call synchronization is paused."
+                    ),
+                )
+            if not sim_identity_matches(mapping, body.sim_account_id):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "This call was not handled by the registered Office SIM. "
+                        "Personal SIM calls are not synchronized to the CRM."
+                    ),
+                )
+
     # Permission check for employee
     if current_user.role in ["EMPLOYEE", "SUPPORT", "SUPPORT_MANAGER"] and employee:
         if body.lead_id:
@@ -880,6 +912,28 @@ async def upload_mobile_call_recording(
                 "calls. DooCTI recordings are resolved automatically."
             ),
         )
+
+    # Recording upload is also fail-closed: a recording may only be attached to
+    # a call that the registered Office SIM actually handled. The SIM identity
+    # is stored on the call row when it is first synchronized.
+    office_sim = get_office_sim_mapping(db, call.employee_id)
+    if office_sim is not None and provider_upper in ("MOBILE_SIM", "DIRECT_DIAL"):
+        if (office_sim.status or "").upper() != STATUS_VERIFIED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "The Office SIM mapping requires verification. Recording "
+                    "import is paused until the SIM is re-verified."
+                ),
+            )
+        if not sim_identity_matches(office_sim, call.sim_account_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "This call was not handled by the registered Office SIM, so "
+                    "its recording cannot be imported."
+                ),
+            )
 
     recording_source = str(source or "UPLOAD").strip().upper()
     if recording_source not in ("UPLOAD", "DEVICE"):

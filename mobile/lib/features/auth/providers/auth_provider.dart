@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/constants/api_endpoints.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/token_storage.dart';
+import '../../../core/services/office_sim_service.dart';
 import '../data/auth_repository.dart';
 import '../models/user_model.dart';
 
@@ -60,6 +61,7 @@ class AuthProvider extends ChangeNotifier {
         // If token invalid, unauthenticate; if network error, keep cached user
         if (e.toString().contains('401') || e.toString().contains('expired')) {
           await TokenStorage.clearSession();
+          await OfficeSimService.clearLocalCache();
           _currentUser = null;
           _status = AuthStatus.unauthenticated;
         } else if (_currentUser != null) {
@@ -104,6 +106,7 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     await _repository.logout();
+    await OfficeSimService.clearLocalCache();
     _currentUser = null;
     _status = AuthStatus.unauthenticated;
     notifyListeners();

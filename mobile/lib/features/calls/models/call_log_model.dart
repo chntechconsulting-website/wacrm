@@ -17,6 +17,9 @@ class CallLogModel {
   final String? provider;
   final String? callSource;
   final String? nativeCallReference;
+  final String? simAccountId;
+  final int? simSubscriptionId;
+  final int? simSlot;
   final String? simLabel;
   final String? createdAt;
   final String? startedAt;
@@ -39,6 +42,9 @@ class CallLogModel {
     this.provider,
     this.callSource,
     this.nativeCallReference,
+    this.simAccountId,
+    this.simSubscriptionId,
+    this.simSlot,
     this.simLabel,
     this.createdAt,
     this.startedAt,
@@ -104,6 +110,9 @@ class CallLogModel {
       provider: json['provider'],
       callSource: json['call_source'],
       nativeCallReference: json['native_call_reference'],
+      simAccountId: json['sim_account_id']?.toString(),
+      simSubscriptionId: (json['sim_subscription_id'] as num?)?.toInt(),
+      simSlot: (json['sim_slot'] as num?)?.toInt(),
       simLabel: json['sim_label'],
       createdAt: json['created_at'] ?? json['started_at'],
       startedAt: json['started_at'],

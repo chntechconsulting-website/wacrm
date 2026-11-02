@@ -5,6 +5,7 @@ import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
 import 'mobile_call_recording_manager.dart';
 import 'mobile_sim_call_service.dart';
+import 'office_sim_service.dart';
 
 /// One row from the Android device call log.
 @immutable
@@ -18,6 +19,12 @@ class DeviceCallLogEntry {
   final String? startedAt;
   final String? endedAt;
   final String? simAccountId;
+  final String? simAccountComponent;
+  final int? simSubscriptionId;
+  final int? simSlotIndex;
+  final String? simCarrierName;
+  final String? simIdentity;
+  final String? simIdentityStatus;
   final String? contactName;
 
   const DeviceCallLogEntry({
@@ -30,6 +37,12 @@ class DeviceCallLogEntry {
     this.startedAt,
     this.endedAt,
     this.simAccountId,
+    this.simAccountComponent,
+    this.simSubscriptionId,
+    this.simSlotIndex,
+    this.simCarrierName,
+    this.simIdentity,
+    this.simIdentityStatus,
     this.contactName,
   });
 
@@ -37,6 +50,14 @@ class DeviceCallLogEntry {
       nativeReference.trim().isNotEmpty &&
       phone.trim().isNotEmpty &&
       (direction == 'INBOUND' || direction == 'OUTBOUND');
+
+  /// A call can only be attributed to a SIM when Android exposed an exact
+  /// subscription or phone-account identity. Missing/ambiguous metadata fails
+  /// closed instead of guessing from the slot.
+  bool get hasSimIdentity =>
+      (simIdentity ?? '').trim().isNotEmpty ||
+      (simAccountId ?? '').trim().isNotEmpty ||
+      simSubscriptionId != null;
 
   DateTime? get startedDateTime {
     final raw = startedAt;
@@ -66,6 +87,12 @@ class DeviceCallLogEntry {
       startedAt: _text(map['startedAt']),
       endedAt: _text(map['endedAt']),
       simAccountId: _text(map['simAccountId']),
+      simAccountComponent: _text(map['simAccountComponent']),
+      simSubscriptionId: _int(map['simSubscriptionId']),
+      simSlotIndex: _int(map['simSlotIndex']),
+      simCarrierName: _text(map['simCarrierName']),
+      simIdentity: _text(map['simIdentity']),
+      simIdentityStatus: _text(map['simIdentityStatus']),
       contactName: _text(map['contactName']),
     );
   }
@@ -87,15 +114,32 @@ class DeviceCallLogSyncResult {
   final int recordingsUploaded;
   final bool permissionDenied;
   final String? error;
+  /// Office SIM gate state for this pass. Only `verified` allows any call to
+  /// reach the CRM.
+  final OfficeSimState officeSimState;
+  /// Rows skipped because they belonged to another (personal) SIM.
+  final int skippedPersonalSim;
+  /// Rows skipped because Android exposed no exact SIM identity.
+  final int skippedMissingIdentity;
+  final String? officeSimMessage;
 
   const DeviceCallLogSyncResult({
     this.synced = 0,
     this.recordingsUploaded = 0,
     this.permissionDenied = false,
     this.error,
+    this.officeSimState = OfficeSimState.notConfigured,
+    this.skippedPersonalSim = 0,
+    this.skippedMissingIdentity = 0,
+    this.officeSimMessage,
   });
 
   bool get hasChanges => synced > 0 || recordingsUploaded > 0;
+
+  bool get isOfficeSimBlocked =>
+      officeSimState == OfficeSimState.notConfigured ||
+      officeSimState == OfficeSimState.requiresVerification ||
+      officeSimState == OfficeSimState.unsupported;
 }
 
 /// Synchronizes the device's own call history with the CRM.
@@ -130,6 +174,17 @@ class DeviceCallLogSyncService {
         return const DeviceCallLogSyncResult(permissionDenied: true);
       }
 
+      // Fail closed at the module boundary: automatic history sync only runs
+      // for a verified Office SIM, and only for rows that exactly match it.
+      final officeSim = await OfficeSimService.evaluate();
+      if (!officeSim.canSync || officeSim.mapping == null) {
+        return DeviceCallLogSyncResult(
+          officeSimState: officeSim.state,
+          officeSimMessage: officeSim.message,
+        );
+      }
+      final mapping = officeSim.mapping!;
+
       final prefs = await SharedPreferences.getInstance();
       final scope = employeeKey.trim().isEmpty ? 'default' : employeeKey.trim();
       final lastKey = '${_lastSyncKey}_$scope';
@@ -155,6 +210,8 @@ class DeviceCallLogSyncService {
       final repository = CallsRepository();
       var synced = 0;
       var recordings = 0;
+      var skippedPersonal = 0;
+      var skippedMissingIdentity = 0;
       final consented = autoUploadRecordings
           ? await RecordingConsentService.hasConsent(scope)
           : false;
@@ -163,6 +220,29 @@ class DeviceCallLogSyncService {
         final entry = DeviceCallLogEntry.fromMap(raw);
         if (!entry.isUsable) continue;
         if (handled.contains(entry.nativeReference)) continue;
+
+        // Never guess SIM identity. A row without an exact subscription or
+        // phone-account token is dropped instead of being attributed by slot.
+        if (!entry.hasSimIdentity) {
+          skippedMissingIdentity += 1;
+          debugPrint(
+            '[OfficeSIM] Skipped device call: SIM identity missing.',
+          );
+          continue;
+        }
+        final entryIdentity = entry.simIdentity ?? entry.simAccountId;
+        final isOfficeCall = OfficeSimService.callMatches(
+          mapping,
+          subscriptionId: entry.simSubscriptionId,
+          simAccountId: entryIdentity,
+        );
+        if (!isOfficeCall) {
+          skippedPersonal += 1;
+          debugPrint(
+            '[OfficeSIM] Skipped device call: handled by a non-office SIM.',
+          );
+          continue;
+        }
 
         try {
           final response = await repository.logManualCall(
@@ -176,7 +256,9 @@ class DeviceCallLogSyncService {
             callDirection: entry.direction,
             startedAt: entry.startedAt,
             endedAt: entry.endedAt,
-            simAccountId: entry.simAccountId,
+            simAccountId: entryIdentity,
+            simSlot: entry.simSlotIndex,
+            simLabel: entry.simCarrierName,
             callSource: 'MOBILE_SIM',
             nativeCallReference: entry.nativeReference,
           );
@@ -205,6 +287,8 @@ class DeviceCallLogSyncService {
                   recording: match,
                   consent: true,
                   callDurationSeconds: entry.durationSeconds,
+                  simAccountId: entryIdentity,
+                  simSubscriptionId: entry.simSubscriptionId,
                 );
                 if (outcome == RecordingUploadOutcome.uploaded ||
                     outcome == RecordingUploadOutcome.duplicate) {
@@ -227,6 +311,10 @@ class DeviceCallLogSyncService {
       return DeviceCallLogSyncResult(
         synced: synced,
         recordingsUploaded: recordings,
+        officeSimState: officeSim.state,
+        skippedPersonalSim: skippedPersonal,
+        skippedMissingIdentity: skippedMissingIdentity,
+        officeSimMessage: officeSim.message,
       );
     } catch (error) {
       return DeviceCallLogSyncResult(error: error.toString());
@@ -244,6 +332,21 @@ class DeviceCallLogSyncService {
     required String employeeKey,
   }) async {
     if (!isSupported || result.hasRecording || result.durationSeconds <= 0) {
+      return false;
+    }
+    final identity = (result.simIdentity ?? '').trim().isNotEmpty
+        ? result.simIdentity!.trim()
+        : (result.simSubscriptionId != null
+              ? 'subId:${result.simSubscriptionId}'
+              : (result.simAccountId ?? '').trim());
+    final mapping = await OfficeSimService.fetch();
+    if (mapping != null &&
+        (!mapping.isVerified ||
+            !OfficeSimService.callMatches(
+              mapping,
+              subscriptionId: result.simSubscriptionId,
+              simAccountId: identity,
+            ))) {
       return false;
     }
     final consented = await RecordingConsentService.hasConsent(employeeKey);
@@ -268,6 +371,8 @@ class DeviceCallLogSyncService {
         recording: match,
         consent: true,
         callDurationSeconds: result.durationSeconds,
+        simAccountId: identity.isEmpty ? null : identity,
+        simSubscriptionId: result.simSubscriptionId,
       );
       return outcome == RecordingUploadOutcome.uploaded ||
           outcome == RecordingUploadOutcome.duplicate;

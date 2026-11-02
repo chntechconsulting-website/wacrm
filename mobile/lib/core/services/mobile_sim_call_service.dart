@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
+import 'office_sim_service.dart';
 
 /// A SIM subscription reported by Android's SubscriptionManager.
 class SimAccount {
@@ -15,6 +16,11 @@ class SimAccount {
   final String displayName;
   final String? phoneNumber;
   final bool isDefault;
+  final String? phoneAccountId;
+  final String? phoneAccountComponent;
+  final String? simFingerprint;
+  final bool isEmbedded;
+  final bool isRemovable;
 
   const SimAccount({
     required this.subscriptionId,
@@ -23,12 +29,28 @@ class SimAccount {
     required this.displayName,
     this.phoneNumber,
     this.isDefault = false,
+    this.phoneAccountId,
+    this.phoneAccountComponent,
+    this.simFingerprint,
+    this.isEmbedded = false,
+    this.isRemovable = false,
   });
 
   String get label {
     if (displayName.trim().isNotEmpty) return displayName.trim();
     if (carrierName.trim().isNotEmpty) return carrierName.trim();
     return 'SIM ${slotIndex + 1}';
+  }
+
+  /// Exact identity token stored on CRM call rows.
+  String? get identityToken {
+    if (subscriptionId >= 0) return 'subId:$subscriptionId';
+    final account = (phoneAccountId ?? '').trim();
+    if (account.isEmpty) return null;
+    final component = (phoneAccountComponent ?? '').trim();
+    return component.isEmpty
+        ? 'phoneAccount:$account'
+        : 'phoneAccount:$component#$account';
   }
 
   factory SimAccount.fromMap(Map<dynamic, dynamic> map) {
@@ -39,6 +61,11 @@ class SimAccount {
       displayName: _asString(map['displayName']) ?? '',
       phoneNumber: _asString(map['phoneNumber']),
       isDefault: map['isDefault'] == true,
+      phoneAccountId: _asString(map['phoneAccountId']),
+      phoneAccountComponent: _asString(map['phoneAccountComponent']),
+      simFingerprint: _asString(map['simFingerprint']),
+      isEmbedded: map['isEmbedded'] == true,
+      isRemovable: map['isRemovable'] == true,
     );
   }
 }
@@ -95,6 +122,10 @@ class MobileSimCallResult {
   final String? answeredAt;
   final String? endedAt;
   final String? simAccountId;
+  final int? simSubscriptionId;
+  final String? simAccountComponent;
+  final String? simIdentity;
+  final String? simIdentityStatus;
   final String? simLabel;
   final int? simSlot;
   final String? simPhoneNumber;
@@ -117,6 +148,10 @@ class MobileSimCallResult {
     this.answeredAt,
     this.endedAt,
     this.simAccountId,
+    this.simSubscriptionId,
+    this.simAccountComponent,
+    this.simIdentity,
+    this.simIdentityStatus,
     this.simLabel,
     this.simSlot,
     this.simPhoneNumber,
@@ -159,6 +194,10 @@ class MobileSimCallResult {
       answeredAt: _asString(map['answeredAt']),
       endedAt: _asString(map['endedAt']),
       simAccountId: _asString(map['simAccountId']),
+      simSubscriptionId: _asInt(map['simSubscriptionId']),
+      simAccountComponent: _asString(map['simAccountComponent']),
+      simIdentity: _asString(map['simIdentity']),
+      simIdentityStatus: _asString(map['simIdentityStatus']),
       simLabel: _asString(map['simLabel']),
       simSlot: _asInt(map['simSlot']),
       simPhoneNumber: _asString(map['simPhoneNumber']),
@@ -276,6 +315,21 @@ class MobileSimCallService {
   }) async {
     final callId = newCallId();
     final startedAt = DateTime.now().toUtc().toIso8601String();
+    final identity = sim?.identityToken;
+    // When an Office SIM is registered, an attempt from any other SIM must not
+    // create a CRM row. The dialer already restricts selection, so this is a
+    // second line of defence.
+    final mapping = await OfficeSimService.fetch();
+    if (mapping != null &&
+        (sim == null ||
+            !mapping.isVerified ||
+            !OfficeSimService.callMatches(
+              mapping,
+              subscriptionId: sim.subscriptionId >= 0 ? sim.subscriptionId : null,
+              simAccountId: identity,
+            ))) {
+      return callId;
+    }
     try {
       await CallsRepository()
           .logManualCall(
@@ -287,7 +341,7 @@ class MobileSimCallService {
             clientCallId: callId,
             callDirection: 'OUTBOUND',
             startedAt: startedAt,
-            simAccountId: sim == null ? null : 'subId:${sim.subscriptionId}',
+            simAccountId: identity,
             simLabel: sim?.label,
             simSlot: sim?.slotIndex,
             simPhoneNumber: sim?.phoneNumber,
@@ -308,7 +362,20 @@ class MobileSimCallService {
     int? leadId,
     String? contactName,
     String? reason,
+    SimAccount? sim,
   }) async {
+    final identity = sim?.identityToken;
+    final mapping = await OfficeSimService.fetch();
+    if (mapping != null &&
+        (sim == null ||
+            !mapping.isVerified ||
+            !OfficeSimService.callMatches(
+              mapping,
+              subscriptionId: sim.subscriptionId >= 0 ? sim.subscriptionId : null,
+              simAccountId: identity,
+            ))) {
+      return;
+    }
     try {
       await CallsRepository()
           .logManualCall(
@@ -323,6 +390,8 @@ class MobileSimCallService {
             callDirection: 'OUTBOUND',
             startedAt: DateTime.now().toUtc().toIso8601String(),
             endedAt: DateTime.now().toUtc().toIso8601String(),
+            simAccountId: identity,
+            simSlot: sim?.slotIndex,
             callSource: 'MOBILE_SIM',
           )
           .timeout(const Duration(seconds: 8));
@@ -416,6 +485,25 @@ class MobileSimCallService {
     MobileSimCallResult result,
     CallsProvider callsProvider,
   ) async {
+    final identity = (result.simIdentity ?? '').trim().isNotEmpty
+        ? result.simIdentity!.trim()
+        : (result.simSubscriptionId != null
+              ? 'subId:${result.simSubscriptionId}'
+              : (result.simAccountId ?? '').trim());
+    // Fail closed: once an Office SIM is registered, a live result from any
+    // other SIM (or with no exact SIM identity) never reaches the CRM.
+    final mapping = await OfficeSimService.fetch();
+    if (mapping != null) {
+      if (!mapping.isVerified ||
+          !OfficeSimService.callMatches(
+            mapping,
+            subscriptionId: result.simSubscriptionId,
+            simAccountId: identity,
+          )) {
+        return false;
+      }
+    }
+
     final repository = CallsRepository();
     try {
       final response = await repository.logManualCall(
@@ -432,7 +520,7 @@ class MobileSimCallService {
         answeredAt: result.answeredAt,
         endedAt: result.endedAt,
         recordingUrl: result.hasRecording ? result.recordingUrl : null,
-        simAccountId: result.simAccountId,
+        simAccountId: identity.isEmpty ? null : identity,
         simLabel: result.simLabel,
         simSlot: result.simSlot,
         simPhoneNumber: result.simPhoneNumber,

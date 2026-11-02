@@ -3,6 +3,7 @@ package com.wacrm.mobile
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -30,6 +31,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -660,9 +662,8 @@ class MobileSimCallManager(
         }
 
         try {
-            val manager = activity.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
-                as? SubscriptionManager
-            if (manager == null) {
+            val infos = activeSubscriptionInfos()
+            if (infos.isEmpty()) {
                 result.success(emptyList<Map<String, Any?>>())
                 return
             }
@@ -677,12 +678,6 @@ class MobileSimCallManager(
                 -1
             }
 
-            val infos = try {
-                manager.activeSubscriptionInfoList ?: emptyList()
-            } catch (_: SecurityException) {
-                emptyList()
-            }
-
             val accounts = infos.map { info ->
                 val number = try {
                     if (hasPermission(Manifest.permission.READ_PHONE_NUMBERS)) {
@@ -693,6 +688,7 @@ class MobileSimCallManager(
                 } catch (_: Exception) {
                     null
                 }
+                val handle = findPhoneAccountHandleForSubscription(info.subscriptionId)
 
                 mapOf<String, Any?>(
                     "subscriptionId" to info.subscriptionId,
@@ -701,6 +697,13 @@ class MobileSimCallManager(
                     "displayName" to (info.displayName?.toString() ?: ""),
                     "phoneNumber" to number,
                     "isDefault" to (info.subscriptionId == defaultSubId),
+                    "phoneAccountId" to handle?.id,
+                    "phoneAccountComponent" to handle?.componentName?.flattenToString(),
+                    "simFingerprint" to simFingerprint(info, handle, number),
+                    "isEmbedded" to (
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                            info.isEmbedded
+                        ),
                 )
             }.sortedBy { (it["slotIndex"] as? Int) ?: 0 }
 
@@ -708,6 +711,105 @@ class MobileSimCallManager(
         } catch (error: Exception) {
             result.error("SIM_READ_FAILED", error.message, null)
         }
+    }
+
+    private fun activeSubscriptionInfos() = try {
+        val manager = activity.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+            as? SubscriptionManager
+        manager?.activeSubscriptionInfoList ?: emptyList()
+    } catch (_: SecurityException) {
+        emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    private fun telecomManager(): TelecomManager? =
+        activity.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+
+    private fun telephonyManager(): TelephonyManager? =
+        activity.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+
+    /**
+     * Resolves a phone account to its subscription using only public Android
+     * APIs. Below Android 11 no public API exposes this, so callers fall back to
+     * the phone-account identity instead of guessing from the slot.
+     */
+    private fun resolveSubscriptionIdForHandle(handle: PhoneAccountHandle?): Int? {
+        if (handle == null) return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return try {
+            telephonyManager()?.getSubscriptionId(handle)?.takeIf {
+                it != SubscriptionManager.INVALID_SUBSCRIPTION_ID
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun findPhoneAccountHandleForSubscription(subscriptionId: Int?): PhoneAccountHandle? {
+        if (subscriptionId == null) return null
+        return try {
+            telecomManager()?.callCapablePhoneAccounts?.firstOrNull { handle ->
+                resolveSubscriptionIdForHandle(handle) == subscriptionId
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun findPhoneAccountHandleForCall(
+        accountId: String?,
+        component: String?,
+    ): PhoneAccountHandle? {
+        val handles = try {
+            telecomManager()?.callCapablePhoneAccounts ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val componentName = component
+            ?.takeIf { it.isNotBlank() }
+            ?.let { ComponentName.unflattenFromString(it) }
+        return when {
+            componentName != null && !accountId.isNullOrBlank() ->
+                handles.firstOrNull {
+                    it.componentName == componentName && it.id == accountId
+                }
+            componentName != null -> handles.firstOrNull { it.componentName == componentName }
+            !accountId.isNullOrBlank() -> handles.firstOrNull { it.id == accountId }
+            else -> null
+        }
+    }
+
+    private fun simFingerprint(
+        info: android.telephony.SubscriptionInfo?,
+        handle: PhoneAccountHandle?,
+        number: String?,
+    ): String {
+        val raw = listOf(
+            info?.subscriptionId?.toString() ?: "",
+            info?.simSlotIndex?.toString() ?: "",
+            info?.carrierName?.toString() ?: "",
+            info?.displayName?.toString() ?: "",
+            number.orEmpty(),
+            handle?.id ?: "",
+            handle?.componentName?.flattenToString() ?: "",
+        ).joinToString("|")
+        return try {
+            MessageDigest.getInstance("SHA-256")
+                .digest(raw.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            raw.hashCode().toUInt().toString(16)
+        }
+    }
+
+    private fun resolveSubscriptionIdForCall(
+        accountId: String?,
+        component: String?,
+    ): Int? {
+        if (accountId.isNullOrBlank() && component.isNullOrBlank()) return null
+        val handle = findPhoneAccountHandleForCall(accountId, component)
+        return resolveSubscriptionIdForHandle(handle)
     }
 
     // ------------------------------------------------------------------
@@ -1099,6 +1201,7 @@ class MobileSimCallManager(
 
         try {
             val rows = mutableListOf<Map<String, Any?>>()
+            val activeSubs = activeSubscriptionInfos()
             activity.contentResolver.query(
                 CallLog.Calls.CONTENT_URI,
                 projection,
@@ -1152,6 +1255,22 @@ class MobileSimCallManager(
                             else -> "MISSED"
                         }
                     }
+                    val resolvedSubscriptionId = resolveSubscriptionIdForCall(account, component)
+                    val subscriptionInfo = resolvedSubscriptionId?.let { subId ->
+                        activeSubs.firstOrNull { it.subscriptionId == subId }
+                    }
+                    val simIdentity = when {
+                        resolvedSubscriptionId != null -> "subId:$resolvedSubscriptionId"
+                        !account.isNullOrBlank() && !component.isNullOrBlank() ->
+                            "phoneAccount:$component#$account"
+                        !account.isNullOrBlank() -> "phoneAccount:$account"
+                        else -> null
+                    }
+                    val simIdentityStatus = when {
+                        resolvedSubscriptionId != null -> "RESOLVED"
+                        !account.isNullOrBlank() -> "PHONE_ACCOUNT_ONLY"
+                        else -> "MISSING"
+                    }
                     rows.add(
                         mapOf(
                             "nativeCallReference" to nativeRef,
@@ -1166,6 +1285,12 @@ class MobileSimCallManager(
                                 if (duration > 0) date + duration * 1000L else date,
                             ),
                             "simAccountId" to account?.takeIf { it.isNotBlank() },
+                            "simAccountComponent" to component?.takeIf { it.isNotBlank() },
+                            "simSubscriptionId" to resolvedSubscriptionId,
+                            "simSlotIndex" to subscriptionInfo?.simSlotIndex,
+                            "simCarrierName" to subscriptionInfo?.carrierName?.toString(),
+                            "simIdentity" to simIdentity,
+                            "simIdentityStatus" to simIdentityStatus,
                             "contactName" to (
                                 if (nameIndex >= 0) cursor.getString(nameIndex) else null
                                 )?.takeIf { it.isNotBlank() },
@@ -1408,8 +1533,16 @@ class MobileSimCallManager(
         }
 
         val answeredAt = if (durationSeconds > 0) endAt - durationSeconds * 1000L else null
-        val simAccountId = deviceLog?.phoneAccountId?.takeIf { it.isNotBlank() }
-            ?: current.subscriptionId?.let { "subId:$it" }
+        val simIdentity = current.subscriptionId?.let { "subId:$it" }
+            ?: deviceLog?.phoneAccountId?.takeIf { it.isNotBlank() }
+                ?.let { "phoneAccount:$it" }
+        val simAccountId = simIdentity
+            ?: deviceLog?.phoneAccountId?.takeIf { it.isNotBlank() }
+        val simIdentityStatus = when {
+            current.subscriptionId != null -> "RESOLVED"
+            !deviceLog?.phoneAccountId.isNullOrBlank() -> "PHONE_ACCOUNT_ONLY"
+            else -> "MISSING"
+        }
         val simLabel = current.simLabel?.takeIf { it.isNotBlank() }
             ?: current.slotIndex?.let { "SIM ${it + 1}" }
 
@@ -1430,6 +1563,9 @@ class MobileSimCallManager(
             "answeredAt" to isoUtc(answeredAt),
             "endedAt" to isoUtc(endAt),
             "simAccountId" to simAccountId,
+            "simSubscriptionId" to current.subscriptionId,
+            "simIdentity" to simIdentity,
+            "simIdentityStatus" to simIdentityStatus,
             "simLabel" to simLabel,
             "simSlot" to current.slotIndex,
             "simPhoneNumber" to current.simPhoneNumber,

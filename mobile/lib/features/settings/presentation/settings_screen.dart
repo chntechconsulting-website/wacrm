@@ -11,6 +11,7 @@ import '../../auth/presentation/profile_screen.dart';
 import '../../auth/providers/auth_provider.dart';
 import '../../notifications/presentation/notifications_screen.dart';
 import '../../notifications/providers/notifications_provider.dart';
+import 'office_sim_setup_screen.dart';
 import 'privacy_policy_screen.dart';
 import 'terms_and_conditions_screen.dart';
 
@@ -488,6 +489,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     : null,
                 onTap: () {
                   Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsScreen()));
+                },
+              ),
+              const Divider(height: 1, indent: 56),
+              _buildSettingsTile(
+                icon: Icons.sim_card_outlined,
+                iconColor: const Color(0xFF059669),
+                title: 'Office SIM',
+                subtitle: 'Choose the SIM that may sync calls & recordings to CRM',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const OfficeSimSetupScreen(),
+                    ),
+                  );
                 },
               ),
               const Divider(height: 1, indent: 56),

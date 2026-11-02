@@ -10,6 +10,7 @@ import '../constants/api_endpoints.dart';
 import '../network/api_client.dart';
 import '../network/api_exceptions.dart';
 import 'mobile_recording_service.dart';
+import 'office_sim_service.dart';
 
 /// Canonical recording lifecycle shared with the backend.
 enum RecordingSyncStatus {
@@ -314,6 +315,8 @@ class MobileCallRecordingManager {
     required ImportedCallRecording recording,
     required bool consent,
     required int callDurationSeconds,
+    String? simAccountId,
+    int? simSubscriptionId,
   }) async {
     if (!consent) {
       await reportStatus(
@@ -323,6 +326,29 @@ class MobileCallRecordingManager {
       );
       return RecordingUploadOutcome.consentRequired;
     }
+
+    // The recording must belong to the registered Office SIM. This mirrors the
+    // native call gate and the backend check; personal-SIM audio never leaves
+    // the device.
+    final mapping = await OfficeSimService.fetch();
+    if (mapping != null) {
+      if (!mapping.isVerified ||
+          !OfficeSimService.callMatches(
+            mapping,
+            subscriptionId: simSubscriptionId,
+            simAccountId: simAccountId,
+          )) {
+        await reportStatus(
+          callId: callId,
+          status: RecordingSyncStatus.verificationFailed,
+          detail:
+              'The recording cannot be linked because the call does not '
+              'belong to the verified Office SIM.',
+        );
+        return RecordingUploadOutcome.verificationFailed;
+      }
+    }
+
     if (!recording.verified || recording.durationMs <= 0) {
       await reportStatus(
         callId: callId,

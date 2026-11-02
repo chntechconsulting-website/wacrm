@@ -121,6 +121,8 @@ class ApiEndpoints {
   static String ivrCallRecording(int id) => '$apiPrefix/ivr/calls/$id/recording';
   static String ivrCallRecordingStatus(int id) =>
       '$apiPrefix/ivr/calls/$id/recording-status';
+  static String get officeSim => '$apiPrefix/office-sim';
+  static String get officeSimStatus => '$apiPrefix/office-sim/status';
   static String disconnectCall(int id) => '$apiPrefix/ivr/calls/$id/disconnect';
 
   // DooCTI Telephony

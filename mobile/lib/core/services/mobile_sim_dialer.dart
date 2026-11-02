@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../utils/phone_utils.dart';
 import 'mobile_sim_call_service.dart';
+import 'office_sim_service.dart';
 
 /// Shared UI flow for placing a real cellular call from the device SIM.
 ///
@@ -62,9 +63,41 @@ class MobileSimDialer {
         return false;
       }
 
-      final SimAccount? selectedSim = sims.length == 1
-          ? sims.first
-          : await _showSimPicker(context, sims);
+      // A registered Office SIM restricts in-app mobile calling to that exact
+      // SIM. Personal-SIM calls must never create a CRM record, and an
+      // unverified/replaced SIM pauses calling until it is re-verified.
+      final officeSim = await OfficeSimService.evaluate();
+      if (!context.mounted) return false;
+      var availableSims = sims;
+      if (officeSim.state == OfficeSimState.requiresVerification) {
+        _showMessage(
+          context,
+          officeSim.message.trim().isEmpty
+              ? 'Your Office SIM must be re-verified before calling.'
+              : officeSim.message,
+        );
+        return false;
+      }
+      if (officeSim.state == OfficeSimState.verified &&
+          officeSim.mapping != null) {
+        final office = OfficeSimService.matchSim(
+          officeSim.mapping!,
+          sims,
+        );
+        if (office == null) {
+          _showMessage(
+            context,
+            'The registered Office SIM is not available on this device. '
+            'Re-verify it in Settings before calling.',
+          );
+          return false;
+        }
+        availableSims = [office];
+      }
+
+      final SimAccount? selectedSim = availableSims.length == 1
+          ? availableSims.first
+          : await _showSimPicker(context, availableSims);
       if (selectedSim == null || !context.mounted) return false;
 
       // Persist the attempt before ACTION_CALL. The native tracker and the
