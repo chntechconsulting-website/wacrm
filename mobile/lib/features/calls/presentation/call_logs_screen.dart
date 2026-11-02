@@ -32,6 +32,8 @@ class CallLogsScreen extends StatefulWidget {
 class _CallLogsScreenState extends State<CallLogsScreen>
     with WidgetsBindingObserver {
   bool _handlingSharedRecording = false;
+  MobileSimPermissionStatus? _permissionStatus;
+  bool _permissionBusy = false;
 
   @override
   void initState() {
@@ -40,10 +42,69 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     MobileRecordingService.setSharedHandler(
       (_) => _maybeHandleSharedRecording(),
     );
+    _refreshCallLogPermission();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await context.read<CallsProvider>().fetchCalls();
       if (mounted) _maybeHandleSharedRecording();
     });
+  }
+
+  Future<void> _refreshCallLogPermission() async {
+    if (!MobileSimCallService.isSupported) return;
+    try {
+      final status = await MobileSimCallService.permissionStatus();
+      if (mounted) setState(() => _permissionStatus = status);
+    } catch (_) {
+      // Leave the banner hidden when the platform cannot report permissions.
+    }
+  }
+
+  Future<void> _requestCallLogPermission() async {
+    if (_permissionBusy) return;
+    setState(() => _permissionBusy = true);
+    MobileSimPermissionStatus status;
+    try {
+      status = await MobileSimCallService.permissionStatus();
+      if (!status.readCallLog) {
+        status = await MobileSimCallService.requestPermissions();
+      }
+    } catch (_) {
+      if (mounted) setState(() => _permissionBusy = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _permissionStatus = status;
+      _permissionBusy = false;
+    });
+    if (status.readCallLog) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'Call-log access is off',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: const Text(
+          'Android needs call-log access before incoming and outgoing device '
+          'calls can be synchronized to the CRM. Open App settings and allow '
+          'Phone / Call logs access for WACRM.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Not now'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              MobileSimCallService.openAppSettings();
+            },
+            child: const Text('Open settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -56,6 +117,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _refreshCallLogPermission();
       _maybeHandleSharedRecording();
     }
   }
@@ -807,6 +869,48 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     );
   }
 
+  Widget _callLogPermissionBanner() {
+    final status = _permissionStatus;
+    if (status == null || status.readCallLog) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.dangerLight,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.phone_disabled_rounded,
+            color: AppColors.danger,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Call-log permission is off. Incoming and outgoing device calls '
+              'cannot be synchronized until call-log access is allowed.',
+              style: TextStyle(fontSize: 12, color: AppColors.textMain),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _permissionBusy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : TextButton(
+                  onPressed: _requestCallLogPermission,
+                  child: const Text('Allow'),
+                ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<CallsProvider>();
@@ -832,7 +936,10 @@ class _CallLogsScreenState extends State<CallLogsScreen>
           ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: () => provider.fetchCalls(),
+            onPressed: () {
+              _refreshCallLogPermission();
+              provider.fetchCalls();
+            },
           ),
         ],
       ),
@@ -846,7 +953,11 @@ class _CallLogsScreenState extends State<CallLogsScreen>
         ),
         onPressed: _showLogManualCallDialog,
       ),
-      body: provider.isLoading && calls.isEmpty
+      body: Column(
+        children: [
+          _callLogPermissionBanner(),
+          Expanded(
+            child: provider.isLoading && calls.isEmpty
           ? const LoadingIndicator(message: 'Loading call records...')
           : provider.errorMessage != null && calls.isEmpty
           ? ErrorView(
@@ -1007,6 +1118,9 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                 },
               ),
             ),
+          ),
+        ],
+      ),
     );
   }
 }

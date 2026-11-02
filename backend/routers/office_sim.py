@@ -90,7 +90,16 @@ def canonical_identity_tokens(mapping: OfficeSimMapping) -> set:
     return tokens
 
 
-def sim_identity_matches(mapping: OfficeSimMapping, sim_account_id: Optional[str]) -> bool:
+def sim_identity_matches(
+    mapping: OfficeSimMapping,
+    sim_account_id: Optional[str],
+    sim_subscription_id: Optional[int] = None,
+) -> bool:
+    # A native subscription id is exact evidence and cannot collide with a
+    # personal SIM on the same device.
+    if sim_subscription_id is not None and mapping.subscription_id is not None:
+        if int(sim_subscription_id) == int(mapping.subscription_id):
+            return True
     token = (sim_account_id or "").strip()
     if not token:
         return False

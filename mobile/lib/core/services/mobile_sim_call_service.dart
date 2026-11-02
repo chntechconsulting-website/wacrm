@@ -112,6 +112,7 @@ class MobileSimCallResult {
   final String? callReference;
   final String? deviceCallLogId;
   final String? nativeCallReference;
+  final int? androidCallType;
   final int? leadId;
   final String customerPhone;
   final String? contactName;
@@ -138,6 +139,7 @@ class MobileSimCallResult {
     this.callReference,
     this.deviceCallLogId,
     this.nativeCallReference,
+    this.androidCallType,
     this.leadId,
     required this.customerPhone,
     this.contactName,
@@ -186,6 +188,7 @@ class MobileSimCallResult {
       callReference: _asString(map['callReference']),
       deviceCallLogId: _asString(map['deviceCallLogId']),
       nativeCallReference: _asString(map['nativeCallReference']),
+      androidCallType: _asInt(map['callType']),
       leadId: _asInt(map['leadId']),
       customerPhone: _asString(map['customerPhone']) ?? '',
       contactName: _asString(map['contactName']),
@@ -331,7 +334,9 @@ class MobileSimCallService {
             !mapping.isVerified ||
             !OfficeSimService.callMatches(
               mapping,
-              subscriptionId: sim.subscriptionId >= 0 ? sim.subscriptionId : null,
+              subscriptionId: sim.subscriptionId >= 0
+                  ? sim.subscriptionId
+                  : null,
               simAccountId: identity,
             ))) {
       return callId;
@@ -348,6 +353,9 @@ class MobileSimCallService {
             callDirection: 'OUTBOUND',
             startedAt: startedAt,
             simAccountId: identity,
+            simSubscriptionId: (sim?.subscriptionId ?? -1) >= 0
+                ? sim!.subscriptionId
+                : null,
             simLabel: sim?.label,
             simSlot: sim?.slotIndex,
             simPhoneNumber: sim?.phoneNumber,
@@ -377,7 +385,9 @@ class MobileSimCallService {
             !mapping.isVerified ||
             !OfficeSimService.callMatches(
               mapping,
-              subscriptionId: sim.subscriptionId >= 0 ? sim.subscriptionId : null,
+              subscriptionId: sim.subscriptionId >= 0
+                  ? sim.subscriptionId
+                  : null,
               simAccountId: identity,
             ))) {
       return;
@@ -397,6 +407,9 @@ class MobileSimCallService {
             startedAt: DateTime.now().toUtc().toIso8601String(),
             endedAt: DateTime.now().toUtc().toIso8601String(),
             simAccountId: identity,
+            simSubscriptionId: (sim?.subscriptionId ?? -1) >= 0
+                ? sim!.subscriptionId
+                : null,
             simSlot: sim?.slotIndex,
             callSource: 'MOBILE_SIM',
           )
@@ -521,6 +534,13 @@ class MobileSimCallService {
     }
 
     final repository = CallsRepository();
+    debugPrint(
+      '[CallDirection] Live result callId=${result.callId} '
+      'nativeType=${result.androidCallType ?? "-"} '
+      'phoneAccount=${result.simAccountId ?? "-"} '
+      'subId=${result.simSubscriptionId ?? "-"} '
+      'payloadDirection=${result.callDirection.isEmpty ? "-" : result.callDirection}',
+    );
     try {
       final response = await repository.logManualCall(
         customerNumber: result.customerPhone,
@@ -537,6 +557,7 @@ class MobileSimCallService {
         endedAt: result.endedAt,
         recordingUrl: result.hasRecording ? result.recordingUrl : null,
         simAccountId: identity.isEmpty ? null : identity,
+        simSubscriptionId: result.simSubscriptionId,
         simLabel: result.simLabel,
         simSlot: result.simSlot,
         simPhoneNumber: result.simPhoneNumber,
@@ -606,10 +627,7 @@ class MobileSimCallService {
   }) async {
     final response = await _channel.invokeMethod<List<dynamic>>(
       'getRecentDeviceCalls',
-      {
-        'sinceMillis': since.toUtc().millisecondsSinceEpoch,
-        'limit': limit,
-      },
+      {'sinceMillis': since.toUtc().millisecondsSinceEpoch, 'limit': limit},
     );
     if (response == null) return <Map<String, dynamic>>[];
     return response.whereType<Map>().map((item) {

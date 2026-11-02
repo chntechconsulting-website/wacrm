@@ -13,6 +13,12 @@ class DeviceCallLogEntry {
   final String nativeReference;
   final String? deviceCallLogId;
   final String phone;
+
+  /// Raw Android `CallLog.Calls.TYPE`, kept for diagnostics and proof.
+  final int? androidCallType;
+
+  /// Direction string exactly as the native bridge supplied it, before mapping.
+  final String nativeDirection;
   final String direction;
   final String status;
   final int durationSeconds;
@@ -31,6 +37,8 @@ class DeviceCallLogEntry {
     required this.nativeReference,
     this.deviceCallLogId,
     required this.phone,
+    this.androidCallType,
+    this.nativeDirection = '',
     required this.direction,
     required this.status,
     required this.durationSeconds,
@@ -81,6 +89,8 @@ class DeviceCallLogEntry {
       nativeReference: (map['nativeCallReference'] ?? '').toString().trim(),
       deviceCallLogId: _text(map['deviceCallLogId']),
       phone: (map['phone'] ?? '').toString().trim(),
+      androidCallType: _int(map['type']),
+      nativeDirection: (map['direction'] ?? '').toString().trim().toUpperCase(),
       direction: direction,
       status: ((map['status'] ?? 'COMPLETED').toString()).toUpperCase(),
       durationSeconds: _int(map['durationSeconds']) ?? 0,
@@ -114,13 +124,17 @@ class DeviceCallLogSyncResult {
   final int recordingsUploaded;
   final bool permissionDenied;
   final String? error;
+
   /// Office SIM gate state for this pass. Only `verified` allows any call to
   /// reach the CRM.
   final OfficeSimState officeSimState;
+
   /// Rows skipped because they belonged to another (personal) SIM.
   final int skippedPersonalSim;
+
   /// Rows skipped because Android exposed no exact SIM identity.
   final int skippedMissingIdentity;
+
   /// Rows skipped because Android exposed no supported call type, so the
   /// direction is genuinely unknown. They are never guessed as OUTBOUND.
   final int skippedUnknownDirection;
@@ -141,7 +155,6 @@ class DeviceCallLogSyncResult {
   bool get hasChanges => synced > 0 || recordingsUploaded > 0;
 
   bool get isOfficeSimBlocked =>
-      officeSimState == OfficeSimState.notConfigured ||
       officeSimState == OfficeSimState.requiresVerification ||
       officeSimState == OfficeSimState.unsupported;
 }
@@ -157,7 +170,8 @@ class DeviceCallLogSyncService {
   static const String _lastSyncKey = 'wacrm_device_call_sync_last';
   static const String _skippedKey = 'wacrm_device_call_sync_handled';
   static const String _directionRepairKey =
-      'wacrm_device_call_direction_repair_v1';
+      'wacrm_device_call_direction_repair_v2';
+  static const String _rescanKey = 'wacrm_device_call_sync_rescan_v2';
   static const int _maxSkipped = 800;
   static const int _overlapMinutes = 10;
   static const int _maxLookbackDays = 7;
@@ -178,19 +192,29 @@ class DeviceCallLogSyncService {
     try {
       final permissions = await MobileSimCallService.permissionStatus();
       if (!permissions.readCallLog) {
-        return const DeviceCallLogSyncResult(permissionDenied: true);
+        debugPrint(
+          '[CallDirection] History sync blocked: READ_CALL_LOG is not granted. '
+          'Incoming device calls cannot be read.',
+        );
+        return const DeviceCallLogSyncResult(
+          permissionDenied: true,
+          error:
+              'Call-log permission is not granted, so incoming and outgoing '
+              'device calls cannot be synchronized from the phone call log.',
+        );
       }
 
-      // Fail closed at the module boundary: automatic history sync only runs
-      // for a verified Office SIM, and only for rows that exactly match it.
+      // A configured Office SIM is enforced strictly. When no mapping is
+      // configured, legacy behaviour is preserved (the live dialer path already
+      // does this), otherwise incoming history would never be imported.
       final officeSim = await OfficeSimService.evaluate();
-      if (!officeSim.canSync || officeSim.mapping == null) {
+      final mapping = officeSim.mapping;
+      if (mapping != null && !officeSim.canSync) {
         return DeviceCallLogSyncResult(
           officeSimState: officeSim.state,
           officeSimMessage: officeSim.message,
         );
       }
-      final mapping = officeSim.mapping!;
 
       final prefs = await SharedPreferences.getInstance();
       final scope = employeeKey.trim().isEmpty ? 'default' : employeeKey.trim();
@@ -203,11 +227,22 @@ class DeviceCallLogSyncService {
       final stored = prefs.getInt(lastKey);
       var since = stored == null
           ? now.subtract(const Duration(days: 2))
-          : DateTime.fromMillisecondsSinceEpoch(stored, isUtc: true).subtract(
-              const Duration(minutes: _overlapMinutes),
-            );
-      final oldestAllowed = now.subtract(const Duration(days: _maxLookbackDays));
+          : DateTime.fromMillisecondsSinceEpoch(
+              stored,
+              isUtc: true,
+            ).subtract(const Duration(minutes: _overlapMinutes));
+      final oldestAllowed = now.subtract(
+        const Duration(days: _maxLookbackDays),
+      );
       if (since.isBefore(oldestAllowed)) since = oldestAllowed;
+
+      // A previous build could advance its watermark past inbound rows that it
+      // then failed to import (missing permission, no Office SIM mapping, an
+      // unknown direction or a rejected request). One full re-scan recovers
+      // those rows; `handled` + backend idempotency prevent duplicates.
+      final rescanKey = '${_rescanKey}_$scope';
+      final needsRescan = prefs.getBool(rescanKey) != true;
+      if (needsRescan) since = oldestAllowed;
 
       final rows = await MobileSimCallService.getRecentDeviceCalls(
         since: since,
@@ -220,6 +255,7 @@ class DeviceCallLogSyncService {
       var skippedPersonal = 0;
       var skippedMissingIdentity = 0;
       var skippedUnknownDirection = 0;
+      var hadFailure = false;
       final consented = autoUploadRecordings
           ? await RecordingConsentService.hasConsent(scope)
           : false;
@@ -241,28 +277,41 @@ class DeviceCallLogSyncService {
         }
         if (handled.contains(entry.nativeReference)) continue;
 
-        // Never guess SIM identity. A row without an exact subscription or
-        // phone-account token is dropped instead of being attributed by slot.
-        if (!entry.hasSimIdentity) {
-          skippedMissingIdentity += 1;
-          debugPrint(
-            '[OfficeSIM] Skipped device call: SIM identity missing.',
-          );
-          continue;
-        }
         final entryIdentity = entry.simIdentity ?? entry.simAccountId;
-        final isOfficeCall = OfficeSimService.callMatches(
-          mapping,
-          subscriptionId: entry.simSubscriptionId,
-          simAccountId: entryIdentity,
-        );
-        if (!isOfficeCall) {
-          skippedPersonal += 1;
-          debugPrint(
-            '[OfficeSIM] Skipped device call: handled by a non-office SIM.',
+
+        // With a configured Office SIM, only an exact identity match may reach
+        // the CRM. Without a mapping, legacy devices keep synchronizing (the
+        // live dialer path behaves the same way). Identity is never guessed.
+        if (mapping != null) {
+          if (!entry.hasSimIdentity) {
+            skippedMissingIdentity += 1;
+            debugPrint(
+              '[OfficeSIM] Skipped device call: SIM identity missing.',
+            );
+            continue;
+          }
+          final isOfficeCall = OfficeSimService.callMatches(
+            mapping,
+            subscriptionId: entry.simSubscriptionId,
+            simAccountId: entryIdentity,
           );
-          continue;
+          if (!isOfficeCall) {
+            skippedPersonal += 1;
+            debugPrint(
+              '[OfficeSIM] Skipped device call: handled by a non-office SIM.',
+            );
+            continue;
+          }
         }
+
+        debugPrint(
+          '[CallDirection] Sync row nativeId=${entry.nativeReference} '
+          'androidType=${entry.androidCallType} '
+          'phoneAccount=${entry.simAccountId ?? "-"} '
+          'subId=${entry.simSubscriptionId ?? "-"} '
+          'nativeDirection=${entry.nativeDirection.isEmpty ? "-" : entry.nativeDirection} '
+          'payloadDirection=${entry.direction}',
+        );
 
         try {
           final response = await repository.logManualCall(
@@ -277,17 +326,24 @@ class DeviceCallLogSyncService {
             startedAt: entry.startedAt,
             endedAt: entry.endedAt,
             simAccountId: entryIdentity,
+            simSubscriptionId: entry.simSubscriptionId,
             simSlot: entry.simSlotIndex,
             simLabel: entry.simCarrierName,
             callSource: 'MOBILE_SIM',
             nativeCallReference: entry.nativeReference,
           );
           synced += 1;
+          debugPrint(
+            '[CallDirection] Saved row id=${_int(response?['id']) ?? "-"} '
+            'direction=${(response?['call_direction'] ?? response?['direction'] ?? "-")}',
+          );
           await markHandled(entry.nativeReference, employeeKey: scope);
 
           final callId = _int(response?['id']);
-          final hasRecording =
-              (response?['recording_url'] ?? '').toString().trim().isNotEmpty;
+          final hasRecording = (response?['recording_url'] ?? '')
+              .toString()
+              .trim()
+              .isNotEmpty;
           final started = entry.startedDateTime;
           if (consented &&
               callId != null &&
@@ -295,12 +351,13 @@ class DeviceCallLogSyncService {
               entry.durationSeconds > 0 &&
               started != null) {
             try {
-              final match = await MobileCallRecordingManager.findRecordingForCall(
-                phone: entry.phone,
-                startedAt: started,
-                endedAt: entry.endedDateTime,
-                durationSeconds: entry.durationSeconds,
-              );
+              final match =
+                  await MobileCallRecordingManager.findRecordingForCall(
+                    phone: entry.phone,
+                    startedAt: started,
+                    endedAt: entry.endedDateTime,
+                    durationSeconds: entry.durationSeconds,
+                  );
               if (match != null) {
                 final outcome = await MobileCallRecordingManager.upload(
                   callId: callId,
@@ -319,15 +376,25 @@ class DeviceCallLogSyncService {
               // No accessible/unambiguous recording: keep "Unavailable".
             }
           }
-        } catch (_) {
-          // Keep this row unhandled so the next resume retries it.
+        } catch (error) {
+          // Keep this row unhandled so the next resume retries it. The
+          // watermark must not advance past a failed row, or a rejected /
+          // missed inbound call could be lost forever.
+          hadFailure = true;
+          debugPrint(
+            '[CallDirection] Sync failed for nativeId=${entry.nativeReference} '
+            'direction=${entry.direction}: $error',
+          );
         }
       }
 
       if (synced > 0) {
         await callsProvider.fetchCalls(showLoading: false);
       }
-      await prefs.setInt(lastKey, now.millisecondsSinceEpoch);
+      if (!hadFailure) {
+        await prefs.setInt(lastKey, now.millisecondsSinceEpoch);
+        if (needsRescan) await prefs.setBool(rescanKey, true);
+      }
       return DeviceCallLogSyncResult(
         synced: synced,
         recordingsUploaded: recordings,
@@ -422,6 +489,7 @@ class DeviceCallLogSyncService {
           startedAt: entry.startedAt,
           endedAt: entry.endedAt,
           simAccountId: entryIdentity,
+          simSubscriptionId: entry.simSubscriptionId,
           simSlot: entry.simSlotIndex,
           simLabel: entry.simCarrierName,
           callSource: 'MOBILE_SIM',

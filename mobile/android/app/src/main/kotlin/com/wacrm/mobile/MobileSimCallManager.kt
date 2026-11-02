@@ -23,6 +23,7 @@ import android.telephony.PhoneStateListener
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -58,6 +59,7 @@ class MobileSimCallManager(
 
     companion object {
         private const val CHANNEL = "com.wacrm.mobile/sim_call"
+        private const val TAG = "WACRM_CallDirection"
         private const val PERMISSION_REQUEST_CODE = 4917
         private const val PREFS = "wacrm_mobile_sim_call"
         private const val KEY_PENDING_RESULT = "pending_result"
@@ -1271,6 +1273,15 @@ class MobileSimCallManager(
                         !account.isNullOrBlank() -> "PHONE_ACCOUNT_ONLY"
                         else -> "MISSING"
                     }
+                    // Temporary direction diagnostics. No phone number, audio or
+                    // personal call content is logged.
+                    Log.d(
+                        TAG,
+                        "history id=$id type=$type account=${account ?: "-"} " +
+                            "component=${component ?: "-"} subId=${resolvedSubscriptionId ?: "-"} " +
+                            "nativeDirection=$direction identity=${simIdentity ?: "-"} " +
+                            "identityStatus=$simIdentityStatus",
+                    )
                     rows.add(
                         mapOf(
                             "nativeCallReference" to nativeRef,

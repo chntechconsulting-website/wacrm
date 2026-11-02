@@ -64,6 +64,21 @@ class TestOfficeSimIdentityMatching(unittest.TestCase):
         self.assertFalse(sim_identity_matches(mapping, "+919876543210"))
         self.assertFalse(sim_identity_matches(mapping, "phoneAccount:other"))
 
+    def test_native_subscription_id_is_exact_identity_evidence(self):
+        mapping = _mapping()
+        # A row may carry only the native subscription id when Android exposed
+        # no phone-account token. The exact id still proves the Office SIM.
+        self.assertTrue(
+            sim_identity_matches(mapping, None, sim_subscription_id=2)
+        )
+        self.assertFalse(
+            sim_identity_matches(mapping, None, sim_subscription_id=1)
+        )
+        # A non-matching pair is rejected: no slot/number fallback.
+        self.assertFalse(
+            sim_identity_matches(mapping, "phoneAccount:other", sim_subscription_id=1)
+        )
+
 
 class OfficeSimApiTestCase(unittest.TestCase):
     @classmethod
@@ -213,6 +228,18 @@ class TestOfficeSimCallEnforcement(OfficeSimApiTestCase):
         response = self._log_call(sim_account_id="subId:2")
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["sim_account_id"], "subId:2")
+
+    def test_native_subscription_id_alone_proves_office_sim(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        response = self._log_call(sim_subscription_id=2)
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["call_direction"], "OUTBOUND")
+
+    def test_personal_subscription_id_is_rejected(self):
+        self.client.put("/api/office-sim", json=self._mapping_body())
+        response = self._log_call(sim_subscription_id=1)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("Office SIM", response.text)
 
     def test_personal_sim_call_is_rejected(self):
         self.client.put("/api/office-sim", json=self._mapping_body())

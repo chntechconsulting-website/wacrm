@@ -277,6 +277,7 @@ class ManualCallLogRequest(BaseModel):
     ended_at: Optional[datetime] = None
     recording_url: Optional[str] = None
     sim_account_id: Optional[str] = None
+    sim_subscription_id: Optional[int] = None
     sim_label: Optional[str] = None
     sim_slot: Optional[int] = None
     sim_phone_number: Optional[str] = None
@@ -757,7 +758,11 @@ def log_manual_call_endpoint(
                         "device. Automatic call synchronization is paused."
                     ),
                 )
-            if not sim_identity_matches(mapping, body.sim_account_id):
+            if not sim_identity_matches(
+                mapping,
+                body.sim_account_id,
+                body.sim_subscription_id,
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=(
@@ -806,6 +811,7 @@ def log_manual_call_endpoint(
             ended_at=body.ended_at,
             recording_url=body.recording_url,
             sim_account_id=body.sim_account_id,
+            sim_subscription_id=body.sim_subscription_id,
             sim_label=body.sim_label,
             sim_slot=body.sim_slot,
             sim_phone_number=body.sim_phone_number,

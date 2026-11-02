@@ -1,6 +1,7 @@
 import os
 import datetime
 import json
+import logging
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +19,8 @@ from .schemas import (
     CALL_STATUS_MISSED,
     CALL_STATUS_BUSY
 )
+
+logger = logging.getLogger(__name__)
 
 class IVRNotConfiguredException(Exception):
     def __init__(self, message: str = "IVR is not configured. Please configure IVR from Settings → Integrations."):
@@ -336,6 +339,7 @@ class IVRService:
         ended_at: Optional[datetime.datetime] = None,
         recording_url: Optional[str] = None,
         sim_account_id: Optional[str] = None,
+        sim_subscription_id: Optional[int] = None,
         sim_label: Optional[str] = None,
         sim_slot: Optional[int] = None,
         sim_phone_number: Optional[str] = None,
@@ -391,6 +395,7 @@ class IVRService:
             str(call_source or "").strip().upper() == "MOBILE_SIM"
             or bool(native_ref)
             or bool(sim_account_id or sim_label)
+            or sim_subscription_id is not None
             or sim_slot is not None
         )
 
@@ -606,6 +611,14 @@ class IVRService:
                     db.rollback()
                     raise
                 db.refresh(existing)
+                logger.info(
+                    "mobile call direction saved id=%s native=%s "
+                    "requested=%s stored=%s",
+                    existing.id,
+                    native_ref or "-",
+                    requested_direction or "-",
+                    str(existing.call_direction or "").upper() or "-",
+                )
 
                 # Log a lead activity only on the pending -> final transition,
                 # so retries of the same final result do not duplicate activity.
@@ -702,6 +715,14 @@ class IVRService:
                     return existing
             raise
         db.refresh(call_log)
+
+        logger.info(
+            "mobile call direction saved id=%s native=%s requested=%s stored=%s",
+            call_log.id,
+            native_ref or "-",
+            requested_direction or "-",
+            str(call_log.call_direction or "").upper() or "-",
+        )
 
         if lead_id and not is_attempt:
             dur_msg = f" (Duration: {duration_seconds}s)" if duration_seconds else ""

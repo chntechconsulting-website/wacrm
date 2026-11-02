@@ -175,6 +175,39 @@ void main() {
       expect(entry.startedDateTime, isNotNull);
     });
 
+    test('keeps zero-duration missed and rejected inbound rows', () {
+      for (final type in [1, 3, 5, 6, 7]) {
+        final entry = DeviceCallLogEntry.fromMap(<String, dynamic>{
+          'nativeCallReference': 'MOBILE_device_$type',
+          'deviceCallLogId': type,
+          'phone': '+919876543210',
+          'type': type,
+          'status': type == 1 ? 'MISSED' : 'REJECTED',
+          'durationSeconds': 0,
+          'startedAt': '2026-10-31T05:26:56.000Z',
+        });
+        expect(entry.isUsable, isTrue, reason: 'Android type $type');
+        expect(entry.direction, 'INBOUND', reason: 'Android type $type');
+        expect(entry.androidCallType, type);
+        expect(entry.durationSeconds, 0);
+      }
+    });
+
+    test('preserves the raw native direction beside the mapped direction', () {
+      final entry = DeviceCallLogEntry.fromMap(<String, dynamic>{
+        'nativeCallReference': 'MOBILE_device_777',
+        'phone': '+919876543210',
+        'type': 2,
+        'direction': 'inbound',
+        'status': 'COMPLETED',
+        'durationSeconds': 9,
+      });
+
+      expect(entry.nativeDirection, 'INBOUND');
+      expect(entry.androidCallType, 2);
+      expect(entry.direction, 'OUTBOUND');
+    });
+
     test('rejects rows without a phone or native reference', () {
       final entry = DeviceCallLogEntry.fromMap(<String, dynamic>{
         'phone': '',
