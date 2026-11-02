@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+
 import '../data/field_visits_repository.dart';
 import '../models/field_visit_model.dart';
 
@@ -22,7 +25,11 @@ class FieldVisitsProvider extends ChangeNotifier {
       final outcome = v.visitOutcome.toLowerCase();
       final address = (v.checkinAddress ?? '').toLowerCase();
       final notes = (v.notes ?? '').toLowerCase();
-      return name.contains(q) || emp.contains(q) || outcome.contains(q) || address.contains(q) || notes.contains(q);
+      return name.contains(q) ||
+          emp.contains(q) ||
+          outcome.contains(q) ||
+          address.contains(q) ||
+          notes.contains(q);
     }).toList();
   }
 
@@ -58,6 +65,19 @@ class FieldVisitsProvider extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  Future<String?> uploadPhoto({
+    required File file,
+    required String kind,
+  }) async {
+    _errorMessage = null;
+    try {
+      return await _repository.uploadFieldVisitImage(file: file, kind: kind);
+    } catch (e) {
+      _errorMessage = e.toString().replaceAll('ApiException: ', '');
+      return null;
     }
   }
 

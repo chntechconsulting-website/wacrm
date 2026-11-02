@@ -2,6 +2,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- Field Visit GPS: precise fix for the captured check-in coordinates. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Mobile SIM calling: read SIM slots/carrier and observe call state. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <!-- Optional: show the SIM's own number on the SIM picker. -->

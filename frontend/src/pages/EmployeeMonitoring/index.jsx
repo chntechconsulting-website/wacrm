@@ -68,12 +68,13 @@ const EmployeeMonitoring = () => {
   const [showCheckinModal, setShowCheckinModal] = useState(false);
   const [checkinForm, setCheckinForm] = useState({
     customer_name: '',
-    checkin_lat: '13.0827',
-    checkin_lng: '80.2707',
+    checkin_lat: '',
+    checkin_lng: '',
     notes: '',
     photo_url: ''
   });
   const [submittingCheckin, setSubmittingCheckin] = useState(false);
+  const [locatingCheckin, setLocatingCheckin] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
   const fetchMonitoringData = async () => {
@@ -131,6 +132,34 @@ const EmployeeMonitoring = () => {
     }
   };
 
+  const handleDetectWebLocation = () => {
+    if (!navigator.geolocation) {
+      setToastMessage('Geolocation is not supported by this browser.');
+      setTimeout(() => setToastMessage(''), 3000);
+      return;
+    }
+    setLocatingCheckin(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setCheckinForm((prev) => ({
+          ...prev,
+          checkin_lat: position.coords.latitude.toFixed(6),
+          checkin_lng: position.coords.longitude.toFixed(6),
+        }));
+        setLocatingCheckin(false);
+      },
+      (error) => {
+        const message = error.code === error.PERMISSION_DENIED
+          ? 'Location permission was denied. Allow location access and try again.'
+          : 'Unable to obtain your current location.';
+        setToastMessage(message);
+        setTimeout(() => setToastMessage(''), 3000);
+        setLocatingCheckin(false);
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    );
+  };
+
   const handleCheckinSubmit = async (e) => {
     e.preventDefault();
     if (!checkinForm.customer_name) return;
@@ -140,7 +169,7 @@ const EmployeeMonitoring = () => {
       setShowCheckinModal(false);
       setToastMessage('Field visit check-in recorded successfully!');
       setTimeout(() => setToastMessage(''), 3000);
-      setCheckinForm({ customer_name: '', checkin_lat: '13.0827', checkin_lng: '80.2707', notes: '', photo_url: '' });
+      setCheckinForm({ customer_name: '', checkin_lat: '', checkin_lng: '', notes: '', photo_url: '' });
       fetchMonitoringData();
     } catch (err) {
       console.error(err);
@@ -835,17 +864,52 @@ const EmployeeMonitoring = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', margin: '14px 0', fontSize: '0.82rem', background: '#f8fafc', padding: '12px', borderRadius: '10px' }}>
                   <div>
                     <span style={{ color: '#64748b', fontWeight: '600' }}>GPS Location:</span>{' '}
-                    <strong>{visit.checkin_lat}, {visit.checkin_lng}</strong>
+                    <strong>{visit.checkin_lat && visit.checkin_lng ? `${visit.checkin_lat}, ${visit.checkin_lng}` : 'Not captured'}</strong>
                   </div>
+                  {visit.checkin_accuracy_m != null && (
+                    <div>
+                      <span style={{ color: '#64748b', fontWeight: '600' }}>GPS Accuracy:</span>{' '}
+                      <strong>{Number(visit.checkin_accuracy_m).toFixed(1)} m</strong>
+                    </div>
+                  )}
                   <div>
                     <span style={{ color: '#64748b', fontWeight: '600' }}>Address:</span>{' '}
-                    <strong>{visit.checkin_address || 'Anna Salai Commercial Zone'}</strong>
+                    <strong>{visit.checkin_address || 'Not captured'}</strong>
                   </div>
                   <div>
                     <span style={{ color: '#64748b', fontWeight: '600' }}>Check-in Time:</span>{' '}
                     <strong>{new Date(visit.checkin_time).toLocaleTimeString()}</strong>
                   </div>
+                  {visit.visit_outcome && (
+                    <div>
+                      <span style={{ color: '#64748b', fontWeight: '600' }}>Outcome:</span>{' '}
+                      <strong>{visit.visit_outcome}</strong>
+                    </div>
+                  )}
                 </div>
+
+                {visit.customer_requirements && (
+                  <div style={{ fontSize: '0.82rem', color: '#334155', background: '#f0fdf4', padding: '10px 12px', borderRadius: '8px', borderLeft: '3px solid #16a34a', marginBottom: '10px' }}>
+                    <strong>Requirements:</strong> {visit.customer_requirements}
+                  </div>
+                )}
+
+                {(visit.photo_url || visit.visiting_card_url) && (
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    {visit.photo_url && (
+                      <a href={visit.photo_url} target="_blank" rel="noreferrer" style={{ flex: '1 1 180px' }}>
+                        <img src={visit.photo_url} alt="Company board" style={{ width: '100%', height: '140px', objectFit: 'cover', borderRadius: '10px', border: '1px solid #e2e8f0' }} />
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>Company board</div>
+                      </a>
+                    )}
+                    {visit.visiting_card_url && (
+                      <a href={visit.visiting_card_url} target="_blank" rel="noreferrer" style={{ flex: '1 1 180px' }}>
+                        <img src={visit.visiting_card_url} alt="Visiting card" style={{ width: '100%', height: '140px', objectFit: 'cover', borderRadius: '10px', border: '1px solid #e2e8f0' }} />
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>Visiting card</div>
+                      </a>
+                    )}
+                  </div>
+                )}
 
                 {visit.notes && (
                   <div style={{ fontSize: '0.82rem', color: '#334155', background: '#eff6ff', padding: '10px 12px', borderRadius: '8px', borderLeft: '3px solid #2563eb' }}>
@@ -926,14 +990,26 @@ const EmployeeMonitoring = () => {
                 />
               </div>
 
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: '700', color: '#475569' }}>GPS Location</label>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                  onClick={handleDetectWebLocation}
+                  disabled={locatingCheckin}
+                >
+                  {locatingCheckin ? 'Detecting...' : 'Use Current Location'}
+                </button>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div className="form-group">
                   <label style={{ fontSize: '0.85rem', fontWeight: '700', color: '#475569' }}>Latitude</label>
-                  <input type="text" readOnly value={checkinForm.checkin_lat} />
+                  <input type="text" readOnly value={checkinForm.checkin_lat} placeholder="Not captured" />
                 </div>
                 <div className="form-group">
                   <label style={{ fontSize: '0.85rem', fontWeight: '700', color: '#475569' }}>Longitude</label>
-                  <input type="text" readOnly value={checkinForm.checkin_lng} />
+                  <input type="text" readOnly value={checkinForm.checkin_lng} placeholder="Not captured" />
                 </div>
               </div>
 

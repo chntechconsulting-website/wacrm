@@ -381,7 +381,9 @@ async def startup_db_client():
                     "customer_requirements": "TEXT NULL",
                     "visit_outcome": "VARCHAR(100) NULL",
                     "followup_id": "INT NULL",
-                    "client_token": "VARCHAR(100) NULL"
+                    "client_token": "VARCHAR(100) NULL",
+                    "checkin_accuracy_m": "FLOAT NULL",
+                    "gps_captured_at": "DATETIME NULL"
                 }
                 for col_name, col_type in missing_fv_cols.items():
                     if col_name not in fv_cols:

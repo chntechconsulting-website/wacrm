@@ -74,6 +74,7 @@ class ApiEndpoints {
 
   // Field Visits
   static String get fieldVisits => '$apiPrefix/field-visits';
+  static String get fieldVisitUploads => '$apiPrefix/field-visits/uploads';
   static String fieldVisitById(int id) => '$apiPrefix/field-visits/$id';
   static String employeeFieldVisits(int empId) =>
       '$apiPrefix/employee-monitoring/$empId/field-visits';

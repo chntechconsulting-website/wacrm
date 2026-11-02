@@ -47,6 +47,9 @@ class FieldVisit(Base):
     checkin_lat = Column(String(50), nullable=True)
     checkin_lng = Column(String(50), nullable=True)
     checkin_address = Column(String(255), nullable=True)
+    # GPS provenance: accuracy in meters and the moment the fix was captured.
+    checkin_accuracy_m = Column(Float, nullable=True)
+    gps_captured_at = Column(DateTime, nullable=True)
     checkin_time = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     checkout_lat = Column(String(50), nullable=True)
@@ -97,6 +100,10 @@ class FieldVisit(Base):
             "checkin_lat": self.checkin_lat,
             "checkin_lng": self.checkin_lng,
             "checkin_address": self.checkin_address,
+            "checkin_accuracy_m": self.checkin_accuracy_m,
+            "gps_captured_at": (
+                self.gps_captured_at.isoformat() if self.gps_captured_at else None
+            ),
             "checkout_lat": self.checkout_lat,
             "checkout_lng": self.checkout_lng,
             "photo_url": self.photo_url,

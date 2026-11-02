@@ -9,6 +9,7 @@ import '../../../core/widgets/loading_indicator.dart';
 import '../../../core/widgets/wacrm_badge.dart';
 import '../../../core/widgets/wacrm_card.dart';
 import '../../auth/providers/auth_provider.dart';
+import '../data/field_visits_repository.dart';
 import '../models/field_visit_model.dart';
 import '../providers/field_visits_provider.dart';
 import 'field_visit_form_screen.dart';
@@ -79,7 +80,9 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
       return const Color(0xFFD97706);
     } else if (o.contains('interested')) {
       return const Color(0xFF2563EB);
-    } else if (o.contains('not') || o.contains('lost') || o.contains('closed')) {
+    } else if (o.contains('not') ||
+        o.contains('lost') ||
+        o.contains('closed')) {
       return const Color(0xFFDC2626);
     }
     return const Color(0xFF6B7280);
@@ -91,7 +94,10 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
     final provider = context.watch<FieldVisitsProvider>();
     final visits = provider.visits;
 
-    final isManagerOrAdmin = user?.role == 'ADMIN' || user?.role == 'MANAGER' || user?.role == 'SALES_MANAGER';
+    final isManagerOrAdmin =
+        user?.role == 'ADMIN' ||
+        user?.role == 'MANAGER' ||
+        user?.role == 'SALES_MANAGER';
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -116,7 +122,10 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppColors.primary,
         icon: const Icon(Icons.add_location_alt_rounded, color: Colors.white),
-        label: const Text('Record Visit', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        label: const Text(
+          'Record Visit',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+        ),
         onPressed: () async {
           final recorded = await Navigator.push<bool>(
             context,
@@ -141,7 +150,10 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
                     controller: _searchController,
                     decoration: InputDecoration(
                       hintText: 'Search by client, agent, outcome, address...',
-                      prefixIcon: const Icon(Icons.search_rounded, color: AppColors.textMuted),
+                      prefixIcon: const Icon(
+                        Icons.search_rounded,
+                        color: AppColors.textMuted,
+                      ),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.clear_rounded, size: 18),
@@ -153,7 +165,10 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
                           : null,
                       filled: true,
                       fillColor: AppColors.inputBackground,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 0,
+                        horizontal: 16,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
@@ -174,16 +189,22 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 8),
                               decoration: BoxDecoration(
-                                color: _selectedTab == 0 ? AppColors.primary : AppColors.inputBackground,
+                                color: _selectedTab == 0
+                                    ? AppColors.primary
+                                    : AppColors.inputBackground,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Center(
                                 child: Text(
-                                  user?.role == 'ADMIN' ? 'Company Visits' : 'Team Visits',
+                                  user?.role == 'ADMIN'
+                                      ? 'Company Visits'
+                                      : 'Team Visits',
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w700,
-                                    color: _selectedTab == 0 ? Colors.white : AppColors.textMuted,
+                                    color: _selectedTab == 0
+                                        ? Colors.white
+                                        : AppColors.textMuted,
                                   ),
                                 ),
                               ),
@@ -200,7 +221,9 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 8),
                               decoration: BoxDecoration(
-                                color: _selectedTab == 1 ? AppColors.primary : AppColors.inputBackground,
+                                color: _selectedTab == 1
+                                    ? AppColors.primary
+                                    : AppColors.inputBackground,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: Center(
@@ -209,7 +232,9 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w700,
-                                    color: _selectedTab == 1 ? Colors.white : AppColors.textMuted,
+                                    color: _selectedTab == 1
+                                        ? Colors.white
+                                        : AppColors.textMuted,
                                   ),
                                 ),
                               ),
@@ -314,24 +339,41 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
           // Date & Location Info Row
           Row(
             children: [
-              const Icon(Icons.schedule_rounded, size: 14, color: AppColors.textMuted),
+              const Icon(
+                Icons.schedule_rounded,
+                size: 14,
+                color: AppColors.textMuted,
+              ),
               const SizedBox(width: 6),
               Text(
                 _formatDateTime(visit.checkinTime),
-                style: const TextStyle(fontSize: 12, color: AppColors.textMuted, fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ],
           ),
-          if (visit.checkinAddress != null && visit.checkinAddress!.isNotEmpty) ...[
+          if (visit.checkinAddress != null &&
+              visit.checkinAddress!.isNotEmpty) ...[
             const SizedBox(height: 6),
             Row(
               children: [
-                const Icon(Icons.location_on_outlined, size: 14, color: AppColors.primary),
+                const Icon(
+                  Icons.location_on_outlined,
+                  size: 14,
+                  color: AppColors.primary,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     visit.checkinAddress!,
-                    style: const TextStyle(fontSize: 12, color: AppColors.textMain, fontWeight: FontWeight.w500),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMain,
+                      fontWeight: FontWeight.w500,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -340,8 +382,58 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
             ),
           ],
 
+          if (visit.checkinAccuracyM != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(
+                  Icons.gps_fixed_rounded,
+                  size: 14,
+                  color: AppColors.success,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'GPS accuracy: ${visit.checkinAccuracyM!.toStringAsFixed(1)} m',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ],
+
+          // Uploaded company board / visiting card photos
+          if ((visit.photoUrl ?? '').isNotEmpty ||
+              (visit.visitingCardUrl ?? '').isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                if ((visit.photoUrl ?? '').isNotEmpty)
+                  Expanded(
+                    child: _VisitPhotoThumb(
+                      label: 'Company board',
+                      url: visit.photoUrl!,
+                    ),
+                  ),
+                if ((visit.photoUrl ?? '').isNotEmpty &&
+                    (visit.visitingCardUrl ?? '').isNotEmpty)
+                  const SizedBox(width: 10),
+                if ((visit.visitingCardUrl ?? '').isNotEmpty)
+                  Expanded(
+                    child: _VisitPhotoThumb(
+                      label: 'Visiting card',
+                      url: visit.visitingCardUrl!,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+
           // Customer Requirements
-          if (visit.customerRequirements != null && visit.customerRequirements!.isNotEmpty) ...[
+          if (visit.customerRequirements != null &&
+              visit.customerRequirements!.isNotEmpty) ...[
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(10),
@@ -352,12 +444,19 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.format_quote_rounded, size: 16, color: AppColors.textMuted),
+                  const Icon(
+                    Icons.format_quote_rounded,
+                    size: 16,
+                    color: AppColors.textMuted,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       'Requirements: ${visit.customerRequirements}',
-                      style: const TextStyle(fontSize: 12, color: AppColors.textMain),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMain,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -372,7 +471,11 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
             const SizedBox(height: 8),
             Text(
               visit.notes!,
-              style: const TextStyle(fontSize: 12, color: AppColors.textMuted, fontStyle: FontStyle.italic),
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted,
+                fontStyle: FontStyle.italic,
+              ),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -390,7 +493,11 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.alarm_on_rounded, size: 16, color: Color(0xFFD97706)),
+                  const Icon(
+                    Icons.alarm_on_rounded,
+                    size: 16,
+                    color: Color(0xFFD97706),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -414,6 +521,55 @@ class _FieldVisitsListScreenState extends State<FieldVisitsListScreen> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _VisitPhotoThumb extends StatelessWidget {
+  final String label;
+  final String url;
+
+  const _VisitPhotoThumb({required this.label, required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    final resolved = FieldVisitsRepository.resolveImageUrl(url);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            height: 90,
+            width: double.infinity,
+            child: resolved == null
+                ? const ColoredBox(color: AppColors.inputBackground)
+                : Image.network(
+                    resolved,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const ColoredBox(
+                      color: AppColors.inputBackground,
+                      child: Center(
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: AppColors.textMuted,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textMuted,
+          ),
+        ),
+      ],
     );
   }
 }

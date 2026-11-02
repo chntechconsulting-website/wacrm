@@ -11,6 +11,8 @@ class FieldVisitModel {
   final String? checkinLat;
   final String? checkinLng;
   final String? checkinAddress;
+  final double? checkinAccuracyM;
+  final String? gpsCapturedAt;
   final String? photoUrl;
   final String? visitingCardUrl;
   final String? customerRequirements;
@@ -34,6 +36,8 @@ class FieldVisitModel {
     this.checkinLat,
     this.checkinLng,
     this.checkinAddress,
+    this.checkinAccuracyM,
+    this.gpsCapturedAt,
     this.photoUrl,
     this.visitingCardUrl,
     this.customerRequirements,
@@ -59,6 +63,8 @@ class FieldVisitModel {
       checkinLat: json['checkin_lat']?.toString(),
       checkinLng: json['checkin_lng']?.toString(),
       checkinAddress: json['checkin_address']?.toString(),
+      checkinAccuracyM: (json['checkin_accuracy_m'] as num?)?.toDouble(),
+      gpsCapturedAt: json['gps_captured_at']?.toString(),
       photoUrl: json['photo_url']?.toString(),
       visitingCardUrl: json['visiting_card_url']?.toString(),
       customerRequirements: json['customer_requirements']?.toString(),
@@ -66,7 +72,9 @@ class FieldVisitModel {
       notes: json['notes']?.toString(),
       status: json['status'] ?? 'COMPLETED',
       followupId: json['followup_id'],
-      followup: json['followup'] is Map<String, dynamic> ? json['followup'] : null,
+      followup: json['followup'] is Map<String, dynamic>
+          ? json['followup']
+          : null,
       clientToken: json['client_token']?.toString(),
     );
   }
@@ -84,6 +92,8 @@ class FieldVisitModel {
       'checkin_lat': checkinLat,
       'checkin_lng': checkinLng,
       'checkin_address': checkinAddress,
+      'checkin_accuracy_m': checkinAccuracyM,
+      'gps_captured_at': gpsCapturedAt,
       'photo_url': photoUrl,
       'visiting_card_url': visitingCardUrl,
       'customer_requirements': customerRequirements,

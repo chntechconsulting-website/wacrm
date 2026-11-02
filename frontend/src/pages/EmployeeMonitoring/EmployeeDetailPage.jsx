@@ -526,8 +526,35 @@ const EmployeeDetailPage = () => {
                   </span>
                 </div>
                 <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: '6px' }}>
-                  Location: <strong>{visit.checkin_lat}, {visit.checkin_lng}</strong> &bull; Address: <strong>{visit.checkin_address || 'Chennai Commercial Hub'}</strong>
+                  Location: <strong>{visit.checkin_lat && visit.checkin_lng ? `${visit.checkin_lat}, ${visit.checkin_lng}` : 'Not captured'}</strong> &bull; Address: <strong>{visit.checkin_address || 'Not captured'}</strong>
+                  {visit.checkin_accuracy_m != null && (
+                    <> &bull; Accuracy: <strong>{Number(visit.checkin_accuracy_m).toFixed(1)} m</strong></>
+                  )}
+                  {visit.visit_outcome && (
+                    <> &bull; Outcome: <strong>{visit.visit_outcome}</strong></>
+                  )}
                 </div>
+                {visit.customer_requirements && (
+                  <div style={{ fontSize: '0.82rem', color: '#334155', marginTop: '8px', background: '#f0fdf4', padding: '8px 12px', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+                    <strong>Requirements:</strong> {visit.customer_requirements}
+                  </div>
+                )}
+                {(visit.photo_url || visit.visiting_card_url) && (
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px' }}>
+                    {visit.photo_url && (
+                      <a href={visit.photo_url} target="_blank" rel="noreferrer" style={{ flex: '1 1 160px' }}>
+                        <img src={visit.photo_url} alt="Company board" style={{ width: '100%', height: '120px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #e2e8f0' }} />
+                        <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '3px' }}>Company board</div>
+                      </a>
+                    )}
+                    {visit.visiting_card_url && (
+                      <a href={visit.visiting_card_url} target="_blank" rel="noreferrer" style={{ flex: '1 1 160px' }}>
+                        <img src={visit.visiting_card_url} alt="Visiting card" style={{ width: '100%', height: '120px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #e2e8f0' }} />
+                        <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '3px' }}>Visiting card</div>
+                      </a>
+                    )}
+                  </div>
+                )}
                 {visit.notes && (
                   <div style={{ fontSize: '0.82rem', color: '#334155', marginTop: '8px', background: '#ffffff', padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                     <strong>Notes:</strong> {visit.notes}
