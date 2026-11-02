@@ -130,15 +130,118 @@ class TestMobileCallAttemptLifecycle(unittest.TestCase):
         self.assertEqual(retried.from_number, self.phone)
         self.assertEqual(retried.to_number, "+919111122233")
 
-    def test_new_call_without_direction_keeps_legacy_outbound_default(self):
+    def test_new_legacy_manual_call_without_direction_keeps_outbound_default(self):
+        # Non-device manual logging (no SIM/native metadata) keeps its historic
+        # behaviour. Only device rows are required to prove a direction.
         call = self._attempt(
             client_call_id="SIM_LEGACY_DEFAULT",
             call_direction=None,
             call_status="COMPLETED",
             duration_seconds=5,
             ended_at=datetime.now(),
+            call_source=None,
+            sim_label=None,
+            sim_account_id=None,
         )
         self.assertEqual(call.call_direction, "OUTBOUND")
+        self.assertEqual(call.provider, "DIRECT_DIAL")
+
+    def test_new_mobile_call_without_direction_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self._attempt(
+                client_call_id="SIM_MISSING_DIRECTION",
+                call_direction=None,
+                call_status="COMPLETED",
+                duration_seconds=5,
+                ended_at=datetime.now(),
+            )
+        self.assertEqual(self.db.query(CallLog).count(), 0)
+
+    def test_new_mobile_call_with_unknown_direction_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self._attempt(
+                client_call_id="SIM_UNKNOWN_DIRECTION",
+                call_direction="UNKNOWN",
+                call_status="COMPLETED",
+                duration_seconds=5,
+                ended_at=datetime.now(),
+            )
+        self.assertEqual(self.db.query(CallLog).count(), 0)
+
+    def test_native_history_row_without_direction_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self._attempt(
+                client_call_id=None,
+                native_call_reference="MOBILE_DEVICE_1_7777",
+                call_direction=None,
+                call_status="COMPLETED",
+                duration_seconds=5,
+                ended_at=datetime.now(),
+            )
+        self.assertEqual(self.db.query(CallLog).count(), 0)
+
+    def test_all_incoming_types_store_inbound(self):
+        for index, status in enumerate(("COMPLETED", "MISSED", "REJECTED")):
+            call = self._attempt(
+                client_call_id=f"SIM_INCOMING_{index}",
+                call_direction="INBOUND",
+                call_status=status,
+                duration_seconds=10 if status == "COMPLETED" else 0,
+                ended_at=datetime.now(),
+            )
+            self.assertEqual(call.call_direction, "INBOUND")
+            self.assertEqual(call.from_number, self.phone)
+
+    def test_all_outgoing_outcomes_store_outbound(self):
+        for index, status in enumerate(("COMPLETED", "NO_ANSWER")):
+            call = self._attempt(
+                client_call_id=f"SIM_OUTGOING_{index}",
+                call_direction="OUTBOUND",
+                call_status=status,
+                duration_seconds=10 if status == "COMPLETED" else 0,
+                ended_at=datetime.now(),
+            )
+            self.assertEqual(call.call_direction, "OUTBOUND")
+            self.assertEqual(call.to_number, self.phone)
+
+    def test_inbound_is_not_overwritten_by_a_later_outbound_retry(self):
+        inbound = self._attempt(
+            client_call_id="SIM_INBOUND_STICKY",
+            call_direction="INBOUND",
+            call_status="MISSED",
+            duration_seconds=0,
+        )
+        retried = self._attempt(
+            client_call_id="SIM_INBOUND_STICKY",
+            call_direction="OUTBOUND",
+            call_status="COMPLETED",
+            duration_seconds=9,
+            ended_at=datetime.now(),
+        )
+        self.assertEqual(retried.id, inbound.id)
+        self.assertEqual(retried.call_direction, "INBOUND")
+        self.assertEqual(retried.from_number, self.phone)
+        self.assertEqual(retried.to_number, "+919111122233")
+
+    def test_outbound_row_can_be_corrected_to_inbound_by_native_evidence(self):
+        wrong = self._attempt(
+            client_call_id="SIM_CORRECT_ME",
+            call_direction="OUTBOUND",
+            call_status="COMPLETED",
+            duration_seconds=9,
+            ended_at=datetime.now(),
+        )
+        fixed = self._attempt(
+            client_call_id="SIM_CORRECT_ME",
+            call_direction="INBOUND",
+            call_status="COMPLETED",
+            duration_seconds=9,
+            ended_at=datetime.now(),
+        )
+        self.assertEqual(fixed.id, wrong.id)
+        self.assertEqual(fixed.call_direction, "INBOUND")
+        self.assertEqual(fixed.from_number, self.phone)
+        self.assertEqual(fixed.to_number, "+919111122233")
 
     def test_native_history_reference_is_idempotent(self):
         first = self._attempt(

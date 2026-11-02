@@ -267,9 +267,10 @@ class ManualCallLogRequest(BaseModel):
 
     # Optional mobile SIM / direct-device metadata. Older clients can omit these.
     client_call_id: Optional[str] = None
-    # None means "not supplied": an existing row keeps its stored direction and
-    # a new row falls back to OUTBOUND for legacy clients. Native device sync
-    # always sends the explicit value.
+    # None means "not supplied": an existing row keeps its stored direction.
+    # A new mobile/device row without an explicit direction is rejected; the
+    # service never defaults it to OUTBOUND. Legacy non-device manual calls keep
+    # their historical OUTBOUND default.
     call_direction: Optional[str] = None
     started_at: Optional[datetime] = None
     answered_at: Optional[datetime] = None

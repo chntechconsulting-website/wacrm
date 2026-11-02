@@ -228,8 +228,8 @@ void main() {
         expect(entry.isUsable, isFalse);
       });
 
-      test('an explicit native direction wins over the raw type', () {
-        expect(parseType(1, direction: 'OUTBOUND').direction, 'OUTBOUND');
+      test('the raw Android type wins over a conflicting direction string', () {
+        expect(parseType(1, direction: 'OUTBOUND').direction, 'INBOUND');
       });
     });
 
@@ -254,6 +254,46 @@ void main() {
       });
 
       expect(result.callDirection, isEmpty);
+      expect(result.hasKnownDirection, isFalse);
+    });
+
+    test('native result with an UNKNOWN direction is not synchronizable', () {
+      final result = MobileSimCallResult.fromMap(<dynamic, dynamic>{
+        'callId': 'SIM_UNKNOWN_2',
+        'customerPhone': '+919876543210',
+        'callDirection': 'UNKNOWN',
+        'callType': 99,
+        'callStatus': 'COMPLETED',
+        'durationSeconds': 8,
+      });
+
+      expect(result.callDirection, isEmpty);
+      expect(result.hasKnownDirection, isFalse);
+    });
+
+    test('native result trusts callType over a conflicting direction', () {
+      final result = MobileSimCallResult.fromMap(<dynamic, dynamic>{
+        'callId': 'SIM_INCOMING_3',
+        'customerPhone': '+919876543210',
+        'callDirection': 'OUTBOUND',
+        'callType': 1,
+        'callStatus': 'COMPLETED',
+        'durationSeconds': 8,
+      });
+
+      expect(result.callDirection, 'INBOUND');
+    });
+
+    test('native result with a proven direction is synchronizable', () {
+      final result = MobileSimCallResult.fromMap(<dynamic, dynamic>{
+        'callId': 'SIM_INBOUND_2',
+        'customerPhone': '+919876543210',
+        'callDirection': 'INBOUND',
+        'callStatus': 'MISSED',
+        'durationSeconds': 0,
+      });
+
+      expect(result.hasKnownDirection, isTrue);
     });
   });
 }

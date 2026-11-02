@@ -1137,7 +1137,9 @@ const CallLogsPage = () => {
                 </tr>
               ) : (
                 callLogs.map(log => {
-                  const isOutbound = (log.call_direction || '').toUpperCase() === 'OUTBOUND';
+                  const direction = String(log.call_direction || '').toUpperCase();
+                  const isInbound = direction === 'INBOUND';
+                  const isOutbound = direction === 'OUTBOUND';
                   const isExt = (num) => num && String(num).replace(/[^0-9]/g, '').length <= 5;
                   const rawCust = log.customer_phone || '';
                   const rawEmp = log.employee_phone || '';
@@ -1159,15 +1161,20 @@ const CallLogsPage = () => {
                     <tr key={log.id}>
                       {/* Direction */}
                       <td>
-                        {log.call_direction === 'INBOUND' ? (
+                        {isInbound ? (
                           <span className="direction-pill inbound">
                             <PhoneIncoming size={12} />
                             INBOUND
                           </span>
-                        ) : (
+                        ) : isOutbound ? (
                           <span className="direction-pill outbound">
                             <PhoneOutgoing size={12} />
                             OUTBOUND
+                          </span>
+                        ) : (
+                          <span className="direction-pill unknown">
+                            <PhoneCall size={12} />
+                            UNKNOWN
                           </span>
                         )}
                       </td>

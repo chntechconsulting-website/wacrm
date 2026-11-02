@@ -61,6 +61,7 @@ class MainNavigationShellState extends State<MainNavigationShell>
   Future<void> _runDeviceSync() async {
     await _recoverPendingMobileSimCall();
     await _syncDeviceCallHistory();
+    await _repairMobileCallDirections();
   }
 
   Future<void> _syncDeviceCallHistory() async {
@@ -79,6 +80,22 @@ class MainNavigationShellState extends State<MainNavigationShell>
   void _attachMobileSimCallSync() {
     if (!mounted) return;
     MobileSimCallService.attach(onCallEnded: _syncMobileSimCall);
+  }
+
+  /// One-time, evidence-only correction of historical directions. A row is
+  /// re-sent only when this device previously synced it and the rebuilt
+  /// direction comes from Android's own CallLog.Calls.TYPE.
+  Future<void> _repairMobileCallDirections() async {
+    if (!mounted || !DeviceCallLogSyncService.isSupported) return;
+    final user = context.read<AuthProvider>().currentUser;
+    try {
+      await DeviceCallLogSyncService.repairHistoricalDirections(
+        context.read<CallsProvider>(),
+        employeeKey: user?.id.toString() ?? 'default',
+      );
+    } catch (_) {
+      // Optional repair; never disturb the UI when the OS denies access.
+    }
   }
 
   Future<void> _recoverPendingMobileSimCall() async {

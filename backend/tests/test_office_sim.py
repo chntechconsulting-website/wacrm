@@ -250,6 +250,110 @@ class TestOfficeSimCallEnforcement(OfficeSimApiTestCase):
         self.assertEqual(response.status_code, 422, response.text)
 
 
+class TestMobileCallDirectionApi(OfficeSimApiTestCase):
+    """API + database + response direction for every device call outcome."""
+
+    def _log(self, *, direction, status, duration, client_id):
+        return self.client.post(
+            "/api/ivr/manual-call",
+            json={
+                "customer_phone": "+919111122233",
+                "call_status": status,
+                "duration_seconds": duration,
+                "client_call_id": client_id,
+                "call_direction": direction,
+                "call_source": "MOBILE_SIM",
+                "native_call_reference": client_id,
+            },
+        )
+
+    def _assert_stored(self, client_id, expected):
+        db = self.Session()
+        try:
+            call = (
+                db.query(CallLog)
+                .filter(CallLog.provider_call_id == client_id)
+                .one()
+            )
+            self.assertEqual(call.call_direction, expected)
+        finally:
+            db.close()
+
+    def test_incoming_answered_is_inbound(self):
+        response = self._log(
+            direction="INBOUND",
+            status="COMPLETED",
+            duration=25,
+            client_id="MOBILE_dir_in_answered",
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["call_direction"], "INBOUND")
+        self._assert_stored("MOBILE_dir_in_answered", "INBOUND")
+
+    def test_incoming_missed_is_inbound(self):
+        response = self._log(
+            direction="INBOUND",
+            status="MISSED",
+            duration=0,
+            client_id="MOBILE_dir_in_missed",
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["call_direction"], "INBOUND")
+        self._assert_stored("MOBILE_dir_in_missed", "INBOUND")
+
+    def test_incoming_rejected_is_inbound(self):
+        response = self._log(
+            direction="INBOUND",
+            status="REJECTED",
+            duration=0,
+            client_id="MOBILE_dir_in_rejected",
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["call_direction"], "INBOUND")
+        self._assert_stored("MOBILE_dir_in_rejected", "INBOUND")
+
+    def test_outgoing_answered_is_outbound(self):
+        response = self._log(
+            direction="OUTBOUND",
+            status="COMPLETED",
+            duration=15,
+            client_id="MOBILE_dir_out_answered",
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["call_direction"], "OUTBOUND")
+        self._assert_stored("MOBILE_dir_out_answered", "OUTBOUND")
+
+    def test_outgoing_unanswered_is_outbound(self):
+        response = self._log(
+            direction="OUTBOUND",
+            status="NO_ANSWER",
+            duration=0,
+            client_id="MOBILE_dir_out_unanswered",
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["call_direction"], "OUTBOUND")
+        self._assert_stored("MOBILE_dir_out_unanswered", "OUTBOUND")
+
+    def test_missing_direction_is_rejected_not_defaulted_outbound(self):
+        response = self.client.post(
+            "/api/ivr/manual-call",
+            json={
+                "customer_phone": "+919111122233",
+                "call_status": "COMPLETED",
+                "duration_seconds": 10,
+                "client_call_id": "MOBILE_dir_missing",
+                "call_source": "MOBILE_SIM",
+            },
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertIn("call_direction", response.text)
+        db = self.Session()
+        try:
+            self.assertEqual(db.query(CallLog).count(), 0)
+        finally:
+            db.close()
+
+
 class TestOfficeSimRecordingEnforcement(OfficeSimApiTestCase):
     def _audio_bytes(self):
         return b"ID3" + b"\x00" * 4096

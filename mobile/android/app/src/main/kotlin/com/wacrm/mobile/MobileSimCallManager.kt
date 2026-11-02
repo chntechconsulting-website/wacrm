@@ -1492,10 +1492,14 @@ class MobileSimCallManager(
 
     private fun buildCallResult(current: ActiveCall): Map<String, Any?> {
         val deviceLog = queryDeviceCallLog(current)
-        // Prefer the native call-log row's TYPE (authoritative). Fall back to the
-        // direction of the tracked call, never to a hardcoded value.
-        val direction = deviceLog?.let { callDirectionForType(it.type) }
-            ?: current.direction
+        // Prefer the native call-log row's TYPE (authoritative). If the device
+        // exposes a type the CRM does not understand, mark the direction
+        // UNKNOWN so Flutter can refuse to synchronize it. Never fall back to
+        // OUTBOUND merely because the type is missing/unsupported.
+        val direction = when {
+            deviceLog != null -> callDirectionForType(deviceLog.type) ?: "UNKNOWN"
+            else -> current.direction
+        }
         val endAt = current.endAt ?: System.currentTimeMillis()
         val startedAt: Long
         var durationSeconds: Int

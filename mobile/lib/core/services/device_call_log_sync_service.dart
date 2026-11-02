@@ -73,10 +73,10 @@ class DeviceCallLogEntry {
 
   factory DeviceCallLogEntry.fromMap(Map<String, dynamic> map) {
     final explicit = _direction(map['direction']);
-    // The native history map always carries `direction`, but fall back to the
-    // raw Android CallLog.Calls.TYPE so an older bridge cannot silently produce
-    // an OUTBOUND row. If neither is available the entry is unusable.
-    final direction = explicit ?? _directionForAndroidType(map['type']) ?? '';
+    // Android's raw CallLog.Calls.TYPE is the ground truth. A direction string
+    // from an older bridge may be stale, so the typed value wins when present.
+    // If neither is available the entry is unusable (never assumed OUTBOUND).
+    final direction = _directionForAndroidType(map['type']) ?? explicit ?? '';
     return DeviceCallLogEntry(
       nativeReference: (map['nativeCallReference'] ?? '').toString().trim(),
       deviceCallLogId: _text(map['deviceCallLogId']),
@@ -121,6 +121,9 @@ class DeviceCallLogSyncResult {
   final int skippedPersonalSim;
   /// Rows skipped because Android exposed no exact SIM identity.
   final int skippedMissingIdentity;
+  /// Rows skipped because Android exposed no supported call type, so the
+  /// direction is genuinely unknown. They are never guessed as OUTBOUND.
+  final int skippedUnknownDirection;
   final String? officeSimMessage;
 
   const DeviceCallLogSyncResult({
@@ -131,6 +134,7 @@ class DeviceCallLogSyncResult {
     this.officeSimState = OfficeSimState.notConfigured,
     this.skippedPersonalSim = 0,
     this.skippedMissingIdentity = 0,
+    this.skippedUnknownDirection = 0,
     this.officeSimMessage,
   });
 
@@ -152,9 +156,12 @@ class DeviceCallLogSyncResult {
 class DeviceCallLogSyncService {
   static const String _lastSyncKey = 'wacrm_device_call_sync_last';
   static const String _skippedKey = 'wacrm_device_call_sync_handled';
+  static const String _directionRepairKey =
+      'wacrm_device_call_direction_repair_v1';
   static const int _maxSkipped = 800;
   static const int _overlapMinutes = 10;
   static const int _maxLookbackDays = 7;
+  static const int _directionRepairLookbackDays = 30;
 
   static bool _running = false;
 
@@ -212,13 +219,26 @@ class DeviceCallLogSyncService {
       var recordings = 0;
       var skippedPersonal = 0;
       var skippedMissingIdentity = 0;
+      var skippedUnknownDirection = 0;
       final consented = autoUploadRecordings
           ? await RecordingConsentService.hasConsent(scope)
           : false;
 
       for (final raw in rows) {
         final entry = DeviceCallLogEntry.fromMap(raw);
-        if (!entry.isUsable) continue;
+        if (!entry.isUsable) {
+          // A row with a valid reference and phone but no supported Android
+          // type is unresolved: never fall back to OUTBOUND, never sync it.
+          if (entry.nativeReference.trim().isNotEmpty &&
+              entry.phone.trim().isNotEmpty) {
+            skippedUnknownDirection += 1;
+            debugPrint(
+              '[CallDirection] Skipped device call: Android call type is '
+              'unknown, direction not inferred.',
+            );
+          }
+          continue;
+        }
         if (handled.contains(entry.nativeReference)) continue;
 
         // Never guess SIM identity. A row without an exact subscription or
@@ -314,6 +334,7 @@ class DeviceCallLogSyncService {
         officeSimState: officeSim.state,
         skippedPersonalSim: skippedPersonal,
         skippedMissingIdentity: skippedMissingIdentity,
+        skippedUnknownDirection: skippedUnknownDirection,
         officeSimMessage: officeSim.message,
       );
     } catch (error) {
@@ -321,6 +342,103 @@ class DeviceCallLogSyncService {
     } finally {
       _running = false;
     }
+  }
+
+  /// Re-posts previously synced inbound device-history rows so the backend can
+  /// correct a stored direction using the current Android `CallLog.Calls.TYPE`.
+  ///
+  /// This runs once per employee. Only inbound rows whose native reference was
+  /// already synced from this device are eligible, so a repair never creates a
+  /// new CRM record and never resurrects a personal-SIM call. The native call
+  /// type is the only evidence used: phone number, duration and status are
+  /// ignored.
+  static Future<int> repairHistoricalDirections(
+    CallsProvider callsProvider, {
+    required String employeeKey,
+  }) async {
+    if (!isSupported || _running) return 0;
+    final permissions = await MobileSimCallService.permissionStatus();
+    if (!permissions.readCallLog) return 0;
+
+    final officeSim = await OfficeSimService.evaluate();
+    final mapping = officeSim.mapping;
+    // With a mapping configured, an unverified SIM blocks the repair exactly as
+    // it blocks sync. Without a mapping (legacy devices) previously synced
+    // references may still be corrected; no new row can be created.
+    if (mapping != null && !officeSim.canSync) return 0;
+
+    final prefs = await SharedPreferences.getInstance();
+    final scope = employeeKey.trim().isEmpty ? 'default' : employeeKey.trim();
+    final repairKey = '${_directionRepairKey}_$scope';
+    if (prefs.getBool(repairKey) == true) return 0;
+
+    final handled =
+        (prefs.getStringList('${_skippedKey}_$scope') ?? const <String>[])
+            .toSet();
+    if (handled.isEmpty) {
+      // Nothing was ever synced from this device, so there is no historical
+      // row whose direction could be proven. Never repair by guessing.
+      await prefs.setBool(repairKey, true);
+      return 0;
+    }
+
+    final now = DateTime.now().toUtc();
+    final rows = await MobileSimCallService.getRecentDeviceCalls(
+      since: now.subtract(const Duration(days: _directionRepairLookbackDays)),
+      limit: 500,
+    );
+    final repository = CallsRepository();
+    var repaired = 0;
+
+    for (final raw in rows) {
+      final entry = DeviceCallLogEntry.fromMap(raw);
+      if (!entry.isUsable) continue;
+      if (!handled.contains(entry.nativeReference)) continue;
+      // Only inbound rows are re-asserted. Outbound behaviour is untouched;
+      // the reported defect is an inbound call stored as OUTBOUND.
+      if (entry.direction != 'INBOUND') continue;
+      final entryIdentity = entry.simIdentity ?? entry.simAccountId;
+      if (mapping != null) {
+        if (!entry.hasSimIdentity) continue;
+        if (!OfficeSimService.callMatches(
+          mapping,
+          subscriptionId: entry.simSubscriptionId,
+          simAccountId: entryIdentity,
+        )) {
+          continue;
+        }
+      }
+
+      try {
+        await repository.logManualCall(
+          customerPhone: entry.phone,
+          callStatus: entry.status,
+          durationSeconds: entry.durationSeconds,
+          notes:
+              'Mobile SIM ${entry.direction.toLowerCase()} call direction '
+              'verified from the device call history.',
+          clientCallId: entry.nativeReference,
+          callDirection: entry.direction,
+          startedAt: entry.startedAt,
+          endedAt: entry.endedAt,
+          simAccountId: entryIdentity,
+          simSlot: entry.simSlotIndex,
+          simLabel: entry.simCarrierName,
+          callSource: 'MOBILE_SIM',
+          nativeCallReference: entry.nativeReference,
+        );
+        repaired += 1;
+      } catch (_) {
+        // Leave the repair pass undecided; it retries on the next launch.
+        return repaired;
+      }
+    }
+
+    await prefs.setBool(repairKey, true);
+    if (repaired > 0) {
+      await callsProvider.fetchCalls(showLoading: false);
+    }
+    return repaired;
   }
 
   /// Uploads the single device recording that matches a just-finished live

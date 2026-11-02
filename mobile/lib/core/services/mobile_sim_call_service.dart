@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../../features/calls/data/calls_repository.dart';
@@ -162,6 +163,11 @@ class MobileSimCallResult {
   bool get hasRecording =>
       recordingUrl != null && recordingUrl!.trim().isNotEmpty;
 
+  /// A result may only be written to the CRM when the native layer proved the
+  /// direction. An empty/UNKNOWN value is unresolved, never outbound.
+  bool get hasKnownDirection =>
+      callDirection == 'INBOUND' || callDirection == 'OUTBOUND';
+
   String get syncNotes {
     final parts = <String>['Mobile SIM call'];
     if (simLabel != null && simLabel!.trim().isNotEmpty) {
@@ -184,8 +190,8 @@ class MobileSimCallResult {
       customerPhone: _asString(map['customerPhone']) ?? '',
       contactName: _asString(map['contactName']),
       callDirection:
-          MobileSimCallService.normalizeDirection(map['callDirection']) ??
           MobileSimCallService.directionForAndroidType(map['callType']) ??
+          MobileSimCallService.normalizeDirection(map['callDirection']) ??
           '',
       callStatus: (_asString(map['callStatus']) ?? 'COMPLETED').toUpperCase(),
       durationSeconds: _asInt(map['durationSeconds']) ?? 0,
@@ -467,6 +473,15 @@ class MobileSimCallService {
     CallsProvider callsProvider,
   ) {
     if (result.callId.isEmpty) return Future<bool>.value(false);
+    // Never send an unresolved direction. The backend also rejects device rows
+    // without a direction, but failing here avoids a guaranteed rejected write
+    // and keeps the native result pending until the type is understood.
+    if (!result.hasKnownDirection) {
+      debugPrint(
+        '[MobileSIM] Skipped call ${result.callId}: direction is UNKNOWN.',
+      );
+      return Future<bool>.value(false);
+    }
     if (_syncedCallIds.contains(result.callId)) return Future<bool>.value(true);
 
     final inFlight = _syncFutures[result.callId];
@@ -485,6 +500,7 @@ class MobileSimCallService {
     MobileSimCallResult result,
     CallsProvider callsProvider,
   ) async {
+    if (!result.hasKnownDirection) return false;
     final identity = (result.simIdentity ?? '').trim().isNotEmpty
         ? result.simIdentity!.trim()
         : (result.simSubscriptionId != null

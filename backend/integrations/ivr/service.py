@@ -389,6 +389,7 @@ class IVRService:
 
         is_mobile_sim = (
             str(call_source or "").strip().upper() == "MOBILE_SIM"
+            or bool(native_ref)
             or bool(sim_account_id or sim_label)
             or sim_slot is not None
         )
@@ -396,10 +397,10 @@ class IVRService:
         requested_direction = str(call_direction or "").strip().upper()
         if requested_direction not in ("INBOUND", "OUTBOUND"):
             requested_direction = None
-        # Used for duplicate matching and new rows only. An existing row is
-        # never overwritten with OUTBOUND just because the retry omitted the
-        # direction - the native direction is authoritative.
-        direction = requested_direction or "OUTBOUND"
+        # Never invent a direction for a device call. An existing row keeps its
+        # stored (native) direction; a new device row must supply one. Only
+        # non-device legacy/manual calls retain the historical OUTBOUND default.
+        direction = requested_direction or ("OUTBOUND" if not is_mobile_sim else None)
 
         status = str(call_status or "COMPLETED").strip().upper().replace(" ", "_")
         if status == "UNANSWERED":
@@ -477,6 +478,10 @@ class IVRService:
             """
             if not native_ref or not target_phone or start_arg is None:
                 return None
+            if direction not in ("INBOUND", "OUTBOUND"):
+                # Without a proven direction the native row could match an
+                # unrelated attempt; refuse to reconcile instead of guessing.
+                return None
             if current_employee_id is None:
                 return None
             try:
@@ -535,11 +540,16 @@ class IVRService:
                 if is_attempt and not existing_is_attempt:
                     return existing
 
+                stored_direction = str(existing.call_direction or "").strip().upper()
                 effective_direction = (
-                    requested_direction
-                    or str(existing.call_direction or "").strip().upper()
-                    or "OUTBOUND"
+                    requested_direction or stored_direction or "OUTBOUND"
                 )
+                # INBOUND is sticky: a later retry that claims OUTBOUND must not
+                # relabel a call that was already proven inbound by the device.
+                # The reverse correction (OUTBOUND -> INBOUND) is allowed when
+                # newer native evidence supplies INBOUND.
+                if stored_direction == "INBOUND" and requested_direction == "OUTBOUND":
+                    effective_direction = "INBOUND"
                 if target_phone:
                     if effective_direction == "INBOUND":
                         existing.from_number = target_phone
@@ -551,7 +561,7 @@ class IVRService:
                     existing.lead_id = lead_id
                 existing.call_status = status
                 existing.duration_seconds = duration_seconds
-                if requested_direction:
+                if requested_direction and effective_direction == requested_direction:
                     existing.call_direction = requested_direction
 
                 if is_attempt:
@@ -615,6 +625,14 @@ class IVRService:
                     db.commit()
 
                 return existing
+
+        if is_mobile_sim and requested_direction is None:
+            # No native/device direction: refuse to create a row. Silently
+            # defaulting to OUTBOUND is what mislabels incoming calls.
+            raise ValueError(
+                "call_direction is required for mobile/device calls and must "
+                "be INBOUND or OUTBOUND."
+            )
 
         if not target_phone:
             raise ValueError("Customer phone number is required to log a call.")
