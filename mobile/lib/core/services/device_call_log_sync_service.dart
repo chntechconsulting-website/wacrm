@@ -34,7 +34,9 @@ class DeviceCallLogEntry {
   });
 
   bool get isUsable =>
-      nativeReference.trim().isNotEmpty && phone.trim().isNotEmpty;
+      nativeReference.trim().isNotEmpty &&
+      phone.trim().isNotEmpty &&
+      (direction == 'INBOUND' || direction == 'OUTBOUND');
 
   DateTime? get startedDateTime {
     final raw = startedAt;
@@ -49,11 +51,16 @@ class DeviceCallLogEntry {
   }
 
   factory DeviceCallLogEntry.fromMap(Map<String, dynamic> map) {
+    final explicit = _direction(map['direction']);
+    // The native history map always carries `direction`, but fall back to the
+    // raw Android CallLog.Calls.TYPE so an older bridge cannot silently produce
+    // an OUTBOUND row. If neither is available the entry is unusable.
+    final direction = explicit ?? _directionForAndroidType(map['type']) ?? '';
     return DeviceCallLogEntry(
       nativeReference: (map['nativeCallReference'] ?? '').toString().trim(),
       deviceCallLogId: _text(map['deviceCallLogId']),
       phone: (map['phone'] ?? '').toString().trim(),
-      direction: ((map['direction'] ?? 'OUTBOUND').toString()).toUpperCase(),
+      direction: direction,
       status: ((map['status'] ?? 'COMPLETED').toString()).toUpperCase(),
       durationSeconds: _int(map['durationSeconds']) ?? 0,
       startedAt: _text(map['startedAt']),
@@ -62,6 +69,17 @@ class DeviceCallLogEntry {
       contactName: _text(map['contactName']),
     );
   }
+
+  static String? _direction(Object? raw) {
+    final value = (raw ?? '').toString().trim().toUpperCase();
+    if (value == 'INBOUND' || value == 'OUTBOUND') return value;
+    return null;
+  }
+
+  /// Android `CallLog.Calls.TYPE` values. The CRM maps every non-outgoing
+  /// telephony type to INBOUND; unknown types yield null instead of a guess.
+  static String? _directionForAndroidType(Object? rawType) =>
+      MobileSimCallService.directionForAndroidType(rawType);
 }
 
 class DeviceCallLogSyncResult {

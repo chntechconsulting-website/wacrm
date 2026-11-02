@@ -52,6 +52,10 @@
 | `Unable to play this recording (1/-1015); HTTP 206, text/html` | Production Caddy serves the web app for `/uploads/...` (SPA fallback); it only proxies `/api/*` to FastAPI, so uploaded recordings were unreachable at their stored URL. | Added a read-only `GET /api/ivr/media/recordings/{call_id}/{filename}` route that serves the file with an explicit audio content type and HTTP Range support. Stored links are rewritten to it, including legacy rows and old app responses. |
 | Picker cancellation showed “No unambiguous device recording was found” | Native picker returned `null` for both cancel and no-match. | Cancellation is a distinct result; backing out is silent. |
 | Samsung recordings were not found by automatic search | Discovery was gated on already-readable recordings and only queried one volume. | Discovery uses read-only audio access and queries every external volume; capability sheet reports readable count and folder hints. |
+| Incoming mobile SIM calls displayed as **OUTBOUND** | Direction was not consistently sourced from Android's `CallLog.Calls.TYPE`: the live result map hardcoded `OUTBOUND`, and Dart/bridge layers defaulted a missing direction to `OUTBOUND`. | Added one explicit mapping (`1,3,5,6,7 → INBOUND`, `2 → OUTBOUND`, unsupported → skip) in the native bridge, both Flutter parsers and the backend. A retry that omits `call_direction` no longer overwrites a stored INBOUND row. All six types are covered by unit tests. |
+
+Direction mapping is based only on Android's native call type. Employee phone,
+lead phone, recording URL and duration are never used to infer direction.
 
 Playback failures now include the HTTP status and content type from a
 best-effort probe, making server-side 403/404/405 failures diagnosable without

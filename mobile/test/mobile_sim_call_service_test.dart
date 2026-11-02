@@ -183,5 +183,77 @@ void main() {
 
       expect(entry.isUsable, isFalse);
     });
+
+    group('maps every Android CallLog.Calls.TYPE explicitly', () {
+      DeviceCallLogEntry parseType(int? type, {String? direction}) {
+        final map = <String, dynamic>{
+          'nativeCallReference': 'MOBILE_device_500',
+          'deviceCallLogId': 500,
+          'phone': '+919876543210',
+          'status': 'COMPLETED',
+          'durationSeconds': 12,
+        };
+        if (type != null) map['type'] = type;
+        if (direction != null) map['direction'] = direction;
+        return DeviceCallLogEntry.fromMap(map);
+      }
+
+      test('INCOMING_TYPE (1) is INBOUND', () {
+        expect(parseType(1).direction, 'INBOUND');
+      });
+
+      test('OUTGOING_TYPE (2) is OUTBOUND', () {
+        expect(parseType(2).direction, 'OUTBOUND');
+      });
+
+      test('MISSED_TYPE (3) is INBOUND', () {
+        expect(parseType(3).direction, 'INBOUND');
+      });
+
+      test('REJECTED_TYPE (5) is INBOUND', () {
+        expect(parseType(5).direction, 'INBOUND');
+      });
+
+      test('BLOCKED_TYPE (6) is INBOUND', () {
+        expect(parseType(6).direction, 'INBOUND');
+      });
+
+      test('ANSWERED_EXTERNALLY_TYPE (7) is INBOUND', () {
+        expect(parseType(7).direction, 'INBOUND');
+      });
+
+      test('unknown type without direction is rejected, never OUTBOUND', () {
+        final entry = parseType(99);
+        expect(entry.direction, isEmpty);
+        expect(entry.isUsable, isFalse);
+      });
+
+      test('an explicit native direction wins over the raw type', () {
+        expect(parseType(1, direction: 'OUTBOUND').direction, 'OUTBOUND');
+      });
+    });
+
+    test('native result falls back to the raw Android type', () {
+      final result = MobileSimCallResult.fromMap(<dynamic, dynamic>{
+        'callId': 'SIM_INCOMING_1',
+        'customerPhone': '+919876543210',
+        'callType': 1,
+        'callStatus': 'COMPLETED',
+        'durationSeconds': 8,
+      });
+
+      expect(result.callDirection, 'INBOUND');
+    });
+
+    test('native result without any direction is not assumed OUTBOUND', () {
+      final result = MobileSimCallResult.fromMap(<dynamic, dynamic>{
+        'callId': 'SIM_UNKNOWN_1',
+        'customerPhone': '+919876543210',
+        'callStatus': 'COMPLETED',
+        'durationSeconds': 8,
+      });
+
+      expect(result.callDirection, isEmpty);
+    });
   });
 }

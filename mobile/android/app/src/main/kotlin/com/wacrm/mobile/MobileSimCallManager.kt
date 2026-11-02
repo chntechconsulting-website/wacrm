@@ -97,6 +97,9 @@ class MobileSimCallManager(
         val simLabel: String?,
         val simPhoneNumber: String?,
         val startAt: Long,
+        // Calls started by this manager are always outbound. Incoming device
+        // calls are synced from CallLog, never tracked here.
+        val direction: String = "OUTBOUND",
         var offhookAt: Long? = null,
         var endAt: Long? = null,
         var sawOffhook: Boolean = false,
@@ -1046,6 +1049,23 @@ class MobileSimCallManager(
     }
 
     /**
+     * The one and only Android call-type -> CRM direction mapping.
+     *
+     * Mirrors android.provider.CallLog.Calls.TYPE. Returns null for types the
+     * CRM does not support (voicemail, unknown), so callers skip the row rather
+     * than guessing a direction.
+     */
+    private fun callDirectionForType(type: Int): String? = when (type) {
+        CallLog.Calls.OUTGOING_TYPE -> "OUTBOUND"
+        CallLog.Calls.INCOMING_TYPE,
+        CallLog.Calls.MISSED_TYPE,
+        CallLog.Calls.REJECTED_TYPE,
+        CallLog.Calls.BLOCKED_TYPE,
+        CallLog.Calls.ANSWERED_EXTERNALLY_TYPE -> "INBOUND"
+        else -> null
+    }
+
+    /**
      * Returns recent device call-log rows (incoming, outgoing and missed) so
      * the CRM can synchronize SIM history automatically. Only telephony rows
      * are returned: VoIP/SIP accounts and WACRM's own connection service are
@@ -1098,14 +1118,10 @@ class MobileSimCallManager(
 
                 while (cursor.moveToNext() && rows.size < limit) {
                     val type = if (typeIndex >= 0) cursor.getInt(typeIndex) else 0
-                    if (
-                        type != CallLog.Calls.INCOMING_TYPE &&
-                        type != CallLog.Calls.OUTGOING_TYPE &&
-                        type != CallLog.Calls.MISSED_TYPE &&
-                        type != CallLog.Calls.REJECTED_TYPE
-                    ) {
-                        continue
-                    }
+                    // Android's CallLog.Calls.TYPE is the single source of truth
+                    // for direction. Never infer it from phone numbers, duration
+                    // or recording metadata.
+                    val direction = callDirectionForType(type) ?: continue
                     val component =
                         if (componentIndex >= 0) cursor.getString(componentIndex) else null
                     val account =
@@ -1126,17 +1142,15 @@ class MobileSimCallManager(
                     } else {
                         0
                     }
-                    val direction = if (type == CallLog.Calls.OUTGOING_TYPE) {
-                        "OUTBOUND"
-                    } else {
-                        "INBOUND"
-                    }
-                    val status = when {
-                        type == CallLog.Calls.MISSED_TYPE -> "MISSED"
-                        type == CallLog.Calls.REJECTED_TYPE -> "REJECTED"
-                        duration > 0 -> "COMPLETED"
-                        direction == "OUTBOUND" -> "NO_ANSWER"
-                        else -> "MISSED"
+                    val status = when (type) {
+                        CallLog.Calls.MISSED_TYPE -> "MISSED"
+                        CallLog.Calls.REJECTED_TYPE,
+                        CallLog.Calls.BLOCKED_TYPE -> "REJECTED"
+                        else -> when {
+                            duration > 0 -> "COMPLETED"
+                            direction == "OUTBOUND" -> "NO_ANSWER"
+                            else -> "MISSED"
+                        }
                     }
                     rows.add(
                         mapOf(
@@ -1353,6 +1367,10 @@ class MobileSimCallManager(
 
     private fun buildCallResult(current: ActiveCall): Map<String, Any?> {
         val deviceLog = queryDeviceCallLog(current)
+        // Prefer the native call-log row's TYPE (authoritative). Fall back to the
+        // direction of the tracked call, never to a hardcoded value.
+        val direction = deviceLog?.let { callDirectionForType(it.type) }
+            ?: current.direction
         val endAt = current.endAt ?: System.currentTimeMillis()
         val startedAt: Long
         var durationSeconds: Int
@@ -1365,9 +1383,10 @@ class MobileSimCallManager(
             durationSeconds = deviceLog.duration.coerceAtLeast(0)
             status = when {
                 deviceLog.type == CallLog.Calls.MISSED_TYPE -> "MISSED"
-                deviceLog.type == CallLog.Calls.REJECTED_TYPE -> "REJECTED"
+                deviceLog.type == CallLog.Calls.REJECTED_TYPE ||
+                    deviceLog.type == CallLog.Calls.BLOCKED_TYPE -> "REJECTED"
                 durationSeconds > 0 -> "COMPLETED"
-                deviceLog.type == CallLog.Calls.OUTGOING_TYPE -> "NO_ANSWER"
+                direction == "OUTBOUND" -> "NO_ANSWER"
                 else -> "FAILED"
             }
         } else {
@@ -1402,7 +1421,8 @@ class MobileSimCallManager(
             "leadId" to current.leadId,
             "customerPhone" to current.phone,
             "contactName" to current.contactName,
-            "callDirection" to "OUTBOUND",
+            "callDirection" to direction,
+            "callType" to deviceLog?.type,
             "callStatus" to status,
             "durationSeconds" to durationSeconds,
             "durationAccuracy" to durationAccuracy,

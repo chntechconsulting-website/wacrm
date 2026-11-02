@@ -84,7 +84,10 @@ class CallLogModel {
           json['customer_phone'] ??
           json['phone'] ??
           '',
-      callType: (json['call_direction'] ?? json['call_type'] ?? 'OUTBOUND')
+      // Backend always supplies call_direction. If an older response omits it,
+      // fall back to INBOUND (matching the API response default) rather than
+      // labelling a call OUTBOUND without evidence.
+      callType: (json['call_direction'] ?? json['call_type'] ?? 'INBOUND')
           .toString()
           .toUpperCase(),
       callStatus: (json['call_status'] ?? json['status'] ?? 'COMPLETED')

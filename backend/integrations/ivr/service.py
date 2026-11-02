@@ -330,7 +330,7 @@ class IVRService:
         duration_seconds: int = 0,
         notes: Optional[str] = None,
         client_call_id: Optional[str] = None,
-        call_direction: str = "OUTBOUND",
+        call_direction: Optional[str] = None,
         started_at: Optional[datetime.datetime] = None,
         answered_at: Optional[datetime.datetime] = None,
         ended_at: Optional[datetime.datetime] = None,
@@ -393,9 +393,13 @@ class IVRService:
             or sim_slot is not None
         )
 
-        direction = str(call_direction or "OUTBOUND").strip().upper()
-        if direction not in ("INBOUND", "OUTBOUND"):
-            direction = "OUTBOUND"
+        requested_direction = str(call_direction or "").strip().upper()
+        if requested_direction not in ("INBOUND", "OUTBOUND"):
+            requested_direction = None
+        # Used for duplicate matching and new rows only. An existing row is
+        # never overwritten with OUTBOUND just because the retry omitted the
+        # direction - the native direction is authoritative.
+        direction = requested_direction or "OUTBOUND"
 
         status = str(call_status or "COMPLETED").strip().upper().replace(" ", "_")
         if status == "UNANSWERED":
@@ -531,8 +535,13 @@ class IVRService:
                 if is_attempt and not existing_is_attempt:
                     return existing
 
+                effective_direction = (
+                    requested_direction
+                    or str(existing.call_direction or "").strip().upper()
+                    or "OUTBOUND"
+                )
                 if target_phone:
-                    if direction == "INBOUND":
+                    if effective_direction == "INBOUND":
                         existing.from_number = target_phone
                         if emp_phone:
                             existing.to_number = emp_phone
@@ -542,7 +551,8 @@ class IVRService:
                     existing.lead_id = lead_id
                 existing.call_status = status
                 existing.duration_seconds = duration_seconds
-                existing.call_direction = direction
+                if requested_direction:
+                    existing.call_direction = requested_direction
 
                 if is_attempt:
                     existing.started_at = start_arg or existing.started_at or now

@@ -262,7 +262,10 @@ class ManualCallLogRequest(BaseModel):
 
     # Optional mobile SIM / direct-device metadata. Older clients can omit these.
     client_call_id: Optional[str] = None
-    call_direction: Optional[str] = "OUTBOUND"
+    # None means "not supplied": an existing row keeps its stored direction and
+    # a new row falls back to OUTBOUND for legacy clients. Native device sync
+    # always sends the explicit value.
+    call_direction: Optional[str] = None
     started_at: Optional[datetime] = None
     answered_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -764,7 +767,7 @@ def log_manual_call_endpoint(
             duration_seconds=body.duration_seconds or 0,
             notes=body.notes,
             client_call_id=client_call_id,
-            call_direction=body.call_direction or "OUTBOUND",
+            call_direction=body.call_direction,
             started_at=body.started_at,
             answered_at=body.answered_at,
             ended_at=body.ended_at,

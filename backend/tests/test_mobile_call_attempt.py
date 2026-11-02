@@ -109,6 +109,37 @@ class TestMobileCallAttemptLifecycle(unittest.TestCase):
         self.assertEqual(call.from_number, self.phone)
         self.assertEqual(call.to_number, "+919111122233")
 
+    def test_inbound_direction_is_not_overwritten_when_retry_omits_it(self):
+        inbound = self._attempt(
+            client_call_id="SIM_INBOUND_KEEP",
+            call_direction="INBOUND",
+            call_status="MISSED",
+            duration_seconds=0,
+        )
+        # A legacy/partial retry without call_direction must keep the native
+        # INBOUND value and must not flip the caller/callee numbers.
+        retried = self._attempt(
+            client_call_id="SIM_INBOUND_KEEP",
+            call_direction=None,
+            call_status="COMPLETED",
+            duration_seconds=11,
+            ended_at=datetime.now(),
+        )
+        self.assertEqual(retried.id, inbound.id)
+        self.assertEqual(retried.call_direction, "INBOUND")
+        self.assertEqual(retried.from_number, self.phone)
+        self.assertEqual(retried.to_number, "+919111122233")
+
+    def test_new_call_without_direction_keeps_legacy_outbound_default(self):
+        call = self._attempt(
+            client_call_id="SIM_LEGACY_DEFAULT",
+            call_direction=None,
+            call_status="COMPLETED",
+            duration_seconds=5,
+            ended_at=datetime.now(),
+        )
+        self.assertEqual(call.call_direction, "OUTBOUND")
+
     def test_native_history_reference_is_idempotent(self):
         first = self._attempt(
             client_call_id=None,

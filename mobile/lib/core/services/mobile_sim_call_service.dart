@@ -148,8 +148,10 @@ class MobileSimCallResult {
       leadId: _asInt(map['leadId']),
       customerPhone: _asString(map['customerPhone']) ?? '',
       contactName: _asString(map['contactName']),
-      callDirection: (_asString(map['callDirection']) ?? 'OUTBOUND')
-          .toUpperCase(),
+      callDirection:
+          MobileSimCallService.normalizeDirection(map['callDirection']) ??
+          MobileSimCallService.directionForAndroidType(map['callType']) ??
+          '',
       callStatus: (_asString(map['callStatus']) ?? 'COMPLETED').toUpperCase(),
       durationSeconds: _asInt(map['durationSeconds']) ?? 0,
       durationAccuracy: _asString(map['durationAccuracy']) ?? 'estimated',
@@ -184,6 +186,33 @@ class MobileSimCallService {
       <String, Future<bool>>{};
 
   static bool get isSupported => Platform.isAndroid;
+
+  /// Normalizes a direction that a native/bridge layer explicitly supplied.
+  static String? normalizeDirection(Object? raw) {
+    final value = (raw ?? '').toString().trim().toUpperCase();
+    if (value == 'INBOUND' || value == 'OUTBOUND') return value;
+    return null;
+  }
+
+  /// Mirrors Android `CallLog.Calls.TYPE`. Unknown types return null so no
+  /// caller can accidentally default an inbound call to OUTBOUND.
+  static String? directionForAndroidType(Object? rawType) {
+    final type = rawType is num
+        ? rawType.toInt()
+        : int.tryParse((rawType ?? '').toString().trim());
+    switch (type) {
+      case 1: // INCOMING_TYPE
+      case 3: // MISSED_TYPE
+      case 5: // REJECTED_TYPE
+      case 6: // BLOCKED_TYPE
+      case 7: // ANSWERED_EXTERNALLY_TYPE
+        return 'INBOUND';
+      case 2: // OUTGOING_TYPE
+        return 'OUTBOUND';
+      default:
+        return null;
+    }
+  }
 
   /// Installs one channel handler that dispatches both call results and
   /// shared-recording events. Installing a second handler (for example from
@@ -396,7 +425,9 @@ class MobileSimCallService {
         leadId: result.leadId,
         notes: result.syncNotes,
         clientCallId: result.callId,
-        callDirection: result.callDirection,
+        callDirection: result.callDirection.isEmpty
+            ? null
+            : result.callDirection,
         startedAt: result.startedAt,
         answeredAt: result.answeredAt,
         endedAt: result.endedAt,
