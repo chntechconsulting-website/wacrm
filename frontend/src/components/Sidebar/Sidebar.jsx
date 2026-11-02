@@ -338,7 +338,7 @@ const Sidebar = ({
       setOpenSections(prev => ({ ...prev, sales: true }));
     } else if (path.startsWith('/support')) {
       setOpenSections(prev => ({ ...prev, support: true }));
-    } else if (path.startsWith('/employee-monitoring')) {
+    } else if ((path.startsWith('/employee-monitoring') || path.startsWith('/team-insights'))) {
       setOpenSections(prev => ({ ...prev, monitoring: true }));
     } else if (path === '/reports' || path === '/analytics') {
       setOpenSections(prev => ({ ...prev, reports: true }));
@@ -714,7 +714,7 @@ const Sidebar = ({
               isCollapsed={isCollapsed}
             >
               <SidebarItem
-                to="/employee-monitoring"
+                to="/team-insights"
                 exactMatch={false}
                 icon={Activity}
                 label="Team Insights"

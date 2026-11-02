@@ -48,7 +48,8 @@ import UsersRolesPage from './pages/Settings/UsersRolesPage';
 import NotificationsPage from './pages/Settings/NotificationsPage';
 import DeleteRequestsPage from './pages/Settings/DeleteRequestsPage';
 
-// EMPLOYEE MONITORING Pages
+// TEAM INSIGHTS & EMPLOYEE MONITORING Pages
+import TeamInsightsPage from './pages/TeamInsights/TeamInsightsPage';
 import EmployeeMonitoringPage from './pages/EmployeeMonitoring/index';
 import EmployeeDetailPage from './pages/EmployeeMonitoring/EmployeeDetailPage';
 
@@ -104,8 +105,10 @@ function App() {
               <Route path="/communication/activities" element={<ActivitiesPage />} />
               <Route path="/communication/whatsapp" element={<WhatsAppPage />} />
 
-              {/* EMPLOYEE MONITORING Section Routes */}
-              <Route path="/employee-monitoring" element={<EmployeeMonitoringPage />} />
+              {/* TEAM INSIGHTS & EMPLOYEE MONITORING Section Routes */}
+              <Route path="/team-insights" element={<TeamInsightsPage />} />
+              <Route path="/employee-monitoring" element={<TeamInsightsPage />} />
+              <Route path="/employee-monitoring/field-tracker" element={<EmployeeMonitoringPage />} />
               <Route path="/employee-monitoring/:employeeId" element={<EmployeeDetailPage />} />
 
               {/* WA QUOTES & INVOICES Section Routes */}
