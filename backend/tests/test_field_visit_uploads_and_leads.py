@@ -55,7 +55,7 @@ class FieldVisitUploadAndLeadTest(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
-            id=1, role="ADMIN", username="admin", employee_id=1
+            id=1, role="SALES_EXECUTIVE", username="agent", employee_id=1
         )
         cls.client = TestClient(app)
 
@@ -207,6 +207,24 @@ class FieldVisitUploadAndLeadTest(unittest.TestCase):
             self.assertEqual(visit.checkin_accuracy_m, 8.5)
         finally:
             db.close()
+
+        # The new lead must appear on the CRM Leads page immediately.
+        leads_response = self.client.get(
+            "/api/leads", params={"search": "Ramesh", "limit": 10}
+        )
+        self.assertEqual(leads_response.status_code, 200, leads_response.text)
+        lead_ids = [item["id"] for item in leads_response.json()["items"]]
+        self.assertIn(lead_id, lead_ids)
+
+        # Web CRM reads the same visit row, so the GPS/photo metadata matches.
+        web_response = self.client.get("/api/employee-monitoring/field-visits")
+        self.assertEqual(web_response.status_code, 200, web_response.text)
+        web_visit = next(
+            v for v in web_response.json() if v["id"] == body["id"]
+        )
+        self.assertEqual(web_visit["checkin_accuracy_m"], 8.5)
+        self.assertEqual(web_visit["checkin_address"], "MG Road, Bengaluru")
+        self.assertEqual(web_visit["visit_outcome"], "Interested")
 
     def test_duplicate_phone_links_existing_lead_instead_of_creating_one(self):
         db = self.Session()
