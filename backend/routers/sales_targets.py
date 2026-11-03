@@ -20,8 +20,22 @@ from schemas.sales_target import (
     CompanyRevenueItem
 )
 from services.auth import get_current_user
+from services.hierarchy_service import (
+    normalize_role,
+    normalize_department,
+    ROLE_ADMIN,
+    ROLE_SALES_MANAGER,
+    ROLE_SALES_EXECUTIVE,
+    ROLE_SUPPORT_MANAGER,
+    ROLE_SUPPORT_EXECUTIVE,
+    DEPT_SUPPORT,
+)
 
 router = APIRouter(prefix="/sales-targets", tags=["Sales Targets & Revenue"])
+
+ADMIN_ROLE_NAMES = {"ADMIN", "SUPERADMIN"}
+SUPPORT_ROLES = {ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE}
+SALES_ROLES = {ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE}
 
 def check_admin_access(current_user: User):
     role = (current_user.role or "").upper()
@@ -29,6 +43,40 @@ def check_admin_access(current_user: User):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only administrators are authorized to manage sales targets."
+        )
+
+def ensure_sales_target_access(current_user: User, db: Session):
+    """
+    Sales target data is available only to the Sales team and Admin.
+
+    Both role and department are checked so a support or finance account with a
+    legacy/generic role label cannot read Sales Target & Achievement data.
+    """
+    employee = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    raw_roles = {
+        (current_user.role or "").strip().upper(),
+        (employee.role or "").strip().upper() if employee else "",
+    }
+    raw_roles.discard("")
+
+    if raw_roles & ADMIN_ROLE_NAMES:
+        return
+
+    department = normalize_department(
+        current_user.department or (employee.department if employee else None)
+    )
+    normalized_roles = {normalize_role(role) for role in raw_roles}
+
+    if department == DEPT_SUPPORT or normalized_roles & SUPPORT_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Sales targets and achievement are available only to the Sales team."
+        )
+
+    if not (normalized_roles & SALES_ROLES):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Sales targets and achievement are available only to the Sales team."
         )
 
 @router.post("", response_model=SalesTargetOut, status_code=status.HTTP_201_CREATED)
@@ -99,6 +147,7 @@ def get_targets(
     """
     Fetch assigned sales targets with optional period and employee filtering.
     """
+    ensure_sales_target_access(current_user, db)
     query = db.query(SalesTarget)
     if period_year:
         query = query.filter(SalesTarget.period_year == period_year)
@@ -187,6 +236,7 @@ def get_employee_achievements(
     - Achievement %: (Actual Revenue / Assigned Target) * 100
     - Role Scoping: Non-admin users see only their own row. Admin sees all.
     """
+    ensure_sales_target_access(current_user, db)
     now = datetime.now()
     year = period_year or now.year
     month = period_month if period_month is not None else now.month
@@ -287,6 +337,7 @@ def get_my_target(
     actual confirmed revenue, remaining target, and achievement percentage.
     Resolves the authenticated employee from user.id.
     """
+    ensure_sales_target_access(current_user, db)
     emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
     if not emp:
         emp = db.query(Employee).filter(
@@ -369,6 +420,7 @@ def get_companies_revenue(
     Company-wise confirmed revenue and associated sales records.
     Uses Unified RevenueService to reflect confirmed won sales and invoices accurately without duplicates.
     """
+    ensure_sales_target_access(current_user, db)
     from services.revenue_service import RevenueService
     won_transactions = RevenueService.get_won_sales_transactions(db=db)
 

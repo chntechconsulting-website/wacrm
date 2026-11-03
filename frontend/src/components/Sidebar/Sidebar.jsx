@@ -724,8 +724,8 @@ const Sidebar = ({
             </SidebarSection>
           )}
 
-          {/* Section: REPORTS & ANALYTICS */}
-          {(hasModule('reports') || hasModule('analytics') || isAdmin || isManager) && (
+          {/* Section: REPORTS & ANALYTICS (Sales-only; Support has its own dashboard) */}
+          {((hasModule('reports') || hasModule('analytics') || isAdmin || isManager) && !isSupportRole) && (
             <SidebarSection
               title="REPORTS & ANALYTICS"
               isOpen={openSections.reports}
@@ -748,14 +748,16 @@ const Sidebar = ({
                 isCollapsed={isCollapsed}
                 onClick={handleItemClick}
               />
-              <SidebarItem
-                to="/reports?tab=targets"
-                exactMatch={true}
-                icon={Target}
-                label="Sales Targets"
-                isCollapsed={isCollapsed}
-                onClick={handleItemClick}
-              />
+              {(isAdmin || isSalesRole) && (
+                <SidebarItem
+                  to="/reports?tab=targets"
+                  exactMatch={true}
+                  icon={Target}
+                  label="Sales Targets"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
               {isAdmin && (
                 <SidebarItem
                   to="/reports?tab=export"

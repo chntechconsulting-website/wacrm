@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 from typing import List, Optional, Dict, Any
@@ -13,7 +13,22 @@ from models.followup import Followup
 from models.call_log import CallLog
 from models.activity import LeadActivity
 from models.quotation import Quotation
+from models.workflow import SupportHandoff
 from services.auth import get_current_user
+from services.hierarchy_service import (
+    normalize_role,
+    normalize_department,
+    get_department_for_role,
+    get_team_employee_ids_from_user,
+    ROLE_ADMIN,
+    ROLE_SALES_MANAGER,
+    ROLE_SALES_EXECUTIVE,
+    ROLE_SUPPORT_MANAGER,
+    ROLE_SUPPORT_EXECUTIVE,
+    DEPT_ADMINISTRATION,
+    DEPT_SALES,
+    DEPT_SUPPORT,
+)
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
@@ -23,8 +38,324 @@ from services.permission_service import (
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
+ADMIN_ROLE_NAMES = {"ADMIN", "SUPERADMIN"}
+
+SUPPORT_STATUS_META = {
+    "PENDING_ONBOARDING": {"label": "Pending Onboarding", "color": "#f59e0b", "bucket": "pending"},
+    "CONTACTED": {"label": "Contacted", "color": "#3b82f6", "bucket": "open"},
+    "ONBOARDING_IN_PROGRESS": {"label": "In Progress", "color": "#8b5cf6", "bucket": "open"},
+    "COMPLETED": {"label": "Completed", "color": "#10b981", "bucket": "resolved"},
+}
+
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
+
+def _user_is_admin(user: User, employee: Optional[Employee] = None) -> bool:
+    roles = {(user.role or "").strip().upper()}
+    if employee and employee.role:
+        roles.add(employee.role.strip().upper())
+    return bool(roles & ADMIN_ROLE_NAMES)
+
+def get_dashboard_context(user: User, employee: Optional[Employee], db: Session) -> Dict[str, str]:
+    """
+    Resolve the dashboard from the authenticated backend identity.
+
+    Role is authoritative. Department is used as a safety net for legacy
+    accounts whose role label is generic (for example MANAGER in SUPPORT).
+    """
+    raw_roles = []
+    for role in (user.role, employee.role if employee else None):
+        normalized = (role or "").strip().upper()
+        if normalized and normalized not in raw_roles:
+            raw_roles.append(normalized)
+
+    department = normalize_department(
+        user.department or (employee.department if employee else None)
+    )
+
+    if _user_is_admin(user, employee):
+        return {
+            "dashboard_type": "both",
+            "role": ROLE_ADMIN,
+            "department": department or DEPT_ADMINISTRATION,
+        }
+
+    canonical_roles = [normalize_role(role) for role in raw_roles]
+    is_support = any(role in {ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE} for role in canonical_roles)
+    is_sales = any(role in {ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE} for role in canonical_roles)
+
+    # Legacy "MANAGER" accounts placed in the Support department are support
+    # managers, not sales managers.
+    if department == DEPT_SUPPORT and any(role == "MANAGER" for role in raw_roles):
+        is_support = True
+        if ROLE_SUPPORT_MANAGER not in canonical_roles:
+            canonical_roles.append(ROLE_SUPPORT_MANAGER)
+
+    if is_support:
+        canonical_role = next(
+            (role for role in canonical_roles if role in {ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE}),
+            ROLE_SUPPORT_EXECUTIVE,
+        )
+        return {
+            "dashboard_type": "support",
+            "role": canonical_role,
+            "department": department or DEPT_SUPPORT,
+        }
+
+    if is_sales:
+        canonical_role = next(
+            (role for role in canonical_roles if role in {ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE}),
+            ROLE_SALES_EXECUTIVE,
+        )
+        return {
+            "dashboard_type": "sales",
+            "role": canonical_role,
+            "department": department or DEPT_SALES,
+        }
+
+    # Unknown/legacy roles: department decides, with Sales as the safe default
+    # because the Sales dashboard is the historical dashboard experience.
+    dashboard_type = "support" if department == DEPT_SUPPORT else "sales"
+    canonical_role = canonical_roles[0] if canonical_roles else ""
+    return {
+        "dashboard_type": dashboard_type,
+        "role": canonical_role,
+        "department": department or (DEPT_SUPPORT if dashboard_type == "support" else DEPT_SALES),
+    }
+
+def ensure_sales_report_access(user: User, employee: Optional[Employee], db: Session):
+    """Block support users from Sales-only report/dashboard APIs."""
+    context = get_dashboard_context(user, employee, db)
+    if context["dashboard_type"] == "support":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Sales reports are available only to the Sales team.",
+        )
+
+def _scoped_support_handoff_query(
+    user: User,
+    employee: Optional[Employee],
+    db: Session,
+    resolved_role: Optional[str] = None,
+):
+    """
+    Return SupportHandoff rows the authenticated user is allowed to see.
+
+    Admin: company-wide.
+    Support Manager: own manager queue plus assigned support team members.
+    Support Executive: only assignments given to them.
+    Everyone else: no rows.
+    """
+    query = db.query(SupportHandoff)
+
+    if _user_is_admin(user, employee):
+        return query
+
+    norm_role = resolved_role or normalize_role(user.role or (employee.role if employee else None))
+
+    if norm_role == ROLE_SUPPORT_MANAGER:
+        if not employee:
+            return query.filter(SupportHandoff.id == -1)
+        team_ids = get_team_employee_ids_from_user(user, db)
+        if employee.id not in team_ids:
+            team_ids.append(employee.id)
+        return query.filter(
+            or_(
+                SupportHandoff.support_manager_id == employee.id,
+                SupportHandoff.assigned_agent_id.in_(team_ids),
+            )
+        )
+
+    if norm_role == ROLE_SUPPORT_EXECUTIVE:
+        if not employee:
+            return query.filter(SupportHandoff.id == -1)
+        return query.filter(SupportHandoff.assigned_agent_id == employee.id)
+
+    # Generic support-capable roles follow the configured permission scope.
+    scope = get_user_view_scope(user, "support_tickets", db)
+    if scope == "company":
+        return query
+    if scope == "team":
+        if not employee:
+            return query.filter(SupportHandoff.id == -1)
+        team_ids = get_team_employee_ids_from_user(user, db)
+        return query.filter(
+            or_(
+                SupportHandoff.support_manager_id.in_(team_ids),
+                SupportHandoff.assigned_agent_id.in_(team_ids),
+            )
+        )
+    if scope == "own":
+        if not employee:
+            return query.filter(SupportHandoff.id == -1)
+        return query.filter(SupportHandoff.assigned_agent_id == employee.id)
+
+    return query.filter(SupportHandoff.id == -1)
+
+def _format_resolution_time(hours: Optional[float]) -> str:
+    if hours is None:
+        return "—"
+    total_minutes = int(round(hours * 60))
+    if total_minutes < 60:
+        return f"{total_minutes}m"
+    days, remaining_minutes = divmod(total_minutes, 24 * 60)
+    display_hours, minutes = divmod(remaining_minutes, 60)
+    if days:
+        return f"{days}d {display_hours}h"
+    return f"{display_hours}h {minutes}m"
+
+def build_support_dashboard_payload(
+    user: User,
+    employee: Optional[Employee],
+    db: Session,
+    resolved_role: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build scoped Support Dashboard KPIs and recent activity."""
+    ticket_query = _scoped_support_handoff_query(user, employee, db, resolved_role)
+
+    raw_status_counts = (
+        ticket_query.with_entities(SupportHandoff.onboarding_status, func.count(SupportHandoff.id))
+        .group_by(SupportHandoff.onboarding_status)
+        .all()
+    )
+    counts: Dict[str, int] = {}
+    for status, count in raw_status_counts:
+        key = (status or "PENDING_ONBOARDING").strip().upper()
+        counts[key] = counts.get(key, 0) + int(count or 0)
+
+    total_tickets = sum(counts.values())
+    pending_tickets = counts.get("PENDING_ONBOARDING", 0)
+    open_tickets = counts.get("CONTACTED", 0) + counts.get("ONBOARDING_IN_PROGRESS", 0)
+    resolved_tickets = counts.get("COMPLETED", 0)
+
+    # Average first resolution time for completed onboarding tickets.
+    completed_records = ticket_query.filter(
+        SupportHandoff.onboarding_status == "COMPLETED",
+        SupportHandoff.completed_at.isnot(None),
+        SupportHandoff.created_at.isnot(None),
+    ).all()
+    resolution_hours = []
+    for record in completed_records:
+        delta = record.completed_at - record.created_at
+        hours = delta.total_seconds() / 3600.0
+        if hours >= 0:
+            resolution_hours.append(hours)
+    average_resolution_hours = (
+        round(sum(resolution_hours) / len(resolution_hours), 1)
+        if resolution_hours else None
+    )
+
+    status_breakdown = []
+    ordered_statuses = ["PENDING_ONBOARDING", "CONTACTED", "ONBOARDING_IN_PROGRESS", "COMPLETED"]
+    for status in ordered_statuses:
+        meta = SUPPORT_STATUS_META[status]
+        status_breakdown.append({
+            "status": status,
+            "label": meta["label"],
+            "count": counts.get(status, 0),
+            "percentage": round((counts.get(status, 0) / total_tickets) * 100, 1) if total_tickets else 0.0,
+            "color": meta["color"],
+            "bucket": meta["bucket"],
+        })
+    for status, count in counts.items():
+        if status not in ordered_statuses:
+            status_breakdown.append({
+                "status": status,
+                "label": status.replace("_", " ").title(),
+                "count": count,
+                "percentage": round((count / total_tickets) * 100, 1) if total_tickets else 0.0,
+                "color": "#94a3b8",
+                "bucket": "open",
+            })
+
+    agent_rows = (
+        ticket_query.with_entities(SupportHandoff.assigned_agent_name, func.count(SupportHandoff.id))
+        .group_by(SupportHandoff.assigned_agent_name)
+        .all()
+    )
+    agent_workload = []
+    for agent_name, count in agent_rows:
+        agent_workload.append({
+            "name": agent_name or "Unassigned",
+            "count": int(count or 0),
+            "percentage": round((count / total_tickets) * 100, 1) if total_tickets else 0.0,
+        })
+    agent_workload.sort(key=lambda item: item["count"], reverse=True)
+
+    recent_records = (
+        ticket_query.order_by(desc(SupportHandoff.created_at), desc(SupportHandoff.id))
+        .limit(6)
+        .all()
+    )
+    recent_tickets = []
+    for record in recent_records:
+        status = (record.onboarding_status or "PENDING_ONBOARDING").strip().upper()
+        meta = SUPPORT_STATUS_META.get(status, {
+            "label": status.replace("_", " ").title(),
+            "color": "#94a3b8",
+        })
+        recent_tickets.append({
+            "id": record.id,
+            "customer_name": record.customer_name,
+            "company_name": record.company_name,
+            "phone": record.phone,
+            "product_service": record.product_service,
+            "onboarding_status": status,
+            "status_label": meta["label"],
+            "status_color": meta["color"],
+            "assigned_agent_name": record.assigned_agent_name,
+            "support_manager_name": record.support_manager_name,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+        })
+
+    # Customer follow-ups use the same authorized follow-up scope as the
+    # existing Follow-up Management module, so the dashboard cannot leak
+    # another team's follow-ups.
+    followup_query = (
+        db.query(Followup)
+        .join(Lead, Followup.lead_id == Lead.id)
+        .filter(Followup.status == "Pending")
+    )
+    authorized_followup_employee_ids = get_authorized_followup_employee_ids(user, db)
+    if authorized_followup_employee_ids is not None:
+        if not authorized_followup_employee_ids:
+            followup_query = followup_query.filter(Followup.id == -1)
+        else:
+            followup_query = followup_query.filter(
+                or_(
+                    Followup.assigned_to.in_(authorized_followup_employee_ids),
+                    Followup.created_by.in_(authorized_followup_employee_ids),
+                )
+            )
+
+    customer_followups = followup_query.count()
+    upcoming_followups = []
+    for followup in followup_query.order_by(Followup.followup_date.asc()).limit(5).all():
+        upcoming_followups.append({
+            "id": followup.id,
+            "lead_id": followup.lead_id,
+            "lead_name": followup.lead.name if followup.lead else "-",
+            "lead_phone": followup.lead.phone if followup.lead else "-",
+            "followup_date": str(followup.followup_date),
+            "followup_time": followup.followup_time or "10:00 AM",
+            "priority": followup.priority,
+            "notes": followup.notes,
+        })
+
+    return {
+        "total_tickets": total_tickets,
+        "open_tickets": open_tickets,
+        "resolved_tickets": resolved_tickets,
+        "pending_tickets": pending_tickets,
+        "customer_followups": customer_followups,
+        "average_resolution_hours": average_resolution_hours,
+        "average_resolution_display": _format_resolution_time(average_resolution_hours),
+        "status_breakdown": status_breakdown,
+        "agent_workload": agent_workload,
+        "recent_tickets": recent_tickets,
+        "upcoming_followups": upcoming_followups,
+    }
 
 @router.get("/dashboard")
 def dashboard_stats(
@@ -34,6 +365,22 @@ def dashboard_stats(
     lead_query = db.query(Lead)
     call_query = db.query(CallLog)
     current_emp = get_employee_for_user(current_user, db)
+    dashboard_context = get_dashboard_context(current_user, current_emp, db)
+
+    # Support-only users must never receive Sales dashboard data from this API.
+    if dashboard_context["dashboard_type"] == "support":
+        support_payload = build_support_dashboard_payload(
+            current_user, current_emp, db, dashboard_context["role"]
+        )
+        return {
+            "dashboard_type": "support",
+            "role": dashboard_context["role"],
+            "department": dashboard_context["department"],
+            "support": support_payload,
+            # Kept at top level for backwards compatibility with the
+            # follow-up panel/test helpers. No Sales metrics are exposed.
+            "upcoming_followups": support_payload["upcoming_followups"],
+        }
 
     scope = get_user_view_scope(current_user, "dashboard", db)
     if scope == "none":
@@ -231,7 +578,10 @@ def dashboard_stats(
             "notes": f.notes
         })
 
-    return {
+    response = {
+        "dashboard_type": dashboard_context["dashboard_type"],
+        "role": dashboard_context["role"],
+        "department": dashboard_context["department"],
         "total_leads": total_leads,
         "new_leads": new_leads,
         "assigned_leads": assigned_leads,
@@ -252,6 +602,17 @@ def dashboard_stats(
         "recent_meta_leads": recent_meta_leads,
         "today_activities": today_activities
     }
+
+    # Admins can switch between Sales and Support dashboards without a second
+    # API call, while each non-admin response remains strictly single-purpose.
+    if dashboard_context["dashboard_type"] == "both":
+        support_payload = build_support_dashboard_payload(
+            current_user, current_emp, db, dashboard_context["role"]
+        )
+        response["support"] = support_payload
+        response["available_dashboards"] = ["sales", "support"]
+
+    return response
 
 
 @router.get("/sales-overview")
@@ -276,6 +637,7 @@ def sales_overview_report(
     - Upcoming Follow-ups schedule
     """
     current_emp = get_employee_for_user(current_user, db)
+    ensure_sales_report_access(current_user, current_emp, db)
     lead_query = db.query(Lead)
 
     # Permission Scoping
@@ -604,6 +966,7 @@ def sales_revenue_report(
     calculated directly from Quotations, Invoices, Leads, and Employees in MySQL.
     """
     current_emp = get_employee_for_user(current_user, db)
+    ensure_sales_report_access(current_user, current_emp, db)
     active_emps = db.query(Employee).filter(Employee.status == "ACTIVE").all()
 
     # Permission scoping

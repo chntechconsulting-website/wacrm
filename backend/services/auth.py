@@ -97,7 +97,14 @@ def build_user_out(user: User, db: Session) -> UserOut:
     email = employee.email if employee else None
     user_status = "ACTIVE" if user.is_active else "INACTIVE"
     user_perms = get_user_permissions(user, db)
-    dept = user.department or (employee.department if employee else None) or "ADMINISTRATION" if user.role == "ADMIN" else "SALES"
+
+    # Return the employee's real department for every role. The previous
+    # inline fallback forced every non-admin to SALES, which made Support and
+    # Finance users look like Sales users to the frontend.
+    from services.hierarchy_service import get_department_for_role
+    dept = user.department or (employee.department if employee else None)
+    if not dept:
+        dept = get_department_for_role(user.role)
 
     return UserOut(
         id=user.id,

@@ -26,6 +26,7 @@ import {
 import { formatDateDDMMYYYY, formatTime12Hour, formatLocalDateTime } from '../../utils/dateUtils';
 import PingoMascot from '../../components/Common/PingoMascot';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
+import SupportDashboard from './SupportDashboard';
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -33,6 +34,10 @@ const Dashboard = () => {
   const [stats, setStats] = useState(null);
   const [recentLeads, setRecentLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [dashboardType, setDashboardType] = useState(null);
+  const [activeDashboard, setActiveDashboard] = useState('sales');
+  const [dashboardError, setDashboardError] = useState(null);
+  const [targetRefreshKey, setTargetRefreshKey] = useState(0);
 
   // Time filters
   const [overviewFilter, setOverviewFilter] = useState('This Month');
@@ -73,15 +78,41 @@ const Dashboard = () => {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const [statsRes, leadsRes] = await Promise.all([
-        API.get('/reports/dashboard').catch(() => ({ data: null })),
-        API.get('/leads/?limit=5').catch(() => ({ data: { items: [] } }))
-      ]);
+      setDashboardError(null);
 
-      if (statsRes.data) setStats(statsRes.data);
-      if (leadsRes.data?.items) setRecentLeads(leadsRes.data.items);
+      const statsRes = await API.get('/reports/dashboard');
+      const dashboardData = statsRes.data;
+      if (!dashboardData) {
+        throw new Error('Dashboard API returned no data');
+      }
+
+      setStats(dashboardData);
+
+      // The backend is the single source of truth for which dashboard this
+      // employee may see. Frontend role labels are never used for this decision.
+      const backendType = ['sales', 'support', 'both'].includes(dashboardData.dashboard_type)
+        ? dashboardData.dashboard_type
+        : 'sales';
+      setDashboardType(backendType);
+      setActiveDashboard((previous) => {
+        if (backendType === 'both') {
+          return previous === 'support' ? 'support' : 'sales';
+        }
+        return backendType;
+      });
+
+      // Support users must not trigger Sales-only data requests.
+      if (backendType === 'sales' || backendType === 'both') {
+        const leadsRes = await API.get('/leads/?limit=5').catch(() => ({ data: { items: [] } }));
+        if (leadsRes.data?.items) setRecentLeads(leadsRes.data.items);
+      } else {
+        setRecentLeads([]);
+      }
     } catch (err) {
       console.error("Dashboard data fetch error:", err);
+      setStats(null);
+      setDashboardType(null);
+      setDashboardError('Unable to load your dashboard. Please refresh and try again.');
     } finally {
       setLoading(false);
     }
@@ -92,7 +123,7 @@ const Dashboard = () => {
 
     const handleUpdates = () => {
       fetchDashboardData();
-      fetchEmployeeTarget();
+      setTargetRefreshKey((key) => key + 1);
     };
 
     window.addEventListener('revenueUpdated', handleUpdates);
@@ -104,9 +135,14 @@ const Dashboard = () => {
     };
   }, []);
 
+  const isSalesDashboard = dashboardType === 'sales' || (dashboardType === 'both' && activeDashboard === 'sales');
+  const isSupportDashboard = dashboardType === 'support' || (dashboardType === 'both' && activeDashboard === 'support');
+
   useEffect(() => {
-    fetchEmployeeTarget();
-  }, [targetYear, targetMonth]);
+    if (isSalesDashboard) {
+      fetchEmployeeTarget();
+    }
+  }, [targetYear, targetMonth, isSalesDashboard, targetRefreshKey]);
 
   const userName = user?.employee_name || user?.name || user?.username || 'Chandra Mohan';
 
@@ -264,7 +300,9 @@ const Dashboard = () => {
               <span style={{ fontSize: '1.75rem' }}>👋</span>
             </div>
             <p style={{ color: '#475569', fontSize: '0.95rem', margin: 0, fontWeight: '500' }}>
-              Here's what's happening with your CRM today.
+              {isSupportDashboard
+                ? "Here's what's happening with your support queue today."
+                : "Here's what's happening with your CRM today."}
             </p>
           </div>
         </div>
@@ -294,6 +332,95 @@ const Dashboard = () => {
         </div>
       </div>
 
+      {/* Admin can switch between both department dashboards. */}
+      {dashboardType === 'both' && (
+        <div
+          className="content-card"
+          style={{
+            borderRadius: '16px',
+            padding: '14px 20px',
+            marginBottom: '24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px'
+          }}
+        >
+          <div>
+            <div style={{ fontSize: '0.86rem', fontWeight: '800', color: '#0f172a' }}>Dashboard View</div>
+            <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '2px' }}>
+              Admin access: switch between the Sales and Support dashboards.
+            </div>
+          </div>
+          <div
+            role="tablist"
+            aria-label="Select dashboard"
+            style={{ display: 'flex', gap: '4px', backgroundColor: '#f1f5f9', padding: '4px', borderRadius: '12px', flexWrap: 'wrap' }}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeDashboard === 'sales'}
+              onClick={() => setActiveDashboard('sales')}
+              style={{
+                border: 'none',
+                borderRadius: '9px',
+                padding: '8px 14px',
+                fontSize: '0.8rem',
+                fontWeight: '700',
+                cursor: 'pointer',
+                backgroundColor: activeDashboard === 'sales' ? '#ffffff' : 'transparent',
+                color: activeDashboard === 'sales' ? '#1d4ed8' : '#64748b',
+                boxShadow: activeDashboard === 'sales' ? '0 1px 4px rgba(15, 23, 42, 0.12)' : 'none',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              Sales Dashboard
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeDashboard === 'support'}
+              onClick={() => setActiveDashboard('support')}
+              style={{
+                border: 'none',
+                borderRadius: '9px',
+                padding: '8px 14px',
+                fontSize: '0.8rem',
+                fontWeight: '700',
+                cursor: 'pointer',
+                backgroundColor: activeDashboard === 'support' ? '#ffffff' : 'transparent',
+                color: activeDashboard === 'support' ? '#6d28d9' : '#64748b',
+                boxShadow: activeDashboard === 'support' ? '0 1px 4px rgba(15, 23, 42, 0.12)' : 'none',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              Support Dashboard
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading && !dashboardType ? (
+        <div className="content-card" style={{ borderRadius: '18px', padding: '40px 24px', marginBottom: '24px', textAlign: 'center', color: '#64748b', fontSize: '0.9rem', fontWeight: '600' }}>
+          Loading your dashboard...
+        </div>
+      ) : dashboardError ? (
+        <div className="content-card" style={{ borderRadius: '18px', padding: '32px 24px', marginBottom: '24px', textAlign: 'center', backgroundColor: '#fef2f2', border: '1px solid #fecaca' }}>
+          <div style={{ color: '#991b1b', fontSize: '0.92rem', fontWeight: '700' }}>{dashboardError}</div>
+          <button
+            type="button"
+            onClick={fetchDashboardData}
+            style={{ marginTop: '12px', border: '1px solid #fca5a5', backgroundColor: '#ffffff', color: '#b91c1c', borderRadius: '9px', padding: '7px 14px', fontSize: '0.8rem', fontWeight: '700', cursor: 'pointer' }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : isSupportDashboard ? (
+        <SupportDashboard data={stats?.support} />
+      ) : (
+        <>
       {/* 1.5. EMPLOYEE SALES TARGET MANAGEMENT SECTION */}
       <div className="content-card" style={{ borderRadius: '18px', padding: '20px 24px', marginBottom: '24px', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', border: '1px solid #e2e8f0', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
@@ -1150,6 +1277,8 @@ const Dashboard = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
 
     </div>
