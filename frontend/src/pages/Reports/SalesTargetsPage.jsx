@@ -460,7 +460,13 @@ const SalesTargetsPage = () => {
                         <td>
                           <div className="st-emp-cell">
                             <div className="st-emp-avatar">
-                              {row.employee_name ? row.employee_name[0].toUpperCase() : 'E'}
+                              {row.photo_url ? (
+                                <img src={row.photo_url} alt="" />
+                              ) : row.employee_name ? (
+                                row.employee_name[0].toUpperCase()
+                              ) : (
+                                'E'
+                              )}
                             </div>
                             <span className="st-emp-name">{row.employee_name}</span>
                           </div>

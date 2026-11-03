@@ -17,6 +17,7 @@ class SalesTargetOut(BaseModel):
     employee_id: int
     employee_name: Optional[str] = None
     employee_department: Optional[str] = None
+    photo_url: Optional[str] = None
     target_amount: float
     period_type: str
     period_month: Optional[int] = None
@@ -32,6 +33,7 @@ class EmployeeAchievementRow(BaseModel):
     employee_id: int
     employee_name: str
     department: Optional[str] = None
+    photo_url: Optional[str] = None
     assigned_target: float
     actual_revenue: float
     remaining_target: float
@@ -42,6 +44,7 @@ class EmployeeMyTargetSummary(BaseModel):
     has_target: bool
     employee_id: int
     employee_name: str
+    photo_url: Optional[str] = None
     period_type: str
     period_month: Optional[int] = None
     period_year: int

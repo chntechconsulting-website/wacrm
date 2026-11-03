@@ -528,6 +528,14 @@
   font-weight: 700;
   font-size: 0.78rem;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.ti-emp-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .ti-emp-info {

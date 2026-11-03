@@ -888,7 +888,11 @@ const TeamInsightsPage = () => {
                       <td>
                         <div className="ti-emp-cell">
                           <div className="ti-emp-avatar">
-                            {emp.name.charAt(0).toUpperCase()}
+                            {emp.photo_url ? (
+                              <img src={emp.photo_url} alt="" />
+                            ) : (
+                              emp.name.charAt(0).toUpperCase()
+                            )}
                           </div>
                           <div className="ti-emp-info">
                             <span className="ti-emp-name">{emp.name}</span>

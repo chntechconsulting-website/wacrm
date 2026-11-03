@@ -84,6 +84,7 @@ def create_or_update_target(
     out = SalesTargetOut.from_orm(target)
     out.employee_name = emp.name
     out.employee_department = emp.department
+    out.photo_url = emp.photo_url
     return out
 
 @router.get("", response_model=List[SalesTargetOut])
@@ -119,6 +120,7 @@ def get_targets(
         if t.employee_id in emps:
             dto.employee_name = emps[t.employee_id].name
             dto.employee_department = emps[t.employee_id].department
+            dto.photo_url = emps[t.employee_id].photo_url
         output.append(dto)
     return output
 
@@ -147,6 +149,7 @@ def update_target(
     if emp:
         dto.employee_name = emp.name
         dto.employee_department = emp.department
+        dto.photo_url = emp.photo_url
     return dto
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -259,6 +262,7 @@ def get_employee_achievements(
             employee_id=emp.id,
             employee_name=emp.name,
             department=emp.department,
+            photo_url=emp.photo_url,
             assigned_target=tgt,
             actual_revenue=rev,
             remaining_target=rem,
@@ -302,6 +306,7 @@ def get_my_target(
             has_target=False,
             employee_id=0,
             employee_name=current_user.full_name or current_user.username,
+            photo_url=None,
             period_type=p_type,
             period_month=month,
             period_year=year,
@@ -342,6 +347,7 @@ def get_my_target(
         has_target=bool(target_obj and target_amt > 0),
         employee_id=emp.id,
         employee_name=emp.name,
+        photo_url=emp.photo_url,
         period_type=p_type,
         period_month=month if p_type != "yearly" else None,
         period_year=year,

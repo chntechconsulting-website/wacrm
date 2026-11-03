@@ -146,6 +146,7 @@ def _employee_payload(db: Session, employee: Employee) -> Dict[str, Any]:
         "email": employee.email,
         "phone": employee.phone,
         "username": employee.username,
+        "photo_url": employee.photo_url,
         "role": normalize_role(employee.role),
         "raw_role": employee.role,
         "department": employee_department(employee),

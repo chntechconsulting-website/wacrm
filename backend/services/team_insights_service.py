@@ -830,6 +830,7 @@ def _employee_row_base(employee: Employee) -> Dict[str, Any]:
         "employee_id": employee.id,
         "name": employee.name,
         "email": employee.email,
+        "photo_url": employee.photo_url,
         "role": employee.role,
         "department": normalize_department(department) or department or "UNASSIGNED",
         "status": employee.status,

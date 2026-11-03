@@ -318,6 +318,14 @@
   justify-content: center;
   font-size: 0.78rem;
   font-weight: 700;
+  overflow: hidden;
+}
+
+.st-emp-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .st-emp-name {

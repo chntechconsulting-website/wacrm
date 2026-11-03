@@ -113,6 +113,7 @@ def build_user_out(user: User, db: Session) -> UserOut:
         last_login=user.last_login,
         employee_name=name,
         employee_email=email,
+        photo_url=employee.photo_url if employee else None,
         permissions=user_perms
     )
 

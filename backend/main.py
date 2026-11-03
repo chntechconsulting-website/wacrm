@@ -22,6 +22,7 @@ from services.auth import hash_password
 
 from routers import (
     auth,
+    profile,
     users,
     employees,
     leads,
@@ -91,6 +92,7 @@ from integrations.proforma.router import router as proforma_integration_router
 
 # Register Routers
 app.include_router(auth.router, prefix=settings.API_V1_STR)
+app.include_router(profile.router, prefix=settings.API_V1_STR)
 app.include_router(users.router, prefix=settings.API_V1_STR)
 app.include_router(employees.router, prefix=settings.API_V1_STR)
 app.include_router(leads.router, prefix=settings.API_V1_STR)
@@ -287,6 +289,33 @@ async def startup_db_client():
                         pass
             except Exception as ex:
                 print(f"Call logs column sync check: {ex}")
+
+            # employees table schema sync for additive self-service profile fields
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM employees"))
+                emp_cols = [row[0] for row in result.fetchall()]
+                missing_emp_cols = {
+                    "photo_url": "VARCHAR(500) NULL",
+                    "date_of_birth": "DATE NULL",
+                    "gender": "VARCHAR(30) NULL",
+                    "address": "TEXT NULL",
+                    "date_of_joining": "DATE NULL",
+                }
+                for col_name, col_type in missing_emp_cols.items():
+                    if col_name not in emp_cols:
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE employees "
+                                f"ADD COLUMN {col_name} {col_type}"
+                            )
+                        )
+                        conn.commit()
+                        print(
+                            "Auto-added missing column "
+                            f"'{col_name}' to 'employees' table."
+                        )
+            except Exception as ex:
+                print(f"Employees column sync check: {ex}")
 
             # employee_office_sim table schema sync (incremental call-log sync)
             try:

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Date, Text, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -17,6 +17,13 @@ class Employee(Base):
     username = Column(String(100), nullable=False)
     role = Column(String(50), default="SALES_EXECUTIVE", nullable=False)
     status = Column(String(20), default="ACTIVE", nullable=False)  # ACTIVE, INACTIVE
+    # Additive profile fields. None of these affect identity, role, reporting
+    # hierarchy or lead/employee assignment.
+    photo_url = Column(String(500), nullable=True)
+    date_of_birth = Column(Date, nullable=True)
+    gender = Column(String(30), nullable=True)
+    address = Column(Text, nullable=True)
+    date_of_joining = Column(Date, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

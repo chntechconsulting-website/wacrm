@@ -98,7 +98,15 @@ const SidebarUser = ({ isCollapsed }) => {
         aria-label="User profile menu"
       >
         <div className="user-avatar" aria-hidden="true">
-          <span>{initials}</span>
+          {user?.photo_url ? (
+            <img
+              src={user.photo_url}
+              alt=""
+              className="user-avatar-img"
+            />
+          ) : (
+            <span>{initials}</span>
+          )}
         </div>
 
         {!isCollapsed && (

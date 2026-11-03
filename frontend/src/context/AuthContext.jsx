@@ -90,6 +90,16 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
+  const refreshUser = async () => {
+    const storedToken = localStorage.getItem('crm_token');
+    if (!storedToken) return null;
+    const res = await API.get('/auth/me');
+    setUser(res.data);
+    setToken(storedToken);
+    localStorage.setItem('crm_user', JSON.stringify(res.data));
+    return res.data;
+  };
+
   const logout = async () => {
     try {
       await API.post('/auth/logout');
@@ -105,7 +115,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, authError, retryAuth: verifyToken, login, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, authError, retryAuth: verifyToken, refreshUser, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1006,7 +1006,11 @@ const AdminPanelPage = () => {
                     <td>
                       <div className="admin-person">
                         <span className="admin-avatar">
-                          {(employee.name || '?').slice(0, 1).toUpperCase()}
+                          {employee.photo_url ? (
+                            <img src={employee.photo_url} alt="" />
+                          ) : (
+                            (employee.name || '?').slice(0, 1).toUpperCase()
+                          )}
                         </span>
                         <div>
                           <strong>{employee.name}</strong>

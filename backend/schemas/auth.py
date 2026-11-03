@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     last_login: Optional[datetime] = None
     employee_name: Optional[str] = None
     employee_email: Optional[str] = None
+    photo_url: Optional[str] = None
     permissions: Optional[dict] = None
 
     class Config:

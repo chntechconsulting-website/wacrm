@@ -45,6 +45,7 @@ import SettingsPage from './pages/Settings/SettingsPage';
 import IntegrationsPage from './pages/Settings/IntegrationsPage';
 import MetaIntegrationPage from './pages/Settings/MetaIntegrationPage';
 import UsersRolesPage from './pages/Settings/UsersRolesPage';
+import ProfilePage from './pages/Profile/ProfilePage';
 import NotificationsPage from './pages/Settings/NotificationsPage';
 import DeleteRequestsPage from './pages/Settings/DeleteRequestsPage';
 
@@ -138,7 +139,7 @@ function App() {
               <Route path="/organization/delete-requests" element={<DeleteRequestsPage />} />
               <Route path="/users" element={<UsersRolesPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
-              <Route path="/profile" element={<SettingsPage />} />
+              <Route path="/profile" element={<ProfilePage />} />
 
               {/* Admin Panel (Admin-only route guard) */}
               <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
