@@ -18,6 +18,7 @@ from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEven
 from models.role import Role, RolePermission
 from models.sales_target import SalesTarget
 from models.office_sim import OfficeSimMapping
+from models.team import Team
 
 __all__ = [
     "Base",
@@ -51,4 +52,5 @@ __all__ = [
     "WorkflowTimelineEvent",
     "SalesTarget",
     "OfficeSimMapping",
+    "Team",
 ]

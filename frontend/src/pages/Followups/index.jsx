@@ -42,6 +42,7 @@ const Followups = () => {
   const queryParams = new URLSearchParams(location.search);
   const [statusFilter, setStatusFilter] = useState(queryParams.get('status') || queryParams.get('status_filter') || '');
   const [priorityFilter, setPriorityFilter] = useState(queryParams.get('priority') || queryParams.get('priority_filter') || '');
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [search, setSearch] = useState('');
 
   const latestFollowupRequestIdRef = useRef(0);
@@ -52,14 +53,16 @@ const Followups = () => {
   followupFiltersRef.current = {
     statusFilter,
     priorityFilter,
+    departmentFilter,
     search
   };
 
-  const hasActiveFollowupFilters = Boolean(statusFilter || priorityFilter || search);
+  const hasActiveFollowupFilters = Boolean(statusFilter || priorityFilter || departmentFilter || search);
 
   const handleClearAllFollowupFilters = () => {
     setStatusFilter('');
     setPriorityFilter('');
+    setDepartmentFilter('');
     setSearch('');
   };
 
@@ -92,6 +95,7 @@ const Followups = () => {
       const params = {};
       if (cur.statusFilter) params.status_filter = cur.statusFilter;
       if (cur.priorityFilter) params.priority_filter = cur.priorityFilter;
+      if (cur.departmentFilter) params.department = cur.departmentFilter;
 
       const res = await API.get('/followups/', { params });
 
@@ -139,7 +143,7 @@ const Followups = () => {
   // Fetch when filters change
   useEffect(() => {
     fetchFollowups(false);
-  }, [statusFilter, priorityFilter]);
+  }, [statusFilter, priorityFilter, departmentFilter]);
 
   // Global listeners (without recursive leadStatsUpdated loop)
   useEffect(() => {
@@ -356,6 +360,19 @@ const Followups = () => {
           </div>
 
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            {normRole === 'ADMIN' && (
+              <select
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+                style={{ paddingLeft: '14px', width: '170px' }}
+                title="Admin department filter"
+              >
+                <option value="">All Departments</option>
+                <option value="SALES">Sales Department</option>
+                <option value="SUPPORT">Support Department</option>
+              </select>
+            )}
+
             <select 
               value={statusFilter} 
               onChange={(e) => setStatusFilter(e.target.value)}
@@ -429,15 +446,16 @@ const Followups = () => {
                       pose="run"
                       height={120}
                       title="No Scheduled Follow-ups"
-                      description={search || statusFilter || priorityFilter ? "No follow-up tasks match your filter criteria." : "All follow-ups completed! Keep your sales momentum running."}
+                      description={search || statusFilter || priorityFilter || departmentFilter ? "No follow-up tasks match your filter criteria." : "All follow-ups completed! Keep your sales momentum running."}
                       actionLabel="Schedule Follow-up"
                       onAction={handleOpenScheduleModal}
                       actionIcon={Plus}
-                      secondaryActionLabel={search || statusFilter || priorityFilter ? "Reset Filters" : null}
+                      secondaryActionLabel={search || statusFilter || priorityFilter || departmentFilter ? "Reset Filters" : null}
                       onSecondaryAction={() => {
                         setSearch('');
                         setStatusFilter('');
                         setPriorityFilter('');
+                        setDepartmentFilter('');
                       }}
                     />
                   </td>

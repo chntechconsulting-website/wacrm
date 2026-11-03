@@ -42,7 +42,8 @@ from routers import (
     export,
     sales_targets,
     office_sim,
-    team_insights
+    team_insights,
+    admin
 )
 
 # Ensure upload directory exists
@@ -102,6 +103,7 @@ app.include_router(ivr.router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp.router, prefix=settings.API_V1_STR)
 app.include_router(employee_monitoring.router, prefix=settings.API_V1_STR)
 app.include_router(team_insights.router, prefix=settings.API_V1_STR)
+app.include_router(admin.router, prefix=settings.API_V1_STR)
 app.include_router(field_visits.router, prefix=settings.API_V1_STR)
 app.include_router(field_visits.router)  # Allow direct /api/field-visits endpoint
 app.include_router(delete_requests.router, prefix=settings.API_V1_STR)

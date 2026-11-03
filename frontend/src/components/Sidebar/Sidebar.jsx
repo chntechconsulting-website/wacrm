@@ -342,7 +342,7 @@ const Sidebar = ({
       setOpenSections(prev => ({ ...prev, monitoring: true }));
     } else if (path === '/reports' || path === '/analytics') {
       setOpenSections(prev => ({ ...prev, reports: true }));
-    } else if (path.startsWith('/settings') || path === '/users' || path === '/notifications' || path === '/profile') {
+    } else if (path.startsWith('/settings') || path === '/users' || path === '/notifications' || path === '/profile' || path === '/admin') {
       setOpenSections(prev => ({ ...prev, settings: true }));
     }
   }, [location.pathname]);
@@ -777,6 +777,16 @@ const Sidebar = ({
               onToggle={() => toggleSection('settings')}
               isCollapsed={isCollapsed}
             >
+              {isAdmin && (
+                <SidebarItem
+                  to="/admin"
+                  exactMatch={true}
+                  icon={ShieldCheck}
+                  label="Admin Panel"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
               {(hasModule('settings') || isAdmin) && (
                 <SidebarItem
                   to="/settings"

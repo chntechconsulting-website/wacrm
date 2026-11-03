@@ -35,6 +35,10 @@ from services.permission_service import (
     get_authorized_call_employee_ids,
     get_support_team_call_scope,
 )
+from services.department_service import (
+    apply_call_department_filter,
+    parse_admin_department,
+)
 from utils.timezone import get_ist_now
 from config import settings
 
@@ -1455,6 +1459,7 @@ def list_call_logs(
     direction: Optional[str] = None,
     call_direction: Optional[str] = None,
     provider: Optional[str] = None,
+    department: Optional[str] = None,
     search: Optional[str] = None,
     page: int = 1,
     limit: int = 50,
@@ -1516,6 +1521,23 @@ def list_call_logs(
         # Admin / Company-wide access: can filter by employee_id if specified
         if employee_id is not None:
             query = query.filter(CallLog.employee_id == employee_id)
+
+    # Admin-only department filter. Non-admin users keep their existing
+    # role/team/support scope and cannot opt into a department view.
+    if department is not None and str(department).strip():
+        if (current_user.role or "").strip().upper() != "ADMIN":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Department filtering is available to Administrators only.",
+            )
+        try:
+            department_scope = parse_admin_department(department)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        if department_scope:
+            query = apply_call_department_filter(query, db, department_scope)
 
     # Strict Support Team filtering. The support team's identity is the Support
     # Manager's Employee row; membership is resolved through Employee.manager_id

@@ -48,6 +48,9 @@ import UsersRolesPage from './pages/Settings/UsersRolesPage';
 import NotificationsPage from './pages/Settings/NotificationsPage';
 import DeleteRequestsPage from './pages/Settings/DeleteRequestsPage';
 
+// Admin Panel Pages
+import AdminPanelPage from './pages/Admin/AdminPanelPage';
+
 // TEAM INSIGHTS & EMPLOYEE MONITORING Pages
 import TeamInsightsPage from './pages/TeamInsights/TeamInsightsPage';
 import EmployeeMonitoringPage from './pages/EmployeeMonitoring/index';
@@ -136,6 +139,11 @@ function App() {
               <Route path="/users" element={<UsersRolesPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/profile" element={<SettingsPage />} />
+
+              {/* Admin Panel (Admin-only route guard) */}
+              <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+                <Route path="/admin" element={<AdminPanelPage />} />
+              </Route>
 
               {/* Fallback 404 Page inside layout */}
               <Route path="*" element={<NotFoundPage />} />

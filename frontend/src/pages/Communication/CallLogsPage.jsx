@@ -425,6 +425,7 @@ const CallLogsPage = () => {
   const [statusFilter, setStatusFilter] = useState(initialStatusFromUrl);
   const [directionFilter, setDirectionFilter] = useState('');
   const [employeeFilter, setEmployeeFilter] = useState(initialEmployeeFromUrl);
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -473,6 +474,7 @@ const CallLogsPage = () => {
     statusFilter,
     directionFilter,
     employeeFilter,
+    departmentFilter,
     providerFilter,
     search,
     currentPage,
@@ -499,6 +501,7 @@ const CallLogsPage = () => {
       if (cur.statusFilter) params.call_status = cur.statusFilter;
       if (cur.directionFilter) params.direction = cur.directionFilter;
       if (cur.employeeFilter) params.employee_id = cur.employeeFilter;
+      if (cur.departmentFilter) params.department = cur.departmentFilter;
       if (cur.providerFilter) params.provider = cur.providerFilter;
       if (cur.search && cur.search.trim()) params.search = cur.search.trim();
       
@@ -535,6 +538,7 @@ const CallLogsPage = () => {
     setStatusFilter('');
     setDirectionFilter('');
     setEmployeeFilter('');
+    setDepartmentFilter('');
     setProviderFilter('');
     setCurrentPage(1);
     try {
@@ -743,7 +747,7 @@ const CallLogsPage = () => {
       if (fastPollTimerRef.current) clearInterval(fastPollTimerRef.current);
       clearInterval(timer);
     };
-  }, [statusFilter, directionFilter, employeeFilter, providerFilter, search, currentPage, pageSize]);
+  }, [statusFilter, directionFilter, employeeFilter, departmentFilter, providerFilter, search, currentPage, pageSize]);
 
   const handleInitiateNewCall = () => {
     if (window.expandDoocti) {
@@ -1003,6 +1007,25 @@ const CallLogsPage = () => {
         </div>
 
         <div className="call-filters-group">
+          {/* Admin Department Filter */}
+          {user?.role === 'ADMIN' && (
+            <div className="select-wrapper">
+              <select
+                value={departmentFilter}
+                onChange={(e) => {
+                  setDepartmentFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="call-select"
+                title="Admin department filter"
+              >
+                <option value="">All Departments</option>
+                <option value="SALES">Sales Department</option>
+                <option value="SUPPORT">Support Department</option>
+              </select>
+            </div>
+          )}
+
           {/* Direction Filter */}
           <div className="select-wrapper">
             <select 
@@ -1067,7 +1090,7 @@ const CallLogsPage = () => {
           </div>
 
           {/* Clear Filters */}
-          {(search || statusFilter || directionFilter || employeeFilter || providerFilter) && (
+          {(search || statusFilter || directionFilter || employeeFilter || departmentFilter || providerFilter) && (
             <button
               type="button"
               onClick={() => {
@@ -1075,6 +1098,7 @@ const CallLogsPage = () => {
                 setStatusFilter('');
                 setDirectionFilter('');
                 setEmployeeFilter('');
+                setDepartmentFilter('');
                 setProviderFilter('');
               }}
               className="btn-clear-filters"
@@ -1124,12 +1148,13 @@ const CallLogsPage = () => {
                       pose="inspect"
                       height={120}
                       title="No Call Logs Found"
-                      description={(search || statusFilter || employeeFilter || providerFilter) ? "No call records match your current telephony filters." : "No outbound or inbound calls have been logged yet."}
-                      secondaryActionLabel={(search || statusFilter || employeeFilter || providerFilter) ? "Clear Filters" : null}
+                      description={(search || statusFilter || employeeFilter || departmentFilter || providerFilter) ? "No call records match your current telephony filters." : "No outbound or inbound calls have been logged yet."}
+                      secondaryActionLabel={(search || statusFilter || employeeFilter || departmentFilter || providerFilter) ? "Clear Filters" : null}
                       onSecondaryAction={() => {
                         setSearch('');
                         setStatusFilter('');
                         setEmployeeFilter('');
+                        setDepartmentFilter('');
                         setProviderFilter('');
                       }}
                     />

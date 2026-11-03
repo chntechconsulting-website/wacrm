@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import status as http_status
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
 from typing import List, Optional
@@ -21,6 +22,10 @@ from schemas.followup import (
 from services.auth import get_current_user
 from services.notification_service import create_notification
 from services.permission_service import get_authorized_followup_employee_ids
+from services.department_service import (
+    apply_followup_department_filter,
+    parse_admin_department,
+)
 from services.hierarchy_service import (
     normalize_role,
     ROLE_ADMIN,
@@ -266,6 +271,7 @@ def list_followups(
     search: Optional[str] = None,
     assigned_to_filter: Optional[int] = None,
     assigned_to: Optional[int] = None,
+    department: Optional[str] = None,
     upcoming_only: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -284,6 +290,23 @@ def list_followups(
                 Followup.created_by.in_(authorized_emp_ids)
             )
         )
+
+    # Admin-only department filter. Existing role/team visibility for all other
+    # users is untouched, and non-admins cannot opt into department-wide data.
+    if department is not None and str(department).strip():
+        if normalize_role(current_user.role) != ROLE_ADMIN:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Department filtering is available to Administrators only.",
+            )
+        try:
+            department_scope = parse_admin_department(department)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        if department_scope:
+            query = apply_followup_department_filter(query, db, department_scope)
 
     eff_assigned_to = assigned_to_filter if assigned_to_filter is not None else assigned_to
     if eff_assigned_to:
