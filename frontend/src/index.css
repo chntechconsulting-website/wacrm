@@ -577,6 +577,96 @@ input:focus, select:focus, textarea:focus {
   background-color: #f8fafc;
 }
 
+/* ---------------------------------------------------------------------------
+   Leads table pagination (server-side paging: 150 records per page)
+   --------------------------------------------------------------------------- */
+.leads-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 14px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-color);
+}
+
+.leads-pagination-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.leads-pagination-info strong {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.leads-pagination-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.leads-pagination-pages {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.leads-pagination-btn,
+.leads-pagination-page {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.leads-pagination-page {
+  min-width: 32px;
+  padding: 6px 8px;
+}
+
+.leads-pagination-btn:hover:not(:disabled),
+.leads-pagination-page:hover:not(:disabled):not(.active) {
+  background-color: var(--bg-card-hover);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.leads-pagination-btn:disabled,
+.leads-pagination-page:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.leads-pagination-page.active {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+
+.leads-pagination-gap {
+  padding: 0 4px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
 .action-buttons {
   display: flex !important;
   align-items: center !important;

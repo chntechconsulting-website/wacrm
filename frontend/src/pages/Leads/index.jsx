@@ -77,6 +77,25 @@ const SOURCE_OPTIONS = ['META', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'];
 const RATING_OPTIONS = ['Hot', 'Warm', 'Cold'];
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
 
+// Server-side pagination window for the Leads table
+const LEADS_PAGE_SIZE = 150;
+
+// Page numbers shown in the pagination bar, with ellipsis gaps
+const buildPageList = (current, totalPages) => {
+  if (!totalPages || totalPages <= 0) return [];
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const pages = [1];
+  const start = Math.max(2, current - 1);
+  const end = Math.min(totalPages - 1, current + 1);
+  if (start > 2) pages.push('...');
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (end < totalPages - 1) pages.push('...');
+  pages.push(totalPages);
+  return pages;
+};
+
 const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSubtitle = '' }) => {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
@@ -89,6 +108,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1); // 1-based page number (server-side pagination)
+  const [totalPages, setTotalPages] = useState(1);
 
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
@@ -131,8 +152,26 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     receivedDateFilter,
     reinquiryFilter,
     defaultSource,
-    defaultFilter
+    defaultFilter,
+    page,
+    pageSize: LEADS_PAGE_SIZE
   };
+
+  // Stable signature of the active search / filter / sort context.
+  // Used to detect filter changes so pagination can restart at page 1 exactly once.
+  const filtersKey = JSON.stringify([
+    search,
+    statusFilter,
+    sourceFilter,
+    productFilter,
+    assignedToFilter,
+    sortOrder,
+    receivedDateFilter,
+    reinquiryFilter,
+    defaultSource,
+    defaultFilter
+  ]);
+  const prevFiltersKeyRef = useRef(filtersKey);
 
   const hasActiveFilters = Boolean(
     search ||
@@ -418,6 +457,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       if (cur.receivedDateFilter) params.date_filter = cur.receivedDateFilter;
       if (cur.assignedToFilter) params.assigned_to_filter = cur.assignedToFilter;
 
+      // Server-side pagination: only the current page of records is requested
+      const requestedPage = cur.page || 1;
+      const requestedPageSize = cur.pageSize || LEADS_PAGE_SIZE;
+      params.page = requestedPage;
+      params.page_size = requestedPageSize;
+
       const endpoint = cur.defaultFilter === 'my-leads' ? '/leads/my' : '/leads/';
       const res = await API.get(endpoint, { params });
 
@@ -425,8 +470,27 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       if (reqId !== latestLeadReqIdRef.current) {
         return;
       }
-      setLeads(res.data.items || []);
-      setTotal(res.data.total ?? (res.data.items || []).length);
+      const items = res.data.items || [];
+      const respTotal = res.data.total ?? items.length;
+      const respPage = res.data.page ?? requestedPage;
+      const respPageSize = res.data.page_size || requestedPageSize;
+      const respTotalPages = res.data.total_pages ?? Math.ceil(respTotal / respPageSize);
+
+      // The result set shrank (lead deleted/filtered away): snap back to a valid
+      // page and let the effect refetch once instead of showing a stale window.
+      if (respTotal === 0) {
+        if (requestedPage !== 1) {
+          setPage(1);
+          return;
+        }
+      } else if (respPage > respTotalPages) {
+        setPage(respTotalPages);
+        return;
+      }
+
+      setLeads(items);
+      setTotal(respTotal);
+      setTotalPages(Math.max(respTotalPages, 1));
     } catch (err) {
       if (reqId === latestLeadReqIdRef.current) {
         if (!silent) {
@@ -450,11 +514,37 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
+  // Refresh after a lead was created or imported. New records sort newest-first,
+  // so jump back to page 1 while still issuing exactly one list request.
+  const refreshAfterCreate = () => {
+    fetchSourceCounts();
+    if (page !== 1) {
+      setPage(1); // the pagination effect refetches page 1
+    } else {
+      fetchLeads();
+    }
+  };
+
+  // Employee list + source stats only depend on the active filter context,
+  // so they are not refetched while paging through the results.
   useEffect(() => {
-    fetchLeads();
     fetchEmployees();
     fetchSourceCounts();
-  }, [search, statusFilter, sourceFilter, productFilter, assignedToFilter, defaultSource, defaultFilter, reinquiryFilter, sortOrder, receivedDateFilter]);
+  }, [filtersKey]);
+
+  // Fetch the requested page. Any search/filter/sort change restarts pagination
+  // at page 1, and the guard below guarantees a single request per change.
+  useEffect(() => {
+    const filtersChanged = prevFiltersKeyRef.current !== filtersKey;
+    prevFiltersKeyRef.current = filtersKey;
+
+    if (filtersChanged && page !== 1) {
+      // Reset first, then let this effect run again with page 1 (one request).
+      setPage(1);
+      return;
+    }
+    fetchLeads();
+  }, [filtersKey, page]);
 
   // Real-time automatic lead synchronization: poll quietly every 5 seconds so new Meta leads appear automatically
   // Uses filtersRef.current so polling ALWAYS preserves the user's active filter values!
@@ -673,8 +763,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         setSuccess('Lead created successfully!');
       }
       setShowCreateModal(false);
-      fetchLeads();
-      fetchSourceCounts();
+      refreshAfterCreate();
     } catch (err) {
       console.error(err);
       const detail = err.response?.data?.detail;
@@ -990,7 +1079,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
       setImportSummary(res.data);
       setSuccess(`Imported ${res.data.imported} leads successfully!`);
-      fetchLeads();
+      refreshAfterCreate();
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || 'Failed to import Excel file.');
@@ -1045,6 +1134,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     if (srcUpper.includes('MANUAL')) return { bg: 'rgba(107, 114, 128, 0.12)', color: '#374151' };
     return { bg: '#f1f5f9', color: '#475569' };
   };
+
+  // Records range shown under the table (e.g. "Showing 1-150 of 850")
+  const rangeStart = total === 0 ? 0 : (page - 1) * LEADS_PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * LEADS_PAGE_SIZE, total);
 
   return (
     <div className="page-container">
@@ -1698,6 +1791,62 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             </tbody>
           </table>
         </div>
+
+        {/* PAGINATION BAR (server-side: 150 leads per page) */}
+        {total > 0 && (
+          <div className="leads-pagination">
+            <div className="leads-pagination-info">
+              <span className="leads-pagination-range">
+                Showing <strong>{rangeStart.toLocaleString()}</strong>–<strong>{rangeEnd.toLocaleString()}</strong> of <strong>{total.toLocaleString()}</strong> leads
+              </span>
+              <span className="leads-pagination-current">
+                Page <strong>{page}</strong> of <strong>{totalPages}</strong>
+              </span>
+            </div>
+
+            <div className="leads-pagination-controls">
+              <button
+                type="button"
+                className="leads-pagination-btn"
+                onClick={() => setPage(prev => Math.max(prev - 1, 1))}
+                disabled={page <= 1 || loading}
+                title="Go to the previous page"
+              >
+                <ChevronLeft size={14} /> Previous
+              </button>
+
+              <div className="leads-pagination-pages">
+                {buildPageList(page, totalPages).map((p, idx) => (
+                  p === '...' ? (
+                    <span key={`gap-${idx}`} className="leads-pagination-gap">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      type="button"
+                      className={`leads-pagination-page${p === page ? ' active' : ''}`}
+                      onClick={() => setPage(p)}
+                      disabled={loading}
+                      aria-current={p === page ? 'page' : undefined}
+                      title={`Go to page ${p}`}
+                    >
+                      {p}
+                    </button>
+                  )
+                ))}
+              </div>
+
+              <button
+                type="button"
+                className="leads-pagination-btn"
+                onClick={() => setPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={page >= totalPages || loading}
+                title="Go to the next page"
+              >
+                Next <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
 

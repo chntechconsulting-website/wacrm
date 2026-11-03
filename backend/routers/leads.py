@@ -1,4 +1,5 @@
 import logging
+import math
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, status
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
@@ -195,6 +196,50 @@ def build_lead_out(lead: Lead) -> LeadOut:
         enquiries=enquiries_out
     )
 
+# Server-side pagination defaults for the Leads list
+DEFAULT_LEADS_PAGE_SIZE = 150
+
+
+def resolve_leads_pagination(page: Optional[int], page_size: Optional[int], skip: int, limit: Optional[int]):
+    """Resolve the requested page window.
+
+    - `page` + `page_size` (web Leads table) selects the page window directly.
+    - `page` + `limit` (mobile app) keeps the caller's page size.
+    - Legacy `skip`/`limit` callers keep behaving exactly as before.
+    Returns (page, page_size, offset).
+    """
+    eff_limit = limit if limit is not None and limit > 0 else None
+
+    if page is not None and not (skip and skip > 0):
+        # Server-side pagination mode
+        eff_page_size = page_size or eff_limit or DEFAULT_LEADS_PAGE_SIZE
+        offset = ((page if page > 0 else 1) - 1) * eff_page_size
+    else:
+        # Legacy offset mode (skip / limit)
+        eff_page_size = eff_limit or 100
+        offset = skip if skip and skip > 0 else 0
+
+    eff_page = (offset // eff_page_size) + 1
+    return eff_page, eff_page_size, offset
+
+
+def leads_page_response(total: int, items: list, page: int, page_size: int) -> dict:
+    """Standard paginated payload: items, total, page, page_size, total_pages."""
+    total_pages = math.ceil(total / page_size) if page_size and page_size > 0 else 0
+    return {
+        "total": total,
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }
+
+
+def empty_leads_response(page: Optional[int], page_size: Optional[int], skip: int, limit: Optional[int]) -> dict:
+    eff_page, eff_page_size, _ = resolve_leads_pagination(page, page_size, skip, limit)
+    return leads_page_response(0, [], eff_page, eff_page_size)
+
+
 @router.get("")
 @router.get("/")
 def list_leads(
@@ -216,7 +261,9 @@ def list_leads(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: Optional[int] = Query(None, description="Legacy page size: used with `skip`, or as the page size when `page` is provided"),
+    page: Optional[int] = Query(None, ge=1, description="1-based page number (server-side pagination)"),
+    page_size: Optional[int] = Query(None, ge=1, le=1000, description="Records per page, used together with `page`"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -241,17 +288,17 @@ def list_leads(
 
     scope = get_user_view_scope(current_user, "leads", db)
     if scope == "none":
-        return {"total": 0, "items": []}
+        return empty_leads_response(page, page_size, skip, limit)
     elif scope == "own":
         if current_emp:
             query = query.filter(Lead.assigned_to == current_emp.id)
         else:
-            return {"total": 0, "items": []}
+            return empty_leads_response(page, page_size, skip, limit)
     elif scope == "team":
         team_ids = get_team_employee_ids_from_user(current_user, db)
         if eff_assigned_to:
             if eff_assigned_to not in team_ids and current_user.role != "ADMIN":
-                return {"total": 0, "items": []}
+                return empty_leads_response(page, page_size, skip, limit)
             query = query.filter(Lead.assigned_to == eff_assigned_to)
         else:
             query = query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
@@ -363,13 +410,16 @@ def list_leads(
 
     total = query.count()
 
+    # Server-side pagination window (page/page_size, or legacy skip/limit)
+    eff_page, eff_page_size, offset = resolve_leads_pagination(page, page_size, skip, limit)
+
     # Dynamic Sorting by Lead Received Date/Time (default desc: latest first)
     is_asc = bool(sort_order and sort_order.lower() == "asc")
     order_clause = asc(Lead.created_at) if is_asc else desc(Lead.created_at)
-    leads = query.order_by(order_clause, desc(Lead.id) if not is_asc else asc(Lead.id)).offset(skip).limit(limit).all()
+    leads = query.order_by(order_clause, desc(Lead.id) if not is_asc else asc(Lead.id)).offset(offset).limit(eff_page_size).all()
 
     items = [build_lead_out(l) for l in leads]
-    return {"total": total, "items": items}
+    return leads_page_response(total, items, eff_page, eff_page_size)
 
 @router.get("/stats")
 def get_leads_stats(
@@ -472,13 +522,15 @@ def list_my_leads(
     status_filter: Optional[str] = None,
     source_filter: Optional[str] = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: Optional[int] = Query(None, description="Legacy page size: used with `skip`, or as the page size when `page` is provided"),
+    page: Optional[int] = Query(None, ge=1, description="1-based page number (server-side pagination)"),
+    page_size: Optional[int] = Query(None, ge=1, le=1000, description="Records per page, used together with `page`"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     current_emp = get_employee_for_user(current_user, db)
     if not current_emp:
-        return {"total": 0, "items": []}
+        return empty_leads_response(page, page_size, skip, limit)
     
     query = db.query(Lead).filter(Lead.assigned_to == current_emp.id)
 
@@ -518,10 +570,13 @@ def list_my_leads(
             query = query.filter(Lead.source.ilike(source_filter))
 
     total = query.count()
-    leads = query.order_by(desc(Lead.created_at)).offset(skip).limit(limit).all()
+
+    # Server-side pagination window (page/page_size, or legacy skip/limit)
+    eff_page, eff_page_size, offset = resolve_leads_pagination(page, page_size, skip, limit)
+    leads = query.order_by(desc(Lead.created_at)).offset(offset).limit(eff_page_size).all()
 
     items = [build_lead_out(l) for l in leads]
-    return {"total": total, "items": items}
+    return leads_page_response(total, items, eff_page, eff_page_size)
 
 @router.get("/export/template")
 def download_excel_template():
