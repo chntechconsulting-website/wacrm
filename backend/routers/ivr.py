@@ -20,7 +20,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_, and_, func, case
+from sqlalchemy import desc, or_, and_, func, case, false
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
@@ -31,7 +31,10 @@ from models.lead import Lead
 from models.call_log import CallLog
 from models.integration import IntegrationConfig
 from services.auth import get_current_user, get_user_from_token
-from services.permission_service import get_authorized_call_employee_ids
+from services.permission_service import (
+    get_authorized_call_employee_ids,
+    get_support_team_call_scope,
+)
 from utils.timezone import get_ist_now
 from config import settings
 
@@ -1462,7 +1465,10 @@ def list_call_logs(
     Lists call logs with strict identity-based access control:
     - Employee: Sees calls where employee_id == current_user.employee_id, plus unassigned inbound calls.
     - Manager: Sees calls where employee_id IN (manager's authorized team), plus unassigned inbound calls.
-    - Admin: Sees company-wide calls.
+    - Support Manager/Executive: Sees only calls owned by current Support Team
+      members (Employee.manager_id hierarchy) and created on/after the team's
+      Support Manager Employee.created_at. Unassigned calls are excluded.
+    - Admin: Sees company-wide calls (no support-team restriction).
     Never trusts unverified employee_id sent from frontend.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
@@ -1510,6 +1516,24 @@ def list_call_logs(
         # Admin / Company-wide access: can filter by employee_id if specified
         if employee_id is not None:
             query = query.filter(CallLog.employee_id == employee_id)
+
+    # Strict Support Team filtering. The support team's identity is the Support
+    # Manager's Employee row; membership is resolved through Employee.manager_id
+    # and verified by CallLog.employee_id (never by name/phone/extension text).
+    # Unassigned calls are intentionally excluded here. Calls must also be
+    # created on/after the team (and each member's) creation timestamp.
+    support_scope = get_support_team_call_scope(current_user, db, authorized_emp_ids)
+    if support_scope is not None:
+        cutoff_conditions = [
+            and_(CallLog.employee_id == emp_id, CallLog.created_at >= cutoff)
+            for emp_id, cutoff in support_scope.get("employee_cutoffs", {}).items()
+        ]
+        if cutoff_conditions:
+            query = query.filter(or_(*cutoff_conditions))
+        else:
+            # An unresolvable support team/creation time must never expose
+            # unrelated historical calls.
+            query = query.filter(false())
 
     # Direction filter (INBOUND / OUTBOUND)
     target_dir = direction or call_direction

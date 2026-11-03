@@ -1,4 +1,5 @@
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta, timezone
 import logging
 
 from sqlalchemy.orm import Session
@@ -529,6 +530,139 @@ def get_authorized_call_employee_ids(user: User, db: Session) -> Optional[List[i
         return [e[0] for e in dept_emps]
     else:  # "own"
         return [emp.id]
+
+
+SUPPORT_TEAM_ROLES = {"SUPPORT_MANAGER", "SUPPORT_EXECUTIVE", "SUPPORT"}
+
+
+def _is_support_team_employee(emp: Optional[Employee]) -> bool:
+    """Return True when the employee belongs to the Support team."""
+    if not emp:
+        return False
+    role = (emp.role or "").strip().upper()
+    department = (emp.department or "").strip().upper()
+    # Support roles are authoritative. A generic MANAGER in the Support
+    # department is also accepted; a Sales role placed in that department is
+    # not treated as a support team member.
+    return role in SUPPORT_TEAM_ROLES or (department == "SUPPORT" and role == "MANAGER")
+
+
+def _utc_naive_to_ist_naive(value: Optional[datetime]) -> Optional[datetime]:
+    """
+    Convert a naive UTC database timestamp (Employee/User.created_at) into the
+    naive IST representation used by CallLog.created_at.
+
+    Employee/User timestamps are written with datetime.utcnow(), while call-log
+    timestamps are written with get_ist_now(). Comparing them directly would
+    shift the cutoff by 5h30m and expose calls made before the team existed.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value + timedelta(hours=5, minutes=30)
+
+
+def get_support_team_call_scope(
+    user: User,
+    db: Session,
+    authorized_employee_ids: Optional[List[int]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolve the strict Support Team call-log scope for a user.
+
+    There is no separate teams table in this database. The Support Team's
+    database identity is the Support Manager's Employee row; its members are
+    resolved through the existing Employee.manager_id team relationship.
+
+    Returns None for Admin, non-support users, or users without a support
+    employee profile. Otherwise returns:
+      team_id: Support Manager Employee.id (the team's DB identity)
+      team_manager_employee_id: same value, kept explicit for reporting
+      team_created_at_utc: Support Manager Employee.created_at (naive UTC)
+      team_created_at_ist: creation cutoff in CallLog.created_at's naive IST
+      employee_ids: current support team employee IDs used for filtering
+      employee_cutoffs: {employee_id: earliest eligible call timestamp (IST)}
+
+    A member's cutoff is max(team creation, member Employee.created_at), so a
+    newly added member's older calls are not retroactively assigned to the team.
+    """
+    if not user:
+        return None
+
+    # Admin always keeps company-wide call visibility.
+    if (user.role or "").strip().upper() == "ADMIN":
+        return None
+
+    current_emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+    if not current_emp or not _is_support_team_employee(current_emp):
+        return None
+
+    scope = get_user_view_scope(user, "calls", db)
+    if scope == "none":
+        return None
+
+    role = (user.role or current_emp.role or "").strip().upper()
+
+    # A Support Manager's own Employee row is the team root. For other support
+    # members (e.g. a support executive with own-scope calls), use their
+    # Support Manager as the root so the team creation cutoff still applies.
+    root = None
+    if role == "SUPPORT_MANAGER":
+        root = current_emp
+    elif current_emp.manager_id:
+        candidate = db.query(Employee).filter(Employee.id == current_emp.manager_id).first()
+        if candidate and _is_support_team_employee(candidate):
+            root = candidate
+    if root is None:
+        root = current_emp
+
+    team_ids = set(get_team_employee_ids(root.id, db))
+    team_ids.add(current_emp.id)
+    if authorized_employee_ids is not None:
+        team_ids &= set(authorized_employee_ids)
+    if not team_ids:
+        return None
+
+    members = db.query(Employee).filter(Employee.id.in_(team_ids)).all()
+    support_members = [member for member in members if _is_support_team_employee(member)]
+    if not support_members:
+        return None
+
+    team_created_at_utc = root.created_at or current_emp.created_at
+    if team_created_at_utc is None:
+        known_creation_times = [
+            member.created_at for member in support_members if member.created_at is not None
+        ]
+        team_created_at_utc = min(known_creation_times) if known_creation_times else None
+
+    if team_created_at_utc is None:
+        # Without an authoritative creation time we must not expose any call as
+        # belonging to the team.
+        return {
+            "team_id": root.id,
+            "team_manager_employee_id": root.id,
+            "team_created_at_utc": None,
+            "team_created_at_ist": None,
+            "employee_ids": [],
+            "employee_cutoffs": {},
+        }
+
+    team_cutoff_ist = _utc_naive_to_ist_naive(team_created_at_utc)
+    employee_cutoffs: Dict[int, datetime] = {}
+    for member in support_members:
+        member_created_at_utc = member.created_at or team_created_at_utc
+        member_cutoff_ist = _utc_naive_to_ist_naive(member_created_at_utc)
+        employee_cutoffs[member.id] = max(team_cutoff_ist, member_cutoff_ist)
+
+    return {
+        "team_id": root.id,
+        "team_manager_employee_id": root.id,
+        "team_created_at_utc": team_created_at_utc,
+        "team_created_at_ist": team_cutoff_ist,
+        "employee_ids": sorted(employee_cutoffs.keys()),
+        "employee_cutoffs": employee_cutoffs,
+    }
 
 
 def get_authorized_followup_employee_ids(user: User, db: Session) -> Optional[List[int]]:
