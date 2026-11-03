@@ -17,6 +17,12 @@ SYSTEM_MODULES = [
         "description": "Prospects and inquiries pipeline management"
     },
     {
+        "key": "brochure_downloads",
+        "label": "Brochure Download People",
+        "category": "Sales & CRM",
+        "description": "Website brochure download enquiries, follow-ups, and exports"
+    },
+    {
         "key": "customers",
         "label": "Customers",
         "category": "Sales & CRM",

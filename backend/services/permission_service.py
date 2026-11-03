@@ -41,8 +41,8 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     # 2. SALES_MANAGER / MANAGER
     if norm in ["SALES_MANAGER", "MANAGER"]:
         sales_mgr_mods = {
-            "dashboard", "leads", "customers", "contacts", "quotations",
-            "invoices", "calls", "whatsapp", "followups", "activities",
+            "dashboard", "leads", "brochure_downloads", "customers", "contacts",
+            "quotations", "invoices", "calls", "whatsapp", "followups", "activities",
             "reports", "analytics", "employees"
         }
         res = {}
@@ -53,13 +53,13 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
                 "has_access": has_acc,
                 "can_view": has_acc,
                 "can_create": k in ["leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"],
-                "can_edit": k in ["leads", "customers", "contacts", "quotations", "followups", "activities"],
+                "can_edit": k in ["leads", "brochure_downloads", "customers", "contacts", "quotations", "followups", "activities"],
                 "can_delete": k in ["leads", "quotations"],
-                "can_export": k in ["leads", "quotations", "invoices", "reports"],
+                "can_export": k in ["leads", "brochure_downloads", "quotations", "invoices", "reports"],
                 "can_approve": k in ["quotations"],
-                "can_assign": k in ["leads"],
+                "can_assign": k in ["leads", "brochure_downloads"],
                 "can_call": k in ["calls", "leads", "customers"],
-                "can_whatsapp": k in ["whatsapp", "leads", "customers"],
+                "can_whatsapp": k in ["whatsapp", "leads", "brochure_downloads", "customers"],
                 "view_scope": "team" if has_acc else "none"
             }
         return res
@@ -67,8 +67,8 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
     # 3. SALES_EXECUTIVE / SALES / EMPLOYEE
     if norm in ["SALES_EXECUTIVE", "SALES", "EMPLOYEE"]:
         sales_exec_mods = {
-            "dashboard", "leads", "customers", "contacts", "quotations",
-            "calls", "whatsapp", "followups", "activities"
+            "dashboard", "leads", "brochure_downloads", "customers", "contacts",
+            "quotations", "calls", "whatsapp", "followups", "activities"
         }
         res = {}
         for mod in SYSTEM_MODULES:
@@ -78,13 +78,13 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
                 "has_access": has_acc,
                 "can_view": has_acc,
                 "can_create": k in ["leads", "customers", "contacts", "quotations", "calls", "whatsapp", "followups", "activities"],
-                "can_edit": k in ["leads", "customers", "contacts", "quotations", "followups", "activities"],
+                "can_edit": k in ["leads", "brochure_downloads", "customers", "contacts", "quotations", "followups", "activities"],
                 "can_delete": False,
-                "can_export": k in ["leads", "quotations"],
+                "can_export": k in ["leads", "brochure_downloads", "quotations"],
                 "can_approve": False,
                 "can_assign": False,
                 "can_call": k in ["calls", "leads", "customers"],
-                "can_whatsapp": k in ["whatsapp", "leads", "customers"],
+                "can_whatsapp": k in ["whatsapp", "leads", "brochure_downloads", "customers"],
                 "view_scope": "own" if has_acc else "none"
             }
         return res
@@ -299,7 +299,7 @@ def seed_default_roles_if_needed(db: Session):
     Initializes and synchronizes default system roles and permission sets in the database:
     ADMIN, SALES_MANAGER, SALES_EXECUTIVE, MANAGER, SALES, EMPLOYEE, FINANCE, SUPPORT, SUPPORT_MANAGER, SUPPORT_EXECUTIVE.
     Also repairs/seeds any missing module permissions for existing roles so that every role
-    has all 19 module rows populated with valid permission flags.
+    has every catalog module row populated with valid permission flags.
     """
     standard_roles_specs = [
         {

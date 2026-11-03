@@ -26,6 +26,9 @@ import WebsiteLeadsPage from './pages/Leads/WebsiteLeadsPage';
 import ManualLeadsPage from './pages/Leads/ManualLeadsPage';
 import MyLeadsPage from './pages/Leads/MyLeadsPage';
 
+// WEBSITE ENQUIRIES Pages
+import BrochureDownloadPeoplePage from './pages/WebsiteEnquiries/BrochureDownloadPeoplePage';
+
 // COMMUNICATION Pages
 import CallLogsPage from './pages/Communication/CallLogsPage';
 import FollowupsPage from './pages/Communication/FollowupsPage';
@@ -102,6 +105,12 @@ function App() {
               <Route path="/leads/website" element={<WebsiteLeadsPage />} />
               <Route path="/leads/manual" element={<ManualLeadsPage />} />
               <Route path="/leads/my" element={<MyLeadsPage />} />
+
+              {/* WEBSITE ENQUIRIES Section Routes */}
+              <Route element={<ProtectedRoute requiredModule="brochure_downloads" />}>
+                <Route path="/website-enquiries/brochure-downloads" element={<BrochureDownloadPeoplePage />} />
+                <Route path="/brochure-downloads" element={<BrochureDownloadPeoplePage />} />
+              </Route>
 
               {/* COMMUNICATION Section Routes */}
               <Route path="/communication/calls" element={<CallLogsPage />} />

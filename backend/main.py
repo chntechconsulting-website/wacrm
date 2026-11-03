@@ -27,6 +27,7 @@ from routers import (
     employees,
     leads,
     customers,
+    brochure_enquiries,
     followups,
     reports,
     integrations,
@@ -97,6 +98,7 @@ app.include_router(users.router, prefix=settings.API_V1_STR)
 app.include_router(employees.router, prefix=settings.API_V1_STR)
 app.include_router(leads.router, prefix=settings.API_V1_STR)
 app.include_router(customers.router, prefix=settings.API_V1_STR)
+app.include_router(brochure_enquiries.router, prefix=settings.API_V1_STR)
 app.include_router(followups.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
 app.include_router(export.router, prefix=settings.API_V1_STR)

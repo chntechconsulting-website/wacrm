@@ -40,7 +40,8 @@ import {
   Award,
   XCircle,
   Database,
-  Target
+  Target,
+  FileDown
 } from 'lucide-react';
 
 // Lite tone color presets for testing
@@ -319,6 +320,7 @@ const Sidebar = ({
   // Section collapse states
   const [openSections, setOpenSections] = useState({
     leads: true,
+    websiteEnquiries: true,
     communication: true,
     sales: true,
     support: true,
@@ -332,6 +334,8 @@ const Sidebar = ({
     const path = location.pathname;
     if (path.startsWith('/leads')) {
       setOpenSections(prev => ({ ...prev, leads: true }));
+    } else if (path.startsWith('/website-enquiries') || path.startsWith('/brochure-downloads')) {
+      setOpenSections(prev => ({ ...prev, websiteEnquiries: true }));
     } else if (path.startsWith('/communication')) {
       setOpenSections(prev => ({ ...prev, communication: true }));
     } else if (path.startsWith('/waquotes') || path.startsWith('/finance')) {
@@ -426,7 +430,7 @@ const Sidebar = ({
       return true;
     }
     // Resilient fallback for core CRM operational roles
-    if (isSalesRole && ['dashboard', 'leads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(moduleKey)) {
+    if (isSalesRole && ['dashboard', 'leads', 'brochure_downloads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(moduleKey)) {
       return true;
     }
     if (isSalesManager && ['invoices', 'reports', 'analytics', 'employees'].includes(moduleKey)) {
@@ -450,7 +454,7 @@ const Sidebar = ({
       return Boolean(currentUser.permissions[moduleKey][`can_${action}`]);
     }
     // Standard role defaults for sales
-    if (isSalesRole && ['leads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(moduleKey)) {
+    if (isSalesRole && ['leads', 'brochure_downloads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(moduleKey)) {
       if (action === 'delete') return isSalesManager;
       if (action === 'assign') return isSalesManager;
       if (action === 'approve') return isSalesManager;
@@ -582,6 +586,25 @@ const Sidebar = ({
                 label="Assigned Leads"
                 badgeCount={counts.myLeads}
                 badgeVariant="yellow"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+            </SidebarSection>
+          )}
+
+          {/* Section: WEBSITE ENQUIRIES */}
+          {hasModule('brochure_downloads') && (
+            <SidebarSection
+              title="WEBSITE ENQUIRIES"
+              isOpen={openSections.websiteEnquiries}
+              onToggle={() => toggleSection('websiteEnquiries')}
+              isCollapsed={isCollapsed}
+            >
+              <SidebarItem
+                to="/website-enquiries/brochure-downloads"
+                exactMatch={true}
+                icon={FileDown}
+                label="Brochure Download People"
                 isCollapsed={isCollapsed}
                 onClick={handleItemClick}
               />

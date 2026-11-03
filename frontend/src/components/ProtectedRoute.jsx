@@ -139,7 +139,7 @@ const ProtectedRoute = ({ allowedRoles = [], requiredModule = null, requiredActi
     const isSupportRole = ['SUPPORT_MANAGER', 'SUPPORT_EXECUTIVE', 'SUPPORT'].includes(normRole);
     const isFinance = normRole === 'FINANCE';
 
-    const isCoreSalesModule = isSalesRole && ['dashboard', 'leads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(requiredModule);
+    const isCoreSalesModule = isSalesRole && ['dashboard', 'leads', 'brochure_downloads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(requiredModule);
     const isSalesManagerModule = isSalesManager && ['invoices', 'reports', 'analytics', 'employees'].includes(requiredModule);
     const isCoreSupportModule = isSupportRole && ['dashboard', 'customers', 'contacts', 'support_tickets', 'calls', 'whatsapp', 'activities'].includes(requiredModule);
     const isFinanceModule = isFinance && ['dashboard', 'payments', 'invoices', 'customers', 'reports'].includes(requiredModule);

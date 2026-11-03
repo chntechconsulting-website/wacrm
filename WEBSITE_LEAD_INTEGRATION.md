@@ -208,3 +208,124 @@ curl -X POST "http://127.0.0.1:8000/api/integrations/website/leads" \
 Submitted leads will immediately appear in:
 1. **Sidebar Badge**: Under `LEADS` $\rightarrow$ `Website Leads`.
 2. **Page View**: Navigating to `/leads/website` calls `GET /api/leads?source=WEBSITE` and lists all website inquiries.
+
+---
+
+## 📄 Brochure Download Forms (Dedicated Module)
+
+Brochure downloads are stored separately from normal leads so marketing
+downloads never pollute the Leads pipeline.
+
+- **Endpoint**: `POST /api/integrations/website/brochures`
+- **Alias**: `POST /api/integrations/website/brochure`
+- **Authentication**: None (public website form endpoint)
+- **Content-Type**: `application/json`
+- **CRM page**: `WEBSITE ENQUIRIES` → `Brochure Download People`
+
+### Request Payload
+
+```json
+{
+  "name": "Arun Kumar",
+  "phone": "9876543210",
+  "countryCode": "91",
+  "email": "arun@gmail.com",
+  "product_name": "HRMS",
+  "product_id": "prod-hrms",
+  "brochure_name": "HRMS Product Brochure",
+  "brochure_id": "brochure-hrms-2026",
+  "website_id": "wapluscrm",
+  "website_name": "WA Plus CRM",
+  "landing_page": "https://www.wapluscrm.in/hrms",
+  "campaign": "HRMS Brochure Download",
+  "form_type": "brochure_download"
+}
+```
+
+| Field | Required | Description |
+| :--- | :--- | :--- |
+| `name` | **YES** | Customer full name |
+| `phone` or `email` | **YES** (at least one) | Customer contact; `phone` is recommended |
+| `countryCode` | Optional | Country calling code, e.g. `91` |
+| `email` | Optional | Customer email address |
+| `product_name` / `product_id` | Optional | Product the brochure belongs to (site-defined values) |
+| `brochure_name` / `brochure_id` | Optional | Brochure/document name and site-defined ID |
+| `website_id` / `website_name` | Optional | Website attribution |
+| `landing_page` / `campaign` | Optional | Page URL and campaign attribution |
+| `form_type` | Optional | Explicit marker such as `brochure_download` |
+
+### Backend Rules
+
+- The dedicated endpoint always stores a brochure enquiry; it **never creates a
+  Lead or Customer**.
+- The general `/api/integrations/website/leads` endpoint also routes a payload
+  to the brochure module when it explicitly identifies itself as a brochure /
+  download / catalogue / PDF request, or includes explicit brochure/product
+  fields. Name/phone/email alone never classify a submission as a brochure.
+- Repeated submissions for the same contact and product/brochure update one
+  record (`submission_count`, latest timestamp, contact details) instead of
+  creating duplicates. Follow-up status and notes are preserved.
+- If the contact already exists as a Lead/Customer, the brochure record stores a
+  reference ID for context only. Normal Leads listings are not modified.
+- Values such as product IDs and brochure IDs are whatever the website sends;
+  nothing is hardcoded in the CRM.
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Brochure download recorded successfully",
+  "lead_id": null,
+  "enquiry_id": 12,
+  "record_type": "BROCHURE_ENQUIRY",
+  "is_duplicate": false,
+  "submission_count": 1
+}
+```
+
+### Important: Do Not Block the Download
+
+Post the form to the CRM and start the brochure download independently. A CRM
+network error must never prevent the visitor from receiving the file.
+
+```html
+<form id="brochureForm">
+  <input type="text" name="name" placeholder="Your Name" required />
+  <input type="tel" name="phone" placeholder="WhatsApp Number" required />
+  <input type="email" name="email" placeholder="Email" />
+  <input type="hidden" name="product_name" value="HRMS" />
+  <input type="hidden" name="brochure_name" value="HRMS Product Brochure" />
+  <button type="submit">Download Brochure</button>
+</form>
+
+<script>
+  document.getElementById('brochureForm').addEventListener('submit', function (event) {
+    event.preventDefault();
+    const fields = event.currentTarget.elements;
+    const payload = {
+      name: fields.name.value,
+      phone: fields.phone.value,
+      countryCode: '91',
+      email: fields.email.value,
+      product_name: fields.product_name.value,
+      brochure_name: fields.brochure_name.value,
+      website_name: 'WA Plus CRM',
+      form_type: 'brochure_download'
+    };
+
+    // Start the file download immediately and independently of the CRM call.
+    window.location.href = '/files/hrms-brochure.pdf';
+
+    // Fire-and-forget CRM record. A failure here never blocks the download.
+    fetch('https://www.wapluscrm.in/api/integrations/website/brochures', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).catch(function (error) {
+      console.warn('Brochure enquiry was not saved to the CRM:', error);
+    });
+  });
+</script>
+```

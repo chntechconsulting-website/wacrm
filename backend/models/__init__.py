@@ -19,6 +19,7 @@ from models.role import Role, RolePermission
 from models.sales_target import SalesTarget
 from models.office_sim import OfficeSimMapping
 from models.team import Team
+from models.brochure_enquiry import BrochureEnquiry
 
 __all__ = [
     "Base",
@@ -53,4 +54,5 @@ __all__ = [
     "SalesTarget",
     "OfficeSimMapping",
     "Team",
+    "BrochureEnquiry",
 ]

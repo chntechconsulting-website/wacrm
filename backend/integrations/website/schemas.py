@@ -42,6 +42,37 @@ class WebsiteLeadRequest(BaseModel):
     website_name: Optional[str] = Field(None, max_length=100, example="WA Plus CRM")
     landing_page: Optional[str] = Field(None, max_length=255, example="http://www.wapluscrm.in/solutions/demo")
     campaign: Optional[str] = Field(None, max_length=100, example="Solutions Demo")
+    campaign_name: Optional[str] = Field(None, max_length=150)
+    page_url: Optional[str] = Field(None, max_length=500)
+
+    # Brochure download form markers and details.
+    # These are explicit signals only: name/phone/email never classify a
+    # submission as a brochure enquiry.
+    type: Optional[str] = Field(None, max_length=60)
+    enquiry_type: Optional[str] = Field(None, max_length=60)
+    enquiryType: Optional[str] = Field(None, max_length=60)
+    form_type: Optional[str] = Field(None, max_length=60)
+    formType: Optional[str] = Field(None, max_length=60)
+    form_name: Optional[str] = Field(None, max_length=100)
+    formName: Optional[str] = Field(None, max_length=100)
+    request_type: Optional[str] = Field(None, max_length=60)
+    requestType: Optional[str] = Field(None, max_length=60)
+    lead_type: Optional[str] = Field(None, max_length=60)
+    leadType: Optional[str] = Field(None, max_length=60)
+
+    brochure: Optional[str] = Field(None, max_length=255)
+    brochure_name: Optional[str] = Field(None, max_length=255)
+    brochureName: Optional[str] = Field(None, max_length=255)
+    brochure_id: Optional[str] = Field(None, max_length=100)
+    brochureId: Optional[str] = Field(None, max_length=100)
+    document_name: Optional[str] = Field(None, max_length=255)
+    documentName: Optional[str] = Field(None, max_length=255)
+
+    product: Optional[str] = Field(None, max_length=200)
+    product_name: Optional[str] = Field(None, max_length=200)
+    productName: Optional[str] = Field(None, max_length=200)
+    product_id: Optional[str] = Field(None, max_length=100)
+    productId: Optional[str] = Field(None, max_length=100)
 
     source: Optional[str] = Field(None, description="Ignored by backend - source is forced to WEBSITE")
 
@@ -49,3 +80,7 @@ class WebsiteLeadResponse(BaseModel):
     success: bool = True
     message: str = "Website lead created successfully"
     lead_id: Optional[int] = None
+    enquiry_id: Optional[int] = None
+    record_type: str = "LEAD"
+    is_duplicate: bool = False
+    submission_count: Optional[int] = None

@@ -5,6 +5,10 @@ from sqlalchemy.orm import Session
 from models.lead import Lead
 from models.activity import LeadActivity
 from services.reinquiry_service import ReInquiryService
+from services.brochure_enquiry_service import (
+    BrochureEnquiryService,
+    is_brochure_submission as detect_brochure_submission,
+)
 from .schemas import WebsiteLeadRequest
 
 logger = logging.getLogger("website_integration")
@@ -14,6 +18,32 @@ class WebsiteLeadService:
     Service handling website form submission ingestion, duplicate checking,
     source forcing (WEBSITE), and DB persistence.
     """
+
+    @staticmethod
+    def is_brochure_submission(payload: WebsiteLeadRequest) -> bool:
+        return detect_brochure_submission(payload)
+
+    @staticmethod
+    def process_website_brochure(db: Session, payload: WebsiteLeadRequest) -> Dict[str, Any]:
+        """
+        Persist a brochure download in the dedicated brochure table. This never
+        creates a normal Lead, so brochure downloads cannot pollute the Leads
+        pipeline. An optional link to an existing Lead/Customer is recorded.
+        """
+        record, is_duplicate = BrochureEnquiryService.record_submission(db, payload)
+        return {
+            "success": True,
+            "message": (
+                "Brochure download already recorded; submission updated successfully"
+                if is_duplicate
+                else "Brochure download recorded successfully"
+            ),
+            "lead_id": record.lead_id,
+            "enquiry_id": record.id,
+            "record_type": "BROCHURE_ENQUIRY",
+            "is_duplicate": is_duplicate,
+            "submission_count": record.submission_count,
+        }
 
     @staticmethod
     def process_website_lead(db: Session, payload: WebsiteLeadRequest) -> Dict[str, Any]:
