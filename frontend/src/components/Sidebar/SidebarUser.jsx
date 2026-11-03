@@ -13,6 +13,9 @@ const SidebarUser = ({ isCollapsed }) => {
   const userDept = user?.department || '';
   const userRole = user?.role || 'Administrator';
   const userEmail = user?.email || `${(user?.username || 'user').toLowerCase()}@chncrm.com`;
+  const canAccessSettings =
+    userRole.toUpperCase() === 'ADMIN' ||
+    user?.permissions?.settings?.has_access === true;
   
   const initials = userName
     .split(' ')
@@ -63,15 +66,17 @@ const SidebarUser = ({ isCollapsed }) => {
             <span>My Profile</span>
           </NavLink>
 
-          <NavLink 
-            to="/settings/account" 
-            className="popover-menu-item"
-            onClick={() => setIsDropdownOpen(false)}
-            role="menuitem"
-          >
-            <SettingsIcon size={15} />
-            <span>Account Settings</span>
-          </NavLink>
+          {canAccessSettings && (
+            <NavLink 
+              to="/settings/account" 
+              className="popover-menu-item"
+              onClick={() => setIsDropdownOpen(false)}
+              role="menuitem"
+            >
+              <SettingsIcon size={15} />
+              <span>Account Settings</span>
+            </NavLink>
+          )}
 
           <div className="popover-divider" />
 

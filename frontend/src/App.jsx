@@ -130,8 +130,10 @@ function App() {
               <Route path="/analytics" element={<ReportsPage />} />
 
               {/* SETTINGS & USERS Section Routes */}
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/settings/account" element={<SettingsPage />} />
+              <Route element={<ProtectedRoute requiredModule="settings" />}>
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/settings/account" element={<SettingsPage />} />
+              </Route>
               <Route path="/settings/integrations" element={<IntegrationsPage />} />
               <Route path="/settings/integrations/meta" element={<MetaIntegrationPage />} />
               <Route path="/integrations/meta" element={<MetaIntegrationPage />} />
