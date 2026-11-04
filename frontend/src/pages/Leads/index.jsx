@@ -73,7 +73,7 @@ const STATUS_OPTIONS = [
   'JUNK'
 ];
 
-const SOURCE_OPTIONS = ['META', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'];
+const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'];
 const RATING_OPTIONS = ['Hot', 'Warm', 'Cold'];
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
 
@@ -1126,8 +1126,16 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     return { bg: '#f1f5f9', color: '#64748b' };
   };
 
+  const getSourceLabel = (source) => {
+    const raw = (source || '').trim();
+    const srcUpper = raw.toUpperCase();
+    if (srcUpper === 'WHATSAPP_ADS' || srcUpper === 'WHATSAPP ADS') return 'WhatsApp Ads';
+    return raw;
+  };
+
   const getSourceBadgeStyle = (source) => {
     const srcUpper = (source || '').toUpperCase();
+    if (srcUpper.includes('WHATSAPP')) return { bg: 'rgba(37, 211, 102, 0.14)', color: '#128c7e' };
     if (srcUpper.includes('META')) return { bg: 'rgba(59, 130, 246, 0.12)', color: '#1d4ed8' };
     if (srcUpper.includes('WEB')) return { bg: 'rgba(16, 185, 129, 0.12)', color: '#047857' };
     if (srcUpper.includes('EXCEL')) return { bg: 'rgba(245, 158, 11, 0.12)', color: '#b45309' };
@@ -1672,7 +1680,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                       <td>{lead.company || '-'}</td>
                       <td>
                         <span style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '6px', backgroundColor: srcBadgeStyle.bg, color: srcBadgeStyle.color, fontWeight: '600' }}>
-                          {lead.source}
+                          {getSourceLabel(lead.source)}
                         </span>
                       </td>
                       <td>
@@ -2155,7 +2163,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           fontWeight: '700',
                           letterSpacing: '0.02em'
                         }}>
-                          {selectedLead.source}
+                          {getSourceLabel(selectedLead.source)}
                         </span>
 
                         {/* Product Category Pill */}
@@ -2295,7 +2303,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                                   color: sStyle.color,
                                   border: '1px solid rgba(0,0,0,0.06)'
                                 }}>
-                                  {srcName}
+                                  {getSourceLabel(srcName)}
                                 </span>
                               );
                             })}
@@ -3027,7 +3035,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                                         backgroundColor: sStyle.bg,
                                         color: sStyle.color
                                       }}>
-                                        {enq.source}
+                                        {getSourceLabel(enq.source)}
                                       </span>
                                       {isRe && (
                                         <span style={{ fontSize: '0.7rem', color: '#7c3aed', fontWeight: '700' }}>

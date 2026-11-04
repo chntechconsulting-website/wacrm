@@ -589,6 +589,14 @@ const Sidebar = ({
                 isCollapsed={isCollapsed}
                 onClick={handleItemClick}
               />
+              <SidebarItem
+                to="/leads/whatsapp-ads"
+                exactMatch={true}
+                icon={MessageCircle}
+                label="WhatsApp Ad Leads"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
             </SidebarSection>
           )}
 

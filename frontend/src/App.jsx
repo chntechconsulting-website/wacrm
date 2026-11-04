@@ -22,6 +22,7 @@ import LeadsPage from './pages/Leads/LeadsPage';
 import CreateLeadPage from './pages/Leads/CreateLeadPage';
 import ImportLeadsPage from './pages/Leads/ImportLeadsPage';
 import MetaLeadsPage from './pages/Leads/MetaLeadsPage';
+import WhatsAppAdLeadsPage from './pages/Leads/WhatsAppAdLeadsPage';
 import WebsiteLeadsPage from './pages/Leads/WebsiteLeadsPage';
 import ManualLeadsPage from './pages/Leads/ManualLeadsPage';
 import MyLeadsPage from './pages/Leads/MyLeadsPage';
@@ -102,6 +103,7 @@ function App() {
               <Route path="/leads/create" element={<CreateLeadPage />} />
               <Route path="/leads/import" element={<ImportLeadsPage />} />
               <Route path="/leads/meta" element={<MetaLeadsPage />} />
+              <Route path="/leads/whatsapp-ads" element={<WhatsAppAdLeadsPage />} />
               <Route path="/leads/website" element={<WebsiteLeadsPage />} />
               <Route path="/leads/manual" element={<ManualLeadsPage />} />
               <Route path="/leads/my" element={<MyLeadsPage />} />

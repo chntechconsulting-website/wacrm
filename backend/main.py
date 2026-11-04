@@ -87,6 +87,8 @@ app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads"
 from integrations.meta.webhook import router as meta_webhook_router
 from integrations.website.router import router as website_lead_router
 from integrations.whatsapp.webhook import webhook_router as whatsapp_webhook_router
+from integrations.whatsapp_ads.webhook import router as whatsapp_ad_webhook_router
+from integrations.whatsapp_ads.router import router as whatsapp_ad_leads_router
 from integrations.quotetask.router import router as quotetask_router
 from integrations.waquote.router import router as waquote_router
 from integrations.proforma.router import router as proforma_integration_router
@@ -117,6 +119,9 @@ app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(meta_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(website_lead_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_webhook_router, prefix=settings.API_V1_STR)
+app.include_router(whatsapp_ad_webhook_router, prefix=settings.API_V1_STR)
+app.include_router(whatsapp_ad_webhook_router)  # Direct /webhook/whatsapp for non-/api proxies
+app.include_router(whatsapp_ad_leads_router, prefix=settings.API_V1_STR)
 app.include_router(quotetask_router, prefix=settings.API_V1_STR)
 app.include_router(waquote_router, prefix=settings.API_V1_STR)
 app.include_router(proforma_integration_router, prefix=settings.API_V1_STR)
@@ -526,6 +531,15 @@ async def startup_db_client():
         print("Dynamic Lead Auto-Assignment background scheduler launched.")
     except Exception as ex:
         print(f"Failed to start lead auto-assignment scheduler: {ex}")
+
+    # Launch WhatsApp Ad attribution resolver (campaign/ad names via Marketing API)
+    try:
+        import asyncio
+        from integrations.whatsapp_ads.service import start_attribution_resolver
+        asyncio.create_task(start_attribution_resolver(interval_seconds=300))
+        print("WhatsApp Ad attribution resolver launched.")
+    except Exception as ex:
+        print(f"Failed to start WhatsApp Ad attribution resolver: {ex}")
 
     # Launch Follow-up 1-Hour Reminder Background Scheduler
     try:

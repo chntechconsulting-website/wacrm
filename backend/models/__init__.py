@@ -20,6 +20,7 @@ from models.sales_target import SalesTarget
 from models.office_sim import OfficeSimMapping
 from models.team import Team
 from models.brochure_enquiry import BrochureEnquiry
+from models.whatsapp_ad_lead import WhatsAppAdAttribution, WhatsAppWebhookEvent
 
 __all__ = [
     "Base",
@@ -55,4 +56,6 @@ __all__ = [
     "OfficeSimMapping",
     "Team",
     "BrochureEnquiry",
+    "WhatsAppAdAttribution",
+    "WhatsAppWebhookEvent",
 ]

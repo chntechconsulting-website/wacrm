@@ -115,6 +115,96 @@ def is_within_working_hours(config: AutoAssignConfig) -> bool:
         logger.error(f"Error evaluating working hours: {e}")
         return True
 
+def assign_lead_immediately(
+    db: Session,
+    lead: Lead,
+    notes: Optional[str] = None,
+    assigned_by: Optional[int] = None,
+) -> Optional[Employee]:
+    """
+    Assign one unassigned lead right away using the existing auto-assignment
+    configuration (enabled flag, working hours, eligible roles and method).
+
+    This exists so a real-time webhook (e.g. a Click-to-WhatsApp ad enquiry)
+    can be routed without running the global pending-lead scheduler, which
+    would touch every unassigned lead in the database.
+
+    The caller owns the transaction: this helper flushes but never commits.
+    Returns the selected employee, or None when assignment did not apply.
+    """
+    if lead is None or lead.assigned_to:
+        return None
+
+    # Do not use get_or_create_auto_assign_config() here: it commits when the
+    # singleton row is missing, which would break the caller's transaction.
+    config = db.query(AutoAssignConfig).filter(AutoAssignConfig.id == 1).first()
+    if not config:
+        config = AutoAssignConfig(
+            id=1,
+            enabled=True,
+            waiting_time_minutes=60,
+            assignment_method="LEAST_ASSIGNED",
+            eligible_roles="EMPLOYEE,MANAGER",
+            working_hours_enabled=False,
+            working_hours_start="09:00",
+            working_hours_end="18:00",
+        )
+        db.add(config)
+        db.flush()
+
+    if not config.enabled or not is_within_working_hours(config):
+        return None
+
+    assignee = select_eligible_assignee(db, config)
+    if not assignee:
+        logger.warning(
+            "Could not immediately assign Lead #%s: no eligible employees.",
+            lead.id,
+        )
+        return None
+
+    now = datetime.utcnow()
+    lead.assigned_to = assignee.id
+    lead.assigned_by = assigned_by
+    lead.assigned_at = now
+    if (lead.status or "").strip().upper() in {"", "NEW", "NEW LEAD", "NEW_LEAD"}:
+        lead.status = "ASSIGNED"
+
+    db.add(
+        LeadAssignment(
+            lead_id=lead.id,
+            assigned_to=assignee.id,
+            assigned_by=assigned_by,
+            assigned_at=now,
+            assignment_method="AUTOMATIC",
+            notes=notes or (
+                f"Auto-assigned immediately using {config.assignment_method} strategy."
+            ),
+        )
+    )
+    db.add(
+        LeadActivity(
+            lead_id=lead.id,
+            performed_by=None,
+            activity_type="AUTO_ASSIGNED",
+            description=(
+                f"System automatically assigned lead to {assignee.name} "
+                "on capture using the configured assignment strategy"
+            ),
+            created_at=now,
+        )
+    )
+    db.flush()
+    logger.info(
+        "Immediately assigned Lead #%s (%s) to Employee #%s (%s).",
+        lead.id,
+        lead.name,
+        assignee.id,
+        assignee.name,
+    )
+    return assignee
+
+
 def auto_assign_pending_leads(db: Session, override_timeout_minutes: Optional[int] = None) -> int:
     """
     Dynamically fetches config from DB, checks if enabled and within working hours,

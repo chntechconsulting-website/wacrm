@@ -135,6 +135,9 @@ class ReInquiryService:
         src = (enquiry_data.get("source") or "MANUAL").strip().upper()
         if src in ["META ADS", "META_ADS"]:
             src = "META"
+        elif src in ["WHATSAPP ADS", "WHATSAPP AD", "WHATSAPP_ADS", "CTWA"]:
+            # Keep Click-to-WhatsApp ad leads separate from Meta Instant Forms.
+            src = "WHATSAPP_ADS"
 
         now = get_ist_now()
         existing_lead = ReInquiryService.find_existing_lead(
