@@ -301,7 +301,7 @@ cd backend
 .\venv\Scripts\python.exe -m unittest tests.test_whatsapp_coexistence -v
 ```
 
-Expected: **21 tests pass**.
+Expected: **23 tests pass**.
 
 Run the shared regressions:
 
@@ -327,6 +327,7 @@ Covered by the coexistence suite:
 - onboarding locked by default;
 - missing configuration rejected;
 - a different coexistence app requires its own app secret;
+- a known configuration ID refuses to run under the wrong Meta app;
 - the shared webhook accepts a signature from either configured app secret;
 - public config and status never expose secrets;
 - session-log codes redacted;

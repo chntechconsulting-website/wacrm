@@ -402,6 +402,37 @@ class WhatsAppCoexistenceTests(unittest.TestCase):
                 WhatsAppCoexistenceConfig.get_app_secret(), "coexistence-secret"
             )
 
+    def test_known_config_requires_its_owning_app(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WHATSAPP_COEXISTENCE_CONFIG_ID": "1698501728618095",
+                "WHATSAPP_COEXISTENCE_APP_ID": "1797499357941817",
+                "WHATSAPP_COEXISTENCE_APP_SECRET": "legacy-secret",
+            },
+            clear=False,
+        ):
+            self.assertFalse(WhatsAppCoexistenceConfig.is_configured())
+            warnings = WhatsAppCoexistenceConfig.public_config()["warnings"]
+            self.assertTrue(
+                any(
+                    "belongs to Meta app 1158185796552320" in warning
+                    for warning in warnings
+                )
+            )
+
+    def test_known_config_is_configured_with_its_owning_app(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WHATSAPP_COEXISTENCE_CONFIG_ID": "1698501728618095",
+                "WHATSAPP_COEXISTENCE_APP_ID": "1158185796552320",
+                "WHATSAPP_COEXISTENCE_APP_SECRET": "review-app-secret",
+            },
+            clear=False,
+        ):
+            self.assertTrue(WhatsAppCoexistenceConfig.is_configured())
+
     def test_public_config_never_returns_secrets(self):
         config = WhatsAppCoexistenceConfig.public_config()
         serialized = json.dumps(config)

@@ -28,6 +28,13 @@ class WhatsAppCoexistenceConfig:
         "smb_message_echoes",
     )
 
+    # Public configuration IDs are owned by exactly one Meta app. Keep the
+    # known owner here so a stale META_APP_ID cannot make the status page claim
+    # onboarding is ready when Meta would reject the Embedded Signup exchange.
+    KNOWN_CONFIG_APP_IDS = {
+        "1698501728618095": "1158185796552320",
+    }
+
     @staticmethod
     def get_app_id() -> str:
         value = _env("WHATSAPP_COEXISTENCE_APP_ID", "META_APP_ID")
@@ -87,6 +94,13 @@ class WhatsAppCoexistenceConfig:
         )
 
     @staticmethod
+    def get_config_owner_app_id() -> str:
+        """Return the known owner app for a public configuration ID, if any."""
+        return WhatsAppCoexistenceConfig.KNOWN_CONFIG_APP_IDS.get(
+            WhatsAppCoexistenceConfig.get_config_id(), ""
+        )
+
+    @staticmethod
     def get_api_version() -> str:
         return _env("WHATSAPP_COEXISTENCE_API_VERSION", default="v26.0")
 
@@ -133,8 +147,12 @@ class WhatsAppCoexistenceConfig:
 
     @staticmethod
     def is_configured() -> bool:
+        app_id = WhatsAppCoexistenceConfig.get_app_id()
+        owner_app_id = WhatsAppCoexistenceConfig.get_config_owner_app_id()
+        if owner_app_id and app_id != owner_app_id:
+            return False
         return bool(
-            WhatsAppCoexistenceConfig.get_app_id()
+            app_id
             and WhatsAppCoexistenceConfig.get_app_secret()
             and WhatsAppCoexistenceConfig.get_config_id()
         )
@@ -159,8 +177,18 @@ class WhatsAppCoexistenceConfig:
                 "Onboarding is locked. Set WHATSAPP_COEXISTENCE_ENABLED=true only "
                 "when you are ready to connect a real WhatsApp Business App number."
             )
-        if not WhatsAppCoexistenceConfig.get_app_id():
+        app_id = WhatsAppCoexistenceConfig.get_app_id()
+        owner_app_id = WhatsAppCoexistenceConfig.get_config_owner_app_id()
+        if not app_id:
             warnings.append("META_APP_ID / WHATSAPP_COEXISTENCE_APP_ID is missing.")
+        elif owner_app_id and app_id != owner_app_id:
+            warnings.append(
+                f"Facebook Login configuration "
+                f"{WhatsAppCoexistenceConfig.get_config_id()} belongs to Meta "
+                f"app {owner_app_id}, but this server is using {app_id}. Set "
+                "WHATSAPP_COEXISTENCE_APP_ID and WHATSAPP_COEXISTENCE_APP_SECRET "
+                f"for app {owner_app_id}."
+            )
         if not WhatsAppCoexistenceConfig.get_app_secret():
             app_id = WhatsAppCoexistenceConfig.get_app_id()
             meta_app_id = _env("META_APP_ID")
