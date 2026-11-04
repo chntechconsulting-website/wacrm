@@ -347,6 +347,19 @@ different from the legacy `META_APP_ID`, set **both**
 The backend deliberately does not reuse `META_APP_SECRET` across different app
 IDs, because Meta rejects the exchange with an OAuth signature error.
 
+Confirmed configuration ownership:
+
+- Facebook Login for Business config **1698501728618095** belongs to
+  **Wacrmleadpage** (`1158185796552320`).
+- Production currently reports the legacy app **1797499357941817** ("wa crm lead
+  integration"). Before testing Embedded Signup, set
+  `WHATSAPP_COEXISTENCE_APP_ID=1158185796552320` and
+  `WHATSAPP_COEXISTENCE_APP_SECRET` to the Wacrmleadpage app secret in
+  production.
+- Leave the legacy `META_APP_ID`/`META_APP_SECRET` in place if existing Facebook
+  lead capture still uses that app. The shared webhook accepts signatures from
+  both configured secrets.
+
 ### 5.2 Reviewer account setup
 
 Create a dedicated CRM user before submitting. The `META_REVIEWER` role is
