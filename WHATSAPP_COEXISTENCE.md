@@ -113,14 +113,13 @@ Add these to `backend/.env` only when the code and approval are ready. Keep
 WHATSAPP_COEXISTENCE_ENABLED="false"
 
 # Facebook Login for Business configuration ID (WhatsApp Embedded Signup).
-# The current public WaCRM configuration ID is the code default; this variable
-# overrides it for another environment.
-WHATSAPP_COEXISTENCE_CONFIG_ID=""
+# Production default: Wacrmwap configuration (app 2041712130118952).
+WHATSAPP_COEXISTENCE_CONFIG_ID="2372647743564644"
 
-# Optional overrides. Fall back to META_APP_ID / META_APP_SECRET only when
-# the coexistence app is the same as the legacy Meta app.
-WHATSAPP_COEXISTENCE_APP_ID=""
-WHATSAPP_COEXISTENCE_APP_SECRET=""
+# Dedicated production WhatsApp app. Set both values together; the backend
+# refuses to reuse the legacy META_APP_SECRET for a different app.
+WHATSAPP_COEXISTENCE_APP_ID="2041712130118952"
+WHATSAPP_COEXISTENCE_APP_SECRET="<Wacrmwap App Secret from Settings -> Basic -> Show>"
 WHATSAPP_COEXISTENCE_API_VERSION="v26.0"
 
 # Defaults to <PUBLIC_BASE_URL>/api/webhook/whatsapp.
@@ -141,6 +140,19 @@ app. If coexistence uses a dedicated app that differs from the legacy
 pair a coexistence app ID with the legacy app's secret, because Meta rejects that
 combination with an OAuth signature error and the failure is otherwise hard to
 diagnose.
+
+Known configuration ownership:
+
+| Configuration ID | Owning Meta app |
+|---|---|
+| `2372647743564644` | `2041712130118952` (**Wacrmwap**, production WhatsApp) |
+| `1698501728618095` | `1158185796552320` (**Wacrmleadpage**, test/staging) |
+
+Production must use the Wacrmwap app and configuration together. The status
+endpoint reports `configured:false` with an ownership warning when they do not
+match, instead of allowing Embedded Signup to fail at Meta's OAuth step. The
+configuration ID is public; the app secret is not and must only be set in the
+backend environment.
 
 The shared webhook validates `X-Hub-Signature-256` against every configured app
 secret, so a delivery signed by the legacy lead-ads app and one signed by a
@@ -166,7 +178,11 @@ through Embedded Signup after a secret rotation.
    - `whatsapp_business_messaging`
    - `whatsapp_business_management`
    - `business_management`
-5. Copy the configuration ID into `WHATSAPP_COEXISTENCE_CONFIG_ID`.
+5. Copy the configuration ID into `WHATSAPP_COEXISTENCE_CONFIG_ID`. The
+   production app is **Wacrmwap** (`2041712130118952`); confirm the configuration
+   shown in **Facebook Login for Business → Configurations** matches
+   `2372647743564644` before saving. A configuration ID belongs to exactly one
+   app and cannot be moved between apps.
 
 The frontend launches `FB.login` with `config_id`, `response_type=code`,
 `override_default_response_type=true`, and:
@@ -301,7 +317,7 @@ cd backend
 .\venv\Scripts\python.exe -m unittest tests.test_whatsapp_coexistence -v
 ```
 
-Expected: **23 tests pass**.
+Expected: **25 tests pass**.
 
 Run the shared regressions:
 
@@ -313,7 +329,7 @@ Run the shared regressions:
   tests.test_followup_visibility -v
 ```
 
-Expected: **41 tests pass**.
+Expected: **42 tests pass**.
 
 Frontend:
 

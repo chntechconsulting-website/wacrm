@@ -368,18 +368,22 @@ different from the legacy `META_APP_ID`, set **both**
 The backend deliberately does not reuse `META_APP_SECRET` across different app
 IDs, because Meta rejects the exchange with an OAuth signature error.
 
-Confirmed configuration ownership:
+Configuration ownership:
 
-- Facebook Login for Business config **1698501728618095** belongs to
-  **Wacrmleadpage** (`1158185796552320`).
-- Production currently reports the legacy app **1797499357941817** ("wa crm lead
-  integration"). Before testing Embedded Signup, set
-  `WHATSAPP_COEXISTENCE_APP_ID=1158185796552320` and
-  `WHATSAPP_COEXISTENCE_APP_SECRET` to the Wacrmleadpage app secret in
-  production.
-- Leave the legacy `META_APP_ID`/`META_APP_SECRET` in place if existing Facebook
-  lead capture still uses that app. The shared webhook accepts signatures from
-  both configured secrets.
+- Production WhatsApp app: **Wacrmwap** (`2041712130118952`), using Facebook
+  Login for Business config **2372647743564644**. Confirm the configuration
+  appears under this app in **Facebook Login for Business → Configurations**;
+  the ID is public but cannot be moved between apps.
+- Test/staging app: **Wacrmleadpage** (`1158185796552320`) owns config
+  **1698501728618095**.
+- The legacy lead-form app **1797499357941817** ("wa crm lead integration")
+  remains the `META_APP_ID` for Facebook Instant Form capture. Set
+  `WHATSAPP_COEXISTENCE_APP_ID=2041712130118952` and
+  `WHATSAPP_COEXISTENCE_APP_SECRET` to the Wacrmwap app secret; do not reuse the
+  legacy secret.
+- The shared webhook accepts signatures from both configured secrets, so
+  Instant Form and coexistence deliveries continue to work during the
+  transition.
 
 ### 5.2 Reviewer account setup
 

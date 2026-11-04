@@ -32,7 +32,10 @@ class WhatsAppCoexistenceConfig:
     # known owner here so a stale META_APP_ID cannot make the status page claim
     # onboarding is ready when Meta would reject the Embedded Signup exchange.
     KNOWN_CONFIG_APP_IDS = {
+        # Staging/test app. Kept for diagnostics and backwards compatibility.
         "1698501728618095": "1158185796552320",
+        # Production WhatsApp app "Wacrmwap".
+        "2372647743564644": "2041712130118952",
     }
 
     @staticmethod
@@ -90,7 +93,7 @@ class WhatsAppCoexistenceConfig:
         """
         return _env(
             "WHATSAPP_COEXISTENCE_CONFIG_ID",
-            default="1698501728618095",
+            default="2372647743564644",
         )
 
     @staticmethod

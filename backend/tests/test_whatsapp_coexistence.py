@@ -366,7 +366,7 @@ class WhatsAppCoexistenceTests(unittest.TestCase):
         ):
             self.assertEqual(
                 WhatsAppCoexistenceConfig.get_config_id(),
-                "1698501728618095",
+                "2372647743564644",
             )
 
     def test_secret_is_not_reused_for_a_different_coexistence_app(self):
@@ -428,6 +428,37 @@ class WhatsAppCoexistenceTests(unittest.TestCase):
                 "WHATSAPP_COEXISTENCE_CONFIG_ID": "1698501728618095",
                 "WHATSAPP_COEXISTENCE_APP_ID": "1158185796552320",
                 "WHATSAPP_COEXISTENCE_APP_SECRET": "review-app-secret",
+            },
+            clear=False,
+        ):
+            self.assertTrue(WhatsAppCoexistenceConfig.is_configured())
+
+    def test_production_config_requires_the_wacrmwap_app(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WHATSAPP_COEXISTENCE_CONFIG_ID": "2372647743564644",
+                "WHATSAPP_COEXISTENCE_APP_ID": "1797499357941817",
+                "WHATSAPP_COEXISTENCE_APP_SECRET": "legacy-secret",
+            },
+            clear=False,
+        ):
+            self.assertFalse(WhatsAppCoexistenceConfig.is_configured())
+            warnings = WhatsAppCoexistenceConfig.public_config()["warnings"]
+            self.assertTrue(
+                any(
+                    "belongs to Meta app 2041712130118952" in warning
+                    for warning in warnings
+                )
+            )
+
+    def test_production_config_is_configured_with_the_wacrmwap_app(self):
+        with patch.dict(
+            os.environ,
+            {
+                "WHATSAPP_COEXISTENCE_CONFIG_ID": "2372647743564644",
+                "WHATSAPP_COEXISTENCE_APP_ID": "2041712130118952",
+                "WHATSAPP_COEXISTENCE_APP_SECRET": "wacrmwap-app-secret",
             },
             clear=False,
         ):
