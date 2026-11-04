@@ -12,6 +12,9 @@ const SidebarUser = ({ isCollapsed }) => {
   const userName = user?.employee_name || user?.username || 'Chandra Mohan';
   const userDept = user?.department || '';
   const userRole = user?.role || 'Administrator';
+  const roleLabel = (userRole || '').toUpperCase() === 'META_REVIEWER'
+    ? 'Meta App Reviewer'
+    : userRole;
   const userEmail = user?.email || `${(user?.username || 'user').toLowerCase()}@chncrm.com`;
   const isMetaReviewer = userRole.toUpperCase() === 'META_REVIEWER';
   const canAccessSettings =
@@ -51,7 +54,7 @@ const SidebarUser = ({ isCollapsed }) => {
           <div className="popover-header">
             <p className="popover-user-name" title={userName}>{userName}</p>
             <p className="popover-user-email" title={userEmail}>
-              {userDept ? `${userDept} • ` : ''}{userRole}
+              {userDept ? `${userDept} • ` : ''}{roleLabel}
             </p>
             <p style={{ margin: '2px 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>{userEmail}</p>
           </div>
@@ -99,7 +102,7 @@ const SidebarUser = ({ isCollapsed }) => {
       <div 
         className="user-profile-card"
         onClick={() => setIsDropdownOpen(prev => !prev)}
-        title={isCollapsed ? `${userName} (${userRole})` : undefined}
+        title={isCollapsed ? `${userName} (${roleLabel})` : undefined}
         role="button"
         tabIndex={0}
         aria-expanded={isDropdownOpen}
@@ -125,7 +128,7 @@ const SidebarUser = ({ isCollapsed }) => {
                 <span className="online-dot" title="Online" aria-label="Online status"></span>
               </div>
               <span className="user-role-title">
-                {userDept ? `${userDept} • ` : ''}{userRole}
+                {userDept ? `${userDept} • ` : ''}{roleLabel}
               </span>
             </div>
             <ChevronDown 
