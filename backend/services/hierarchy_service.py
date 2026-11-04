@@ -14,6 +14,7 @@ ROLE_SALES_MANAGER = "SALES_MANAGER"
 ROLE_SALES_EXECUTIVE = "SALES_EXECUTIVE"
 ROLE_SUPPORT_MANAGER = "SUPPORT_MANAGER"
 ROLE_SUPPORT_EXECUTIVE = "SUPPORT_EXECUTIVE"
+ROLE_META_REVIEWER = "META_REVIEWER"
 
 DEPT_ADMINISTRATION = "ADMINISTRATION"
 DEPT_ADMIN = "ADMIN"
@@ -30,8 +31,8 @@ SUPPORT_MANAGER_ROLES = {"SUPPORT_MANAGER"}
 SUPPORT_EXECUTIVE_ROLES = {"SUPPORT_EXECUTIVE", "SUPPORT"}
 
 DEPARTMENT_ROLES_MAP = {
-    DEPT_ADMINISTRATION: [ROLE_ADMIN],
-    "ADMIN": [ROLE_ADMIN],
+    DEPT_ADMINISTRATION: [ROLE_ADMIN, ROLE_META_REVIEWER],
+    "ADMIN": [ROLE_ADMIN, ROLE_META_REVIEWER],
     DEPT_SALES: [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE, "MANAGER", "SALES", "EMPLOYEE"],
     DEPT_SUPPORT: [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE, "SUPPORT"],
     DEPT_FINANCE: ["FINANCE"],
@@ -67,7 +68,7 @@ def normalize_department(dept: Optional[str]) -> Optional[str]:
 
 def get_department_for_role(role_name: Optional[str]) -> str:
     norm = normalize_role(role_name)
-    if norm == ROLE_ADMIN:
+    if norm in [ROLE_ADMIN, ROLE_META_REVIEWER]:
         return DEPT_ADMINISTRATION
     if norm in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
         return DEPT_SALES
@@ -214,10 +215,11 @@ def validate_reporting_manager(
             display_title = "Sales Manager" if norm_role == ROLE_SALES_MANAGER else "Support Manager"
             return False, f"{display_title} must report to an active Admin. User '{manager.username}' has role '{manager.role}'."
 
-    # Rule 4: Finance users report to an active Admin
-    elif norm_role == "FINANCE":
+    # Rule 4: Finance and Meta reviewer users report to an active Admin
+    elif norm_role in ["FINANCE", ROLE_META_REVIEWER]:
         if mgr_norm_role != ROLE_ADMIN:
-            return False, f"Finance employees must report to an active Admin. User '{manager.username}' has role '{manager.role}'."
+            display_title = "Finance employees" if norm_role == "FINANCE" else "Meta reviewer accounts"
+            return False, f"{display_title} must report to an active Admin. User '{manager.username}' has role '{manager.role}'."
 
     # Rule 7: Prevent circular reporting hierarchy
     if user_id:
@@ -308,7 +310,12 @@ def get_eligible_managers(
     elif norm_role == ROLE_SUPPORT_EXECUTIVE:
         target_roles = list(SUPPORT_MANAGER_ROLES)
         target_depts = [DEPT_SUPPORT, "SUPPORT"]
-    elif norm_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER, "FINANCE"]:
+    elif norm_role in [
+        ROLE_SALES_MANAGER,
+        ROLE_SUPPORT_MANAGER,
+        "FINANCE",
+        ROLE_META_REVIEWER,
+    ]:
         target_roles = list(ADMIN_ROLES)
         target_depts = [DEPT_ADMINISTRATION, "ADMIN"]
     else:

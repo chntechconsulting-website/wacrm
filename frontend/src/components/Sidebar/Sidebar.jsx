@@ -255,6 +255,9 @@ const Sidebar = ({
   onToggleCollapse
 }) => {
   const location = useLocation();
+  const { user: currentUser } = useAuth();
+  const userRole = (currentUser?.role || 'EMPLOYEE').toUpperCase();
+  const isMetaReviewer = userRole === 'META_REVIEWER';
 
   // Active theme tracking with localStorage persistence
   const [activeThemeId, setActiveThemeId] = useState(() => {
@@ -373,6 +376,8 @@ const Sidebar = ({
 
   // Fetch live stats from API
   useEffect(() => {
+    if (isMetaReviewer) return undefined;
+
     let isMounted = true;
     const fetchCounts = async () => {
       try {
@@ -403,7 +408,7 @@ const Sidebar = ({
       isMounted = false; 
       window.removeEventListener('leadStatsUpdated', handleStatsEvent);
     };
-  }, []);
+  }, [isMetaReviewer]);
 
   const handleItemClick = () => {
     if (isMobileOpen && onMobileClose) {
@@ -411,8 +416,6 @@ const Sidebar = ({
     }
   };
 
-  const { user: currentUser } = useAuth();
-  const userRole = (currentUser?.role || 'EMPLOYEE').toUpperCase();
   const isAdmin = userRole === 'ADMIN';
   const isSalesManager = userRole === 'SALES_MANAGER' || userRole === 'MANAGER';
   const isSalesExec = userRole === 'SALES_EXECUTIVE' || userRole === 'SALES' || userRole === 'EMPLOYEE';
@@ -488,7 +491,7 @@ const Sidebar = ({
         {/* Brand Header */}
         <div className="sidebar-header">
           <NavLink 
-            to="/dashboard" 
+            to={isMetaReviewer ? "/communication/whatsapp" : "/dashboard"}
             className="sidebar-brand"
             onClick={handleItemClick}
             title="WA! CRM Dashboard"
@@ -537,20 +540,22 @@ const Sidebar = ({
         {/* Scrollable Navigation Items */}
         <nav className="sidebar-nav">
           {/* Main: Dashboard */}
-          <NavLink 
-            to="/dashboard" 
-            onClick={handleItemClick}
-            className={({ isActive }) => `sidebar-dashboard-btn ${isActive ? 'active' : ''}`}
-            title="Dashboard"
-          >
-            <div className="icon-wrapper">
-              <Home size={20} />
-            </div>
-            {!isCollapsed && <span>Dashboard</span>}
-          </NavLink>
+          {!isMetaReviewer && (
+            <NavLink 
+              to="/dashboard" 
+              onClick={handleItemClick}
+              className={({ isActive }) => `sidebar-dashboard-btn ${isActive ? 'active' : ''}`}
+              title="Dashboard"
+            >
+              <div className="icon-wrapper">
+                <Home size={20} />
+              </div>
+              {!isCollapsed && <span>Dashboard</span>}
+            </NavLink>
+          )}
 
           {/* Section: LEADS */}
-          {((hasModule('leads') || isSalesRole) && !isSupportRole) && (
+          {(!isMetaReviewer && (hasModule('leads') || isSalesRole) && !isSupportRole) && (
             <SidebarSection
               title="LEADS"
               isOpen={openSections.leads}
@@ -803,7 +808,7 @@ const Sidebar = ({
           )}
 
           {/* Section: SETTINGS */}
-          {(hasModule('settings') || hasModule('users') || hasModule('roles') || hasModule('integrations') || isAdmin || isManager) && (
+          {(hasModule('settings') || hasModule('users') || hasModule('roles') || hasModule('integrations') || hasModule('whatsapp_connection') || isAdmin || isManager) && (
             <SidebarSection
               title="SETTINGS"
               isOpen={openSections.settings}
@@ -830,7 +835,7 @@ const Sidebar = ({
                   onClick={handleItemClick}
                 />
               )}
-              {isAdmin && (
+              {(isAdmin || hasModule('whatsapp_connection')) && (
                 <SidebarItem
                   to="/settings/whatsapp-connection"
                   exactMatch={true}
@@ -860,14 +865,16 @@ const Sidebar = ({
                   onClick={handleItemClick}
                 />
               )}
-              <SidebarItem
-                to="/notifications"
-                exactMatch={true}
-                icon={Bell}
-                label="Notifications"
-                isCollapsed={isCollapsed}
-                onClick={handleItemClick}
-              />
+              {!isMetaReviewer && (
+                <SidebarItem
+                  to="/notifications"
+                  exactMatch={true}
+                  icon={Bell}
+                  label="Notifications"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
             </SidebarSection>
           )}
         </nav>

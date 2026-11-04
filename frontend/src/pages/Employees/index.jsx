@@ -40,6 +40,7 @@ const STANDARD_ROLES = [
   { value: 'SUPPORT_EXECUTIVE', label: 'Support Executive', department: 'SUPPORT', managerReq: 'Required: Active Support Manager' },
   { value: 'SUPPORT_MANAGER', label: 'Support Manager', department: 'SUPPORT', managerReq: 'Required: Active Administrator' },
   { value: 'FINANCE', label: 'Finance', department: 'FINANCE', managerReq: 'Required: Active Administrator' },
+  { value: 'META_REVIEWER', label: 'Meta App Reviewer (limited)', department: 'ADMINISTRATION', managerReq: 'Required: Active Administrator' },
   { value: 'ADMIN', label: 'Admin', department: 'ADMINISTRATION', managerReq: 'None (Top of hierarchy)' }
 ];
 
@@ -189,7 +190,7 @@ const Employees = () => {
 
   const handleRoleChangeInForm = (newRole, currentUserId = null) => {
     let dept = 'SALES';
-    if (newRole === 'ADMIN') dept = 'ADMINISTRATION';
+    if (newRole === 'ADMIN' || newRole === 'META_REVIEWER') dept = 'ADMINISTRATION';
     else if (newRole === 'SALES_MANAGER' || newRole === 'SALES_EXECUTIVE' || newRole === 'SALES' || newRole === 'MANAGER') dept = 'SALES';
     else if (newRole === 'SUPPORT_MANAGER' || newRole === 'SUPPORT_EXECUTIVE' || newRole === 'SUPPORT') dept = 'SUPPORT';
     else if (newRole === 'FINANCE') dept = 'FINANCE';
@@ -467,6 +468,9 @@ const Employees = () => {
     if (r === 'FINANCE') {
       return { bg: 'rgba(217, 119, 6, 0.12)', color: '#d97706', border: '1px solid rgba(217, 119, 6, 0.25)', label: 'Finance' };
     }
+    if (r === 'META_REVIEWER') {
+      return { bg: 'rgba(124, 58, 237, 0.12)', color: '#7c3aed', border: '1px solid rgba(124, 58, 237, 0.25)', label: 'Meta App Reviewer' };
+    }
     return { bg: 'rgba(100, 116, 139, 0.12)', color: '#64748b', border: '1px solid rgba(100, 116, 139, 0.25)', label: roleStr };
   };
 
@@ -477,6 +481,7 @@ const Employees = () => {
     if (role === 'SUPPORT_MANAGER') return 'Required: Active Administrator';
     if (role === 'SUPPORT_EXECUTIVE') return 'Required: Active Support Manager';
     if (role === 'FINANCE') return 'Required: Active Administrator';
+    if (role === 'META_REVIEWER') return 'Required: Active Administrator';
     return 'Required: Active Manager';
   };
 

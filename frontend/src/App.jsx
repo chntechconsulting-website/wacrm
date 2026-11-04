@@ -97,7 +97,9 @@ function App() {
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
               {/* Dashboard */}
-              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route element={<ProtectedRoute requiredModule="dashboard" />}>
+                <Route path="/dashboard" element={<DashboardPage />} />
+              </Route>
 
               {/* LEADS Section Routes */}
               <Route path="/leads" element={<LeadsPage />} />
@@ -119,7 +121,9 @@ function App() {
               <Route path="/communication/calls" element={<CallLogsPage />} />
               <Route path="/communication/followups" element={<FollowupsPage />} />
               <Route path="/communication/activities" element={<ActivitiesPage />} />
-              <Route path="/communication/whatsapp" element={<WhatsAppPage />} />
+              <Route element={<ProtectedRoute requiredModule="whatsapp" />}>
+                <Route path="/communication/whatsapp" element={<WhatsAppPage />} />
+              </Route>
 
               {/* TEAM INSIGHTS & EMPLOYEE MONITORING Section Routes */}
               <Route path="/team-insights" element={<TeamInsightsPage />} />
@@ -149,7 +153,7 @@ function App() {
               <Route path="/settings/integrations" element={<IntegrationsPage />} />
               <Route path="/settings/integrations/meta" element={<MetaIntegrationPage />} />
               <Route path="/integrations/meta" element={<MetaIntegrationPage />} />
-              <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+              <Route element={<ProtectedRoute requiredModule="whatsapp_connection" />}>
                 <Route path="/settings/whatsapp-connection" element={<WhatsAppConnectionPage />} />
               </Route>
               <Route path="/settings/delete-requests" element={<DeleteRequestsPage />} />

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.user import User
 from services.audit import log_audit
-from services.auth import require_admin
+from services.auth import require_permission
 
 from .config import WhatsAppCoexistenceConfig
 from .schemas import (
@@ -36,7 +36,7 @@ def _http_error(exc: WhatsAppCoexistenceError) -> HTTPException:
 @router.get("/status", response_model=StatusOut)
 def get_coexistence_status(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "view")),
 ):
     """Safe connection status. Tokens are never included."""
     return WhatsAppCoexistenceService.get_status(db)
@@ -46,7 +46,7 @@ def get_coexistence_status(
 def log_embedded_signup_session(
     body: SessionLogIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "edit")),
 ):
     """Capture Embedded Signup session logging for audit.
 
@@ -65,7 +65,7 @@ def log_embedded_signup_session(
 def exchange_embedded_signup_code(
     body: ExchangeCodeIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "edit")),
 ):
     """Exchange the 30-second Embedded Signup code and start onboarding.
 
@@ -111,7 +111,7 @@ def exchange_embedded_signup_code(
 @router.post("/refresh", response_model=ConnectionOut)
 def refresh_coexistence_status(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "edit")),
 ):
     """Re-read the phone number and app subscription from Meta."""
     try:
@@ -134,7 +134,7 @@ def refresh_coexistence_status(
 def request_coexistence_sync(
     body: SyncRequestIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "edit")),
 ):
     """Retry the one-time contacts or history sync before the 24h deadline."""
     try:
@@ -156,7 +156,7 @@ def request_coexistence_sync(
 @router.get("/templates", response_model=List[TemplateOut])
 def list_message_templates(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "view")),
 ):
     try:
         return WhatsAppCoexistenceService.list_templates(db)
@@ -168,7 +168,7 @@ def list_message_templates(
 def create_message_template(
     body: TemplateCreateIn,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "create")),
 ):
     try:
         result = WhatsAppCoexistenceService.create_template(
@@ -197,6 +197,6 @@ def create_message_template(
 def list_coexistence_events(
     limit: int = Query(25, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission("whatsapp_connection", "view")),
 ):
     return WhatsAppCoexistenceService.list_events(db, limit=limit)

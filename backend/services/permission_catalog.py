@@ -65,6 +65,12 @@ SYSTEM_MODULES = [
         "description": "Direct chat, template broadcasting, and incoming messages"
     },
     {
+        "key": "whatsapp_connection",
+        "label": "WhatsApp Connection",
+        "category": "Communication",
+        "description": "Read-only WhatsApp Business App coexistence status and diagnostics"
+    },
+    {
         "key": "followups",
         "label": "Follow-ups",
         "category": "Communication",

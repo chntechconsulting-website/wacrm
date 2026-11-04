@@ -1,9 +1,11 @@
 import os
 import logging
 import datetime
+import jwt
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, APIRouter, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # Setup logging
@@ -58,6 +60,51 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+@app.middleware("http")
+async def restrict_meta_reviewer(request: Request, call_next):
+    """Keep the Meta App Review account inside its WhatsApp-only surface.
+
+    This runs before the route handlers, so hiding navigation in the frontend
+    is not the security boundary. A reviewer token can only call the WhatsApp
+    inbox and read-only connection diagnostics, even if the role's permission
+    matrix is edited by mistake later.
+    """
+    from services.reviewer_access import (
+        is_meta_reviewer_role,
+        reviewer_request_allowed,
+    )
+
+    path = request.url.path
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+        role = None
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=[settings.ALGORITHM],
+            )
+            role = payload.get("role")
+        except jwt.PyJWTError:
+            role = None
+
+        if is_meta_reviewer_role(role) and not reviewer_request_allowed(
+            request.method, path
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "Meta reviewer access is limited to the WhatsApp "
+                        "inbox and WhatsApp Connection status."
+                    )
+                },
+            )
+
+    return await call_next(request)
+
 
 origins = [
     "http://www.wapluscrm.in",

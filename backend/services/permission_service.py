@@ -161,6 +161,36 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
             }
         return res
 
+    # 7. META_REVIEWER - least-privilege account for Meta App Review.
+    # Only the WhatsApp inbox (own/test conversations) and read-only connection
+    # status are granted. The backend reviewer allowlist in
+    # services/reviewer_access.py is the hard boundary even if an admin edits
+    # these permissions later.
+    if norm == "META_REVIEWER":
+        reviewer_modules = {"whatsapp", "whatsapp_connection"}
+        res = {}
+        for mod in SYSTEM_MODULES:
+            k = mod["key"]
+            has_acc = k in reviewer_modules
+            res[k] = {
+                "has_access": has_acc,
+                "can_view": has_acc,
+                "can_create": k in ("whatsapp", "whatsapp_connection"),
+                "can_edit": False,
+                "can_delete": False,
+                "can_export": False,
+                "can_approve": False,
+                "can_assign": False,
+                "can_call": False,
+                "can_whatsapp": k == "whatsapp",
+                "view_scope": (
+                    "own" if k == "whatsapp"
+                    else "company" if k == "whatsapp_connection"
+                    else "none"
+                ),
+            }
+        return res
+
     # Fallback for unrecognized role
     return {
         mod["key"]: {
@@ -297,7 +327,8 @@ def get_user_view_scope(user: User, module: str, db: Session) -> str:
 def seed_default_roles_if_needed(db: Session):
     """
     Initializes and synchronizes default system roles and permission sets in the database:
-    ADMIN, SALES_MANAGER, SALES_EXECUTIVE, MANAGER, SALES, EMPLOYEE, FINANCE, SUPPORT, SUPPORT_MANAGER, SUPPORT_EXECUTIVE.
+    ADMIN, SALES_MANAGER, SALES_EXECUTIVE, MANAGER, SALES, EMPLOYEE, FINANCE, SUPPORT,
+    SUPPORT_MANAGER, SUPPORT_EXECUTIVE, META_REVIEWER.
     Also repairs/seeds any missing module permissions for existing roles so that every role
     has every catalog module row populated with valid permission flags.
     """
@@ -360,6 +391,12 @@ def seed_default_roles_if_needed(db: Session):
             "name": "SUPPORT_EXECUTIVE",
             "display_name": "Support Executive",
             "description": "Handles assigned customer support tickets and onboarding tasks.",
+            "is_system": False
+        },
+        {
+            "name": "META_REVIEWER",
+            "display_name": "Meta App Reviewer (limited)",
+            "description": "Least-privilege review account. Only the WhatsApp inbox and read-only WhatsApp Connection status are reachable.",
             "is_system": False
         }
     ]

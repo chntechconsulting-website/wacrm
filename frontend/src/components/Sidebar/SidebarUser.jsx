@@ -13,6 +13,7 @@ const SidebarUser = ({ isCollapsed }) => {
   const userDept = user?.department || '';
   const userRole = user?.role || 'Administrator';
   const userEmail = user?.email || `${(user?.username || 'user').toLowerCase()}@chncrm.com`;
+  const isMetaReviewer = userRole.toUpperCase() === 'META_REVIEWER';
   const canAccessSettings =
     userRole.toUpperCase() === 'ADMIN' ||
     user?.permissions?.settings?.has_access === true;
@@ -56,15 +57,17 @@ const SidebarUser = ({ isCollapsed }) => {
           </div>
           <div className="popover-divider" />
           
-          <NavLink 
-            to="/profile" 
-            className="popover-menu-item"
-            onClick={() => setIsDropdownOpen(false)}
-            role="menuitem"
-          >
-            <User size={15} />
-            <span>My Profile</span>
-          </NavLink>
+          {!isMetaReviewer && (
+            <NavLink 
+              to="/profile" 
+              className="popover-menu-item"
+              onClick={() => setIsDropdownOpen(false)}
+              role="menuitem"
+            >
+              <User size={15} />
+              <span>My Profile</span>
+            </NavLink>
+          )}
 
           {canAccessSettings && (
             <NavLink 

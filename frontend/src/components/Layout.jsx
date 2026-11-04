@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Outlet, Link, useNavigate } from 'react-router-dom';
+import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import Sidebar from './Sidebar/Sidebar';
 import CRMDialer from './Dialer/CRMDialer';
 import DooctiInAppDialer from './Dialer/DooctiInAppDialer';
@@ -16,9 +17,14 @@ const Layout = () => {
   const lastCallIdRef = useRef(null);
   const isInitialMount = useRef(true);
   const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuth();
+  const isMetaReviewer = user?.role === 'META_REVIEWER';
 
   // Real-time Incoming Call Alert & Polling Management
   useEffect(() => {
+    if (isMetaReviewer) return undefined;
+
     let isMounted = true;
 
     // 1. Listen for immediate zero-lag real-time incoming call events from Doocti WebPhone
@@ -172,7 +178,19 @@ const Layout = () => {
       window.removeEventListener('crm-call-completed', handleCallEndedEvent);
       window.removeEventListener('crm-call-completed', handleCallCompletedDisposition);
     };
-  }, [incomingAlert]);
+  }, [incomingAlert, isMetaReviewer]);
+
+  // The reviewer account is restricted to two screens. This is a UX guard;
+  // the backend reviewer allowlist remains the security boundary.
+  if (isMetaReviewer) {
+    const allowedReviewerPaths = [
+      '/communication/whatsapp',
+      '/settings/whatsapp-connection',
+    ];
+    if (!allowedReviewerPaths.includes(location.pathname)) {
+      return <Navigate to="/communication/whatsapp" replace />;
+    }
+  }
 
   // Answer Incoming Call action from global alert.
   // The DooCTI iframe exposes no answer command to the CRM, so this only surfaces the
@@ -416,28 +434,32 @@ const Layout = () => {
         </main>
       </div>
 
-      {/* Global CRM Phone Dialer Widget */}
-      <CRMDialer />
+      {!isMetaReviewer && (
+        <>
+          {/* Global CRM Phone Dialer Widget */}
+          <CRMDialer />
 
-      {/* Doocti In-App WebRTC Softphone Widget */}
-      <DooctiInAppDialer />
+          {/* Doocti In-App WebRTC Softphone Widget */}
+          <DooctiInAppDialer />
 
-      {/* Global Automatic Follow-up Reminder Floating Notification Card */}
-      <FollowupReminderCard />
+          {/* Global Automatic Follow-up Reminder Floating Notification Card */}
+          <FollowupReminderCard />
 
-      {/* Mandatory Product Classification & Call Completion Disposition Modal */}
-      <CallCompletionDispositionModal
-        isOpen={showDispositionModal}
-        callData={dispositionCallData}
-        onClose={() => {
-          setShowDispositionModal(false);
-          setDispositionCallData(null);
-        }}
-        onSaved={() => {
-          setShowDispositionModal(false);
-          setDispositionCallData(null);
-        }}
-      />
+          {/* Mandatory Product Classification & Call Completion Disposition Modal */}
+          <CallCompletionDispositionModal
+            isOpen={showDispositionModal}
+            callData={dispositionCallData}
+            onClose={() => {
+              setShowDispositionModal(false);
+              setDispositionCallData(null);
+            }}
+            onSaved={() => {
+              setShowDispositionModal(false);
+              setDispositionCallData(null);
+            }}
+          />
+        </>
+      )}
     </div>
   );
 };

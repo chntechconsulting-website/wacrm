@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import API from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -76,6 +77,8 @@ const isFacebookOrigin = (origin) => {
 };
 
 const WhatsAppConnectionPage = () => {
+  const { user } = useAuth();
+  const isReviewer = user?.role === 'META_REVIEWER';
   const [status, setStatus] = useState(null);
   const [events, setEvents] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -403,7 +406,7 @@ const WhatsAppConnectionPage = () => {
               type="button"
               className="wa-conn-btn secondary"
               onClick={handleRefresh}
-              disabled={action === 'refresh'}
+              disabled={action === 'refresh' || isReviewer}
             >
               {action === 'refresh' ? <Loader2 size={15} className="spin" /> : <RotateCcw size={15} />}
               Re-read from Meta
@@ -411,6 +414,19 @@ const WhatsAppConnectionPage = () => {
           )}
         </div>
       </div>
+
+      {isReviewer && (
+        <div className="wa-conn-banner info">
+          <ShieldCheck size={20} />
+          <div>
+            <strong>Meta review access</strong>
+            <p>
+              This account can view the WhatsApp connection status and create
+              review templates. Onboarding, re-read, and sync actions are disabled.
+            </p>
+          </div>
+        </div>
+      )}
 
       {warnings.length > 0 && (
         <div className={`wa-conn-banner ${config?.ready ? 'info' : 'locked'}`}>
@@ -467,7 +483,7 @@ const WhatsAppConnectionPage = () => {
               type="button"
               className="wa-conn-btn primary"
               onClick={launchSignup}
-              disabled={!config?.ready || !sdkReady || exchanging}
+              disabled={!config?.ready || !sdkReady || exchanging || isReviewer}
             >
               {exchanging ? (
                 <Loader2 size={17} className="spin" />
@@ -653,7 +669,7 @@ const WhatsAppConnectionPage = () => {
                   <button
                     type="button"
                     className="wa-conn-btn secondary"
-                    disabled={contactSyncUsed || action === 'sync-contacts'}
+                    disabled={contactSyncUsed || action === 'sync-contacts' || isReviewer}
                     onClick={() => handleSync('contacts')}
                     title={
                       contactSyncUsed
@@ -671,7 +687,7 @@ const WhatsAppConnectionPage = () => {
                   <button
                     type="button"
                     className="wa-conn-btn secondary"
-                    disabled={historySyncUsed || action === 'sync-history'}
+                    disabled={historySyncUsed || action === 'sync-history' || isReviewer}
                     onClick={() => handleSync('history')}
                     title={
                       historySyncUsed

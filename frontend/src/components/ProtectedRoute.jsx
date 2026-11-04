@@ -130,6 +130,12 @@ const ProtectedRoute = ({ allowedRoles = [], requiredModule = null, requiredActi
     return <Outlet />;
   }
 
+  // The Meta App Review account has no dashboard. Send it straight to the
+  // only data surface it is allowed to use.
+  if (user.role === 'META_REVIEWER' && requiredModule === 'dashboard') {
+    return <Navigate to="/communication/whatsapp" replace />;
+  }
+
   // Dynamic Module Permission Check with resilient role fallback
   if (requiredModule) {
     const normRole = (user.role || '').toUpperCase();

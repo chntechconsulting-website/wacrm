@@ -203,7 +203,9 @@ whether the subscription is confirmed.
    .\venv\Scripts\python.exe migrations\apply_whatsapp_coexistence_migration.py
    ```
 
-3. Sign in to the CRM as an administrator.
+3. Sign in with a user whose role has the `whatsapp_connection` **edit**
+   permission (ADMIN by default). The `META_REVIEWER` role is view +
+   template-create only and cannot launch onboarding, refresh, or sync.
 4. Open **Settings → WhatsApp Connection**.
 5. Confirm the page shows all configuration checks as ready.
 6. Set `WHATSAPP_COEXISTENCE_ENABLED=true` in `backend/.env` and restart the

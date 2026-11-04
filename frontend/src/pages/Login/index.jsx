@@ -95,9 +95,13 @@ const Login = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // If user is already authenticated, redirect immediately to dashboard without showing login form
+    // If user is already authenticated, redirect immediately without showing
+    // the login form. Reviewers never land on the real CRM dashboard.
     if (user && localStorage.getItem('crm_token')) {
-      navigate('/dashboard', { replace: true });
+      const target = user.role === 'META_REVIEWER'
+        ? '/communication/whatsapp'
+        : '/dashboard';
+      navigate(target, { replace: true });
     }
   }, [user, navigate]);
 
@@ -120,7 +124,7 @@ const Login = () => {
 
     try {
       setIsSubmitting(true);
-      await login(username.trim(), password);
+      const loggedInUser = await login(username.trim(), password);
 
       // Handle Remember Me
       if (rememberMe) {
@@ -129,7 +133,11 @@ const Login = () => {
         localStorage.removeItem('crm_remember_user');
       }
 
-      navigate('/dashboard');
+      navigate(
+        loggedInUser?.role === 'META_REVIEWER'
+          ? '/communication/whatsapp'
+          : '/dashboard'
+      );
     } catch (err) {
       console.error('Login error:', err);
       if (!err.response) {

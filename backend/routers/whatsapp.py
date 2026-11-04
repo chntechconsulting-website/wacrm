@@ -24,6 +24,74 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp Module"])
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
 
+
+def enforce_reviewer_send_scope(
+    current_user: User,
+    current_emp: Optional[Employee],
+    req: SendMessageRequest,
+    db: Session,
+) -> None:
+    """Prevent the Meta reviewer from messaging anyone outside the test chat.
+
+    The reviewer may provide a lead ID or a phone number. Either way the target
+    must resolve to a conversation (or lead) assigned to the reviewer's linked
+    employee. The request phone is then replaced with the stored conversation
+    phone so a forged payload cannot redirect the message.
+    """
+    if current_user.role != "META_REVIEWER":
+        return
+
+    if req.lead_id:
+        lead = db.query(Lead).filter(Lead.id == req.lead_id).first()
+        if not lead or not current_emp or lead.assigned_to != current_emp.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reviewer access is limited to the assigned test conversation.",
+            )
+        conv = db.query(Conversation).filter(Conversation.lead_id == lead.id).first()
+        if conv:
+            if conv.assigned_to not in (None, current_emp.id) and (
+                not conv.lead or conv.lead.assigned_to != current_emp.id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Reviewer access is limited to the assigned test conversation.",
+                )
+            req.phone = conv.phone
+        else:
+            # A new test lead may not have a conversation row yet. Force the
+            # stored lead phone so a forged request cannot redirect the send.
+            if not lead.phone:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Reviewer access is limited to the assigned test conversation.",
+                )
+            req.phone = lead.phone
+        return
+
+    digits = "".join(filter(str.isdigit, req.phone or ""))
+    if not digits or not current_emp:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Reviewer access is limited to the assigned test conversation.",
+        )
+
+    suffix = digits[-10:] if len(digits) >= 10 else digits
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.phone.like(f"%{suffix}"))
+        .first()
+    )
+    if not conv or (
+        conv.assigned_to != current_emp.id
+        and (not conv.lead or conv.lead.assigned_to != current_emp.id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Reviewer access is limited to the assigned test conversation.",
+        )
+    req.phone = conv.phone
+
 def build_message_out(msg: WhatsAppMessage) -> WhatsAppMessageOut:
     sender_name = msg.sender_employee.name if msg.sender_employee else None
     return WhatsAppMessageOut(
@@ -97,6 +165,8 @@ def send_whatsapp_message(
                     detail="Access denied. You can only send WhatsApp messages to leads assigned to you."
                 )
 
+    enforce_reviewer_send_scope(current_user, current_emp, req, db)
+
     res = WhatsAppService.send_outbound_message(db=db, req=req, sender_employee=current_emp)
     if not res.get("success") and "not configured" in str(res.get("error", "")).lower():
         raise HTTPException(
@@ -130,10 +200,13 @@ def list_whatsapp_conversations(
     current_emp = get_employee_for_user(current_user, db)
     emp_id = current_emp.id if current_emp else None
 
-    # If role is EMPLOYEE, force tab to "my"
+    # Employees and reviewers are scoped to their own conversations. The
+    # reviewer role must never see production customer chats.
     effective_tab = tab
     if current_user.role == "EMPLOYEE":
         effective_tab = "my"
+    elif current_user.role == "META_REVIEWER":
+        effective_tab = "all"
 
     convs = WhatsAppService.list_conversations(
         db=db, 
@@ -142,9 +215,17 @@ def list_whatsapp_conversations(
         current_emp_id=emp_id
     )
 
-    # Further filter out any conversations not assigned to employee
-    if current_user.role == "EMPLOYEE" and emp_id:
-        convs = [c for c in convs if c.assigned_to == emp_id or (c.lead and c.lead.assigned_to == emp_id)]
+    # Further filter out any conversations not assigned to the employee or
+    # reviewer. A reviewer without a linked employee sees nothing.
+    if current_user.role in ("EMPLOYEE", "META_REVIEWER"):
+        if not emp_id:
+            convs = []
+        else:
+            convs = [
+                c for c in convs
+                if c.assigned_to == emp_id
+                or (c.lead and c.lead.assigned_to == emp_id)
+            ]
 
     return [build_conversation_out(c) for c in convs]
 
@@ -163,7 +244,7 @@ def get_conversation_by_lead_id(
         raise HTTPException(status_code=404, detail="Lead not found")
 
     current_emp = get_employee_for_user(current_user, db)
-    if current_user.role == "EMPLOYEE":
+    if current_user.role in ("EMPLOYEE", "META_REVIEWER"):
         if not current_emp or lead.assigned_to != current_emp.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -193,7 +274,7 @@ def get_whatsapp_conversation_detail(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     current_emp = get_employee_for_user(current_user, db)
-    if current_user.role == "EMPLOYEE":
+    if current_user.role in ("EMPLOYEE", "META_REVIEWER"):
         if not current_emp or (conv.assigned_to != current_emp.id and (conv.lead and conv.lead.assigned_to != current_emp.id)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -218,7 +299,7 @@ def mark_whatsapp_conversation_read(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     current_emp = get_employee_for_user(current_user, db)
-    if current_user.role == "EMPLOYEE":
+    if current_user.role in ("EMPLOYEE", "META_REVIEWER"):
         if not current_emp or (conv.assigned_to != current_emp.id and (conv.lead and conv.lead.assigned_to != current_emp.id)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -241,7 +322,7 @@ def archive_whatsapp_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     current_emp = get_employee_for_user(current_user, db)
-    if current_user.role == "EMPLOYEE":
+    if current_user.role in ("EMPLOYEE", "META_REVIEWER"):
         if not current_emp or (conv.assigned_to != current_emp.id and (conv.lead and conv.lead.assigned_to != current_emp.id)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

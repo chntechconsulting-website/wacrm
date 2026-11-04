@@ -193,10 +193,13 @@ Login URL: https://www.wapluscrm.in/login
 Reviewer account
   Username/email: <reviewer-email>
   Password: <reviewer-password>
-  Role: Administrator (full access to the WhatsApp inbox)
+  Role: META_REVIEWER (least privilege)
 
-The account is a dedicated reviewer account on our production CRM. It only sees
-test data created for this review. No real customer data is exposed.
+The account is a dedicated reviewer account on our production CRM. It can only
+open Communication > WhatsApp and Settings > WhatsApp Connection. It cannot
+open leads, customers, reports, billing, users, roles, the admin panel, or any
+other settings. It only sees the test WhatsApp conversation assigned to it.
+No real customer data is exposed.
 
 Test setup
   - Connected WhatsApp Business Account: <WABA display name> (<WABA ID>)
@@ -221,6 +224,8 @@ Test whatsapp_business_management
   1. Sign in with the same reviewer account.
   2. Open Settings > WhatsApp Connection.
      Expected: the connected WABA, phone number ID, and webhook status are shown.
+     The reviewer account is intentionally blocked from onboarding, re-reading,
+     and sync actions.
   3. Create a message template named "review_test_<timestamp>" with category
      UTILITY and one body parameter.
      Expected: the template is created through the WhatsApp Business Management
@@ -235,9 +240,30 @@ Notes
 ```
 
 The template-management screen exists at **Settings → WhatsApp Connection**
-(admin-only). Use the coexistence Embedded Signup flow for the management
+and is restricted to the `whatsapp_connection` permission. The reviewer role
+has view + template-create only; onboarding, re-read, and sync require the
+`edit` action, which the reviewer does not have. Use the coexistence Embedded
+Signup flow with an internal test operator account for the management
 recording. After onboarding, the test business must add a payment method in
 WhatsApp Manager before Cloud API messaging is fully enabled.
+
+### 3.1 Reviewer account setup
+
+1. Deploy the code that adds the `META_REVIEWER` role.
+2. Confirm the role **Meta App Reviewer (limited)** exists under Users & Roles.
+3. Create a login in the **Administration** department with that role.
+4. Link the login to an Employee record; the WhatsApp inbox scopes the reviewer
+   to conversations and leads assigned to that Employee.
+5. Assign the seeded test lead and test WhatsApp conversation to the reviewer's
+   Employee record.
+6. Sign in as the reviewer and confirm the sidebar shows only **WhatsApp** and
+   **WhatsApp Connection**. Direct URLs to leads, customers, reports, billing,
+   users, admin, or settings must be denied.
+
+The backend reviewer allowlist is enforced independently of the permission
+matrix in `backend/services/reviewer_access.py`. Even if the role is edited by
+mistake, the reviewer can only call the login, WhatsApp inbox, and connection
+status/template endpoints.
 
 ---
 
@@ -278,7 +304,8 @@ Option A (fast, no new UI):
 
 Option B (safer for Tech Provider, requires the coexistence module):
 
-1. Sign in to the CRM as an administrator.
+1. Sign in with the internal test operator account used for onboarding
+   (not the read-only reviewer account).
 2. Open **Settings → WhatsApp Connection**.
 3. Launch Embedded Signup and complete it with a test business account.
 4. Show the returned WABA ID and phone number ID stored on the page.
@@ -294,7 +321,7 @@ the onboarding flow, so Option B is the stronger submission.
 
 ### 5.1 `whatsapp_business_management` review path
 
-The CRM now has an admin WABA connection page at
+The CRM now has a permission-restricted WABA connection page at
 `/settings/whatsapp-connection`. It provides:
 
 - Facebook Login for Business Embedded Signup (v4/v5);

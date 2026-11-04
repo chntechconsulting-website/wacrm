@@ -19,6 +19,7 @@ export const FollowupReminderProvider = ({ children }) => {
   const [loading, setLoading] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const { user } = useAuth();
+  const isMetaReviewer = user?.role === 'META_REVIEWER';
   const navigate = useNavigate();
   const isFetchingRef = useRef(false);
   const alarmIntervalRef = useRef(null);
@@ -26,7 +27,7 @@ export const FollowupReminderProvider = ({ children }) => {
   const fetchActiveReminders = useCallback(async () => {
     // Only fetch if authenticated and user session exists
     const token = localStorage.getItem('crm_token');
-    if (!token || !user) {
+    if (!token || !user || isMetaReviewer) {
       setActiveReminders([]);
       return;
     }
@@ -46,7 +47,7 @@ export const FollowupReminderProvider = ({ children }) => {
       isFetchingRef.current = false;
       setLoading(false);
     }
-  }, [user]);
+  }, [user, isMetaReviewer]);
 
   // CONTINUOUS ALARM LOOP:
   // Ring loudly and repeat every 5.5 seconds UNTIL status is updated, dismissed, or muted
