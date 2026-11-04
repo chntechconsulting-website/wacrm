@@ -28,6 +28,7 @@ from sqlalchemy.pool import StaticPool
 import models  # noqa: F401 - registers every model on Base.metadata
 from database import Base, get_db
 from integrations.whatsapp_ads.router import router as crm_router
+from integrations.whatsapp_ads.service import verify_signature
 from integrations.whatsapp_ads.webhook import router as webhook_router
 from models.activity import LeadActivity
 from models.employee import Employee
@@ -273,6 +274,33 @@ class WhatsAppAdLeadTests(unittest.TestCase):
             self.assertEqual(db.query(WhatsAppAdAttribution).count(), 0)
         finally:
             db.close()
+
+    def test_signature_accepts_a_second_coexistence_app_secret(self):
+        body = b'{"object":"whatsapp_business_account","entry":[]}'
+        with patch.dict(
+            os.environ,
+            {
+                "WHATSAPP_AD_APP_SECRET": "legacy-secret",
+                "META_APP_SECRET": "legacy-secret",
+                "META_APP_ID": "legacy-app",
+                "WHATSAPP_COEXISTENCE_APP_ID": "coexistence-app",
+                "WHATSAPP_COEXISTENCE_APP_SECRET": "coexistence-secret",
+            },
+            clear=False,
+        ):
+            legacy_signature = hmac.new(
+                b"legacy-secret", body, hashlib.sha256
+            ).hexdigest()
+            coexistence_signature = hmac.new(
+                b"coexistence-secret", body, hashlib.sha256
+            ).hexdigest()
+            self.assertTrue(
+                verify_signature(body, "sha256=" + legacy_signature)
+            )
+            self.assertTrue(
+                verify_signature(body, "sha256=" + coexistence_signature)
+            )
+            self.assertFalse(verify_signature(body, "sha256=" + ("0" * 64)))
 
     # ------------------------------------------------------------------
     # Lead capture

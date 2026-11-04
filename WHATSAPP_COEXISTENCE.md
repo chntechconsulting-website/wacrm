@@ -142,6 +142,11 @@ pair a coexistence app ID with the legacy app's secret, because Meta rejects tha
 combination with an OAuth signature error and the failure is otherwise hard to
 diagnose.
 
+The shared webhook validates `X-Hub-Signature-256` against every configured app
+secret, so a delivery signed by the legacy lead-ads app and one signed by a
+separate coexistence app are both accepted. A signature that matches neither is
+still rejected.
+
 Important: the encrypted token is derived from `SECRET_KEY`. Changing
 `SECRET_KEY` makes existing encrypted tokens unreadable. Reconnect the number
 through Embedded Signup after a secret rotation.
@@ -322,6 +327,7 @@ Covered by the coexistence suite:
 - onboarding locked by default;
 - missing configuration rejected;
 - a different coexistence app requires its own app secret;
+- the shared webhook accepts a signature from either configured app secret;
 - public config and status never expose secrets;
 - session-log codes redacted;
 - history import and duplicate suppression;

@@ -71,6 +71,31 @@ class WhatsAppAdConfig:
             return ""
 
     @staticmethod
+    def get_app_secrets() -> list[str]:
+        """Every Meta app secret that may sign this webhook.
+
+        Lead Ads and coexistence can run under different Meta apps (for example,
+        a legacy lead app and a dedicated review app). Meta signs each delivery
+        with the secret of the app subscribed to that WABA, so the shared
+        endpoint must accept either configured secret.
+        """
+        secrets = []
+        primary = WhatsAppAdConfig.get_app_secret()
+        if primary:
+            secrets.append(primary)
+        try:
+            from integrations.whatsapp_coexistence.config import (
+                WhatsAppCoexistenceConfig,
+            )
+
+            coexistence = WhatsAppCoexistenceConfig.get_app_secret()
+            if coexistence and coexistence not in secrets:
+                secrets.append(coexistence)
+        except Exception:
+            pass
+        return secrets
+
+    @staticmethod
     def get_marketing_access_token() -> str:
         return _env(
             "META_MARKETING_ACCESS_TOKEN",
@@ -113,7 +138,7 @@ class WhatsAppAdConfig:
 
     @staticmethod
     def signature_verification_configured() -> bool:
-        return bool(WhatsAppAdConfig.get_app_secret())
+        return bool(WhatsAppAdConfig.get_app_secrets())
 
     @staticmethod
     def marketing_resolution_configured() -> bool:

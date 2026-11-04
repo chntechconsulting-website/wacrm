@@ -66,20 +66,25 @@ def verify_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
     Fails closed when no app secret is configured: an unauthenticated public
     endpoint must never be able to create CRM leads.
     """
-    secret = WhatsAppAdConfig.get_app_secret()
-    if not secret:
+    secrets = WhatsAppAdConfig.get_app_secrets()
+    if not secrets:
         logger.error(
             "WhatsApp Ad webhook rejected: no app secret configured "
-            "(set WHATSAPP_AD_APP_SECRET or META_APP_SECRET)."
+            "(set WHATSAPP_AD_APP_SECRET, META_APP_SECRET, or "
+            "WHATSAPP_COEXISTENCE_APP_SECRET)."
         )
         return False
     if not signature_header or not signature_header.startswith("sha256="):
         return False
-    expected = hmac.new(
-        secret.encode("utf-8"), raw_body or b"", hashlib.sha256
-    ).hexdigest()
     provided = signature_header.split("=", 1)[1].strip()
-    return hmac.compare_digest(expected, provided)
+    body = raw_body or b""
+    for secret in secrets:
+        expected = hmac.new(
+            secret.encode("utf-8"), body, hashlib.sha256
+        ).hexdigest()
+        if hmac.compare_digest(expected, provided):
+            return True
+    return False
 
 
 def verify_challenge(mode: Optional[str], token: Optional[str]) -> bool:
