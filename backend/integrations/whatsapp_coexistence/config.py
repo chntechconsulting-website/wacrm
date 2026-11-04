@@ -61,8 +61,17 @@ class WhatsAppCoexistenceConfig:
 
     @staticmethod
     def get_config_id() -> str:
-        """Facebook Login for Business configuration ID (Embedded Signup v4/v5)."""
-        return _env("WHATSAPP_COEXISTENCE_CONFIG_ID")
+        """Facebook Login for Business configuration ID (Embedded Signup v4/v5).
+
+        Configuration IDs are public identifiers, not secrets. The current
+        WaCRM Embedded Signup configuration is used as the default so a
+        deployment cannot silently lose it; ``WHATSAPP_COEXISTENCE_CONFIG_ID``
+        still overrides it for another environment.
+        """
+        return _env(
+            "WHATSAPP_COEXISTENCE_CONFIG_ID",
+            default="1698501728618095",
+        )
 
     @staticmethod
     def get_api_version() -> str:

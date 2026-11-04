@@ -113,6 +113,8 @@ Add these to `backend/.env` only when the code and approval are ready. Keep
 WHATSAPP_COEXISTENCE_ENABLED="false"
 
 # Facebook Login for Business configuration ID (WhatsApp Embedded Signup).
+# The current public WaCRM configuration ID is the code default; this variable
+# overrides it for another environment.
 WHATSAPP_COEXISTENCE_CONFIG_ID=""
 
 # Optional overrides. Fall back to META_APP_ID / META_APP_SECRET.
@@ -283,7 +285,7 @@ cd backend
 .\venv\Scripts\python.exe -m unittest tests.test_whatsapp_coexistence -v
 ```
 
-Expected: **18 tests pass**.
+Expected: **19 tests pass**.
 
 Run the shared regressions:
 

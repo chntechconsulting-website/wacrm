@@ -342,6 +342,12 @@ class WhatsAppCoexistenceTests(unittest.TestCase):
                 "WHATSAPP_COEXISTENCE_APP_SECRET": "",
                 "META_APP_SECRET": "",
             },
+        ), patch.object(
+            WhatsAppCoexistenceConfig, "get_config_id", return_value=""
+        ), patch.object(
+            WhatsAppCoexistenceConfig, "get_app_id", return_value=""
+        ), patch.object(
+            WhatsAppCoexistenceConfig, "get_app_secret", return_value=""
         ):
             response = self.client.post(
                 "/api/whatsapp/coexistence/exchange",
@@ -353,6 +359,15 @@ class WhatsAppCoexistenceTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 503)
         self.assertIn("not configured", response.json()["detail"].lower())
+
+    def test_default_configuration_id_is_available_without_env(self):
+        with patch.dict(
+            os.environ, {"WHATSAPP_COEXISTENCE_CONFIG_ID": ""}, clear=False
+        ):
+            self.assertEqual(
+                WhatsAppCoexistenceConfig.get_config_id(),
+                "1698501728618095",
+            )
 
     def test_public_config_never_returns_secrets(self):
         config = WhatsAppCoexistenceConfig.public_config()
