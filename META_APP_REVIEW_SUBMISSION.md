@@ -191,8 +191,8 @@ Public URL: https://www.wapluscrm.in
 Login URL: https://www.wapluscrm.in/login
 
 Reviewer account
-  Username/email: <reviewer-email>
-  Password: <reviewer-password>
+  Username/email: metareview@chntechnologies.com
+  Password: <paste the current reviewer password from the secure handoff>
   Role: META_REVIEWER (least privilege)
 
 The account is a dedicated reviewer account on our production CRM. It can only
@@ -339,6 +339,13 @@ flow is required for the exchangeable code and session logs.
 
 The module is hard-locked behind `WHATSAPP_COEXISTENCE_ENABLED=true`. For the
 recording, use a test business/number, not **7547900900**.
+
+The app ID shown on **Settings → WhatsApp Connection** must be the Meta app that
+owns the Facebook Login for Business configuration ID. If the coexistence app is
+different from the legacy `META_APP_ID`, set **both**
+`WHATSAPP_COEXISTENCE_APP_ID` and `WHATSAPP_COEXISTENCE_APP_SECRET` to that app.
+The backend deliberately does not reuse `META_APP_SECRET` across different app
+IDs, because Meta rejects the exchange with an OAuth signature error.
 
 ### 5.2 Reviewer account setup
 

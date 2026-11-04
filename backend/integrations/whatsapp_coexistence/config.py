@@ -42,7 +42,20 @@ class WhatsAppCoexistenceConfig:
 
     @staticmethod
     def get_app_secret() -> str:
-        value = _env("WHATSAPP_COEXISTENCE_APP_SECRET", "META_APP_SECRET")
+        explicit = _env("WHATSAPP_COEXISTENCE_APP_SECRET")
+        if explicit:
+            return explicit
+
+        # ``META_APP_SECRET`` belongs to ``META_APP_ID``. If coexistence points
+        # at a different Meta app (for example, a dedicated review app), using
+        # the legacy secret would guarantee an OAuth signature failure. Require
+        # the matching secret instead of silently reusing the wrong one.
+        app_id = WhatsAppCoexistenceConfig.get_app_id()
+        meta_app_id = _env("META_APP_ID")
+        if app_id and meta_app_id and app_id != meta_app_id:
+            return ""
+
+        value = _env("META_APP_SECRET")
         if value:
             return value
         try:
@@ -149,7 +162,24 @@ class WhatsAppCoexistenceConfig:
         if not WhatsAppCoexistenceConfig.get_app_id():
             warnings.append("META_APP_ID / WHATSAPP_COEXISTENCE_APP_ID is missing.")
         if not WhatsAppCoexistenceConfig.get_app_secret():
-            warnings.append("META_APP_SECRET / WHATSAPP_COEXISTENCE_APP_SECRET is missing.")
+            app_id = WhatsAppCoexistenceConfig.get_app_id()
+            meta_app_id = _env("META_APP_ID")
+            if (
+                app_id
+                and meta_app_id
+                and app_id != meta_app_id
+                and not _env("WHATSAPP_COEXISTENCE_APP_SECRET")
+            ):
+                warnings.append(
+                    "WHATSAPP_COEXISTENCE_APP_ID differs from META_APP_ID. Set "
+                    "WHATSAPP_COEXISTENCE_APP_SECRET to the secret for the "
+                    "coexistence app; the legacy META_APP_SECRET is not reused "
+                    "across apps."
+                )
+            else:
+                warnings.append(
+                    "META_APP_SECRET / WHATSAPP_COEXISTENCE_APP_SECRET is missing."
+                )
         if not WhatsAppCoexistenceConfig.get_config_id():
             warnings.append(
                 "WHATSAPP_COEXISTENCE_CONFIG_ID is missing. Create a Facebook "

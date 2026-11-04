@@ -117,7 +117,8 @@ WHATSAPP_COEXISTENCE_ENABLED="false"
 # overrides it for another environment.
 WHATSAPP_COEXISTENCE_CONFIG_ID=""
 
-# Optional overrides. Fall back to META_APP_ID / META_APP_SECRET.
+# Optional overrides. Fall back to META_APP_ID / META_APP_SECRET only when
+# the coexistence app is the same as the legacy Meta app.
 WHATSAPP_COEXISTENCE_APP_ID=""
 WHATSAPP_COEXISTENCE_APP_SECRET=""
 WHATSAPP_COEXISTENCE_API_VERSION="v26.0"
@@ -132,6 +133,14 @@ WHATSAPP_COEXISTENCE_SYNC_DEADLINE_HOURS="24"
 The app secret and business token never appear in the frontend. The frontend
 receives only `enabled`, `configured`, `ready`, the public app ID, the public
 configuration ID, API version, callback URL, and warnings.
+
+The Facebook Login for Business configuration ID belongs to exactly one Meta
+app. If coexistence uses a dedicated app that differs from the legacy
+`META_APP_ID`, set `WHATSAPP_COEXISTENCE_APP_ID` **and**
+`WHATSAPP_COEXISTENCE_APP_SECRET` together. The backend intentionally refuses to
+pair a coexistence app ID with the legacy app's secret, because Meta rejects that
+combination with an OAuth signature error and the failure is otherwise hard to
+diagnose.
 
 Important: the encrypted token is derived from `SECRET_KEY`. Changing
 `SECRET_KEY` makes existing encrypted tokens unreadable. Reconnect the number
@@ -287,7 +296,7 @@ cd backend
 .\venv\Scripts\python.exe -m unittest tests.test_whatsapp_coexistence -v
 ```
 
-Expected: **19 tests pass**.
+Expected: **21 tests pass**.
 
 Run the shared regressions:
 
@@ -312,6 +321,7 @@ Covered by the coexistence suite:
 
 - onboarding locked by default;
 - missing configuration rejected;
+- a different coexistence app requires its own app secret;
 - public config and status never expose secrets;
 - session-log codes redacted;
 - history import and duplicate suppression;
