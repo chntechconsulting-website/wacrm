@@ -669,51 +669,65 @@ def get_authorized_followup_employee_ids(user: User, db: Session) -> Optional[Li
     """
     Returns authorized employee IDs for follow-up viewing, creation, and modification:
       - None: Admin with full company-wide visibility.
-      - List[int]: Manager (team subordinate employee IDs + self) or Executive ([self.id]).
-      - []: Unauthorized user or user without employee profile.
+      - List[int]: Manager (same-department team employee IDs + self) or
+        Executive ([self.id]).
+      - []: Unauthorized user or user without an employee profile.
+
+    Follow-ups are only ever scoped to Sales or Support. A non-Admin can never
+    receive company-wide visibility, and manager hierarchies are intersected
+    with the manager's own department so cross-department reportees cannot leak
+    their follow-ups into another department.
     """
     if not user:
         return []
 
-    norm_role = (user.role or "").strip().upper()
-    if norm_role == "ADMIN":
+    from services.department_service import (
+        DEPT_SALES,
+        DEPT_SUPPORT,
+        employee_department,
+        get_department_employee_ids,
+    )
+    from services.hierarchy_service import (
+        get_team_employee_ids_from_user,
+        normalize_role,
+        ROLE_ADMIN,
+        ROLE_SALES_MANAGER,
+        ROLE_SUPPORT_MANAGER,
+    )
+
+    norm_role = normalize_role((user.role or "").strip().upper())
+    if norm_role == ROLE_ADMIN:
         return None
 
     emp = db.query(Employee).filter(Employee.user_id == user.id).first()
     if not emp:
         return []
 
-    from services.hierarchy_service import (
-        normalize_role, 
-        get_team_employee_ids_from_user, 
-        ROLE_ADMIN, 
-        ROLE_SALES_MANAGER, 
-        ROLE_SALES_EXECUTIVE, 
-        ROLE_SUPPORT_MANAGER, 
-        ROLE_SUPPORT_EXECUTIVE
-    )
+    department = employee_department(emp)
+    if department not in (DEPT_SALES, DEPT_SUPPORT):
+        return []
 
-    canonical_role = normalize_role(norm_role)
-    if canonical_role == ROLE_ADMIN:
-        return None
+    canonical_role = normalize_role(emp.role or norm_role)
 
     # Check permission scope for 'followups'
     scope = get_user_view_scope(user, "followups", db)
-    if scope == "company":
-        return None
     if scope == "none":
         return []
 
-    if canonical_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER, "MANAGER"] or scope == "team":
+    department_employee_ids = get_department_employee_ids(db, department)
+    allowed_ids = set(department_employee_ids)
+
+    if canonical_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER] or scope == "team":
         team_ids = get_team_employee_ids_from_user(user, db)
         if emp.id not in team_ids:
             team_ids.append(emp.id)
-        return team_ids
-    elif scope == "department" and getattr(emp, "department", None):
-        dept_emps = db.query(Employee.id).filter(Employee.department == emp.department).all()
-        return [e[0] for e in dept_emps]
-    else:  # "own", SALES_EXECUTIVE, SUPPORT_EXECUTIVE, EMPLOYEE
-        return [emp.id]
+        return [emp_id for emp_id in team_ids if emp_id in allowed_ids]
+
+    if scope in ("department", "company"):
+        return department_employee_ids
+
+    # "own", SALES_EXECUTIVE, SUPPORT_EXECUTIVE, EMPLOYEE
+    return [emp.id]
 
 
 def apply_billing_scope_filter(query, user: User, db: Session):

@@ -37,6 +37,12 @@ const Followups = () => {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const isAdmin = normRole === 'ADMIN';
+  const currentDepartment = (
+    currentUser?.department ||
+    (normRole.includes('SUPPORT') ? 'SUPPORT' : 'SALES')
+  ).toUpperCase();
+
   // Filters
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
@@ -75,6 +81,21 @@ const Followups = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedFollowup, setSelectedFollowup] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const editingDepartment = showEditModal && ['SALES', 'SUPPORT'].includes(
+    String(selectedFollowup?.owner_department || '').toUpperCase()
+  )
+    ? String(selectedFollowup.owner_department).toUpperCase()
+    : null;
+  const assignableEmployees = employees.filter((emp) => {
+    const dept = (
+      emp.department ||
+      (String(emp.role || '').toUpperCase().includes('SUPPORT') ? 'SUPPORT' : 'SALES')
+    ).toUpperCase();
+    if (editingDepartment) return dept === editingDepartment;
+    if (!isAdmin) return dept === currentDepartment;
+    return true;
+  });
 
   // Form State
   const [formData, setFormData] = useState({
@@ -640,7 +661,7 @@ const Followups = () => {
                       style={{ paddingLeft: '14px' }}
                     >
                       <option value="">Default (Lead Rep)</option>
-                      {employees.map(emp => (
+                      {assignableEmployees.map(emp => (
                         <option key={emp.id} value={emp.id}>{emp.name}</option>
                       ))}
                     </select>

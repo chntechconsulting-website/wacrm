@@ -387,7 +387,8 @@ async def startup_db_client():
             except Exception as ex:
                 print(f"Lead activities column sync check: {ex}")
 
-            # followups table schema sync for automatic reminders
+            # followups table schema sync for automatic reminders and
+            # immutable department ownership snapshots.
             try:
                 result = conn.execute(text("SHOW COLUMNS FROM followups"))
                 fu_cols = [row[0] for row in result.fetchall()]
@@ -395,13 +396,36 @@ async def startup_db_client():
                     "reminder_sent": "BOOLEAN DEFAULT FALSE NOT NULL",
                     "reminder_sent_at": "DATETIME NULL",
                     "snoozed_until": "DATETIME NULL",
-                    "reminder_dismissed": "BOOLEAN DEFAULT FALSE NOT NULL"
+                    "reminder_dismissed": "BOOLEAN DEFAULT FALSE NOT NULL",
+                    "creator_department": "VARCHAR(30) NULL",
+                    "assigned_department": "VARCHAR(30) NULL",
+                    "owner_department": "VARCHAR(30) NULL",
                 }
                 for col_name, col_type in missing_fu_cols.items():
                     if col_name not in fu_cols:
                         conn.execute(text(f"ALTER TABLE followups ADD COLUMN {col_name} {col_type}"))
                         conn.commit()
                         print(f"Auto-added missing column '{col_name}' to 'followups' table.")
+                idx_result = conn.execute(text("SHOW INDEX FROM followups"))
+                fu_indexes = {row[2] for row in idx_result.fetchall()}
+                for index_name, index_sql in [
+                    (
+                        "ix_followups_creator_department",
+                        "ALTER TABLE followups ADD INDEX ix_followups_creator_department (creator_department)",
+                    ),
+                    (
+                        "ix_followups_assigned_department",
+                        "ALTER TABLE followups ADD INDEX ix_followups_assigned_department (assigned_department)",
+                    ),
+                    (
+                        "ix_followups_owner_department",
+                        "ALTER TABLE followups ADD INDEX ix_followups_owner_department (owner_department)",
+                    ),
+                ]:
+                    if index_name not in fu_indexes:
+                        conn.execute(text(index_sql))
+                        conn.commit()
+                        print(f"Auto-added missing index '{index_name}' to 'followups' table.")
             except Exception as ex:
                 print(f"Followups column sync check: {ex}")
 
@@ -470,6 +494,21 @@ async def startup_db_client():
 
     except Exception as e:
         print(f"Error creating/synchronizing database tables: {e}")
+
+    # Backfill immutable follow-up department ownership for existing records.
+    # Additive only: no follow-up is deleted, reassigned or transferred.
+    try:
+        from services.followup_visibility_service import backfill_followup_departments
+
+        db_backfill = SessionLocal()
+        try:
+            updated = backfill_followup_departments(db_backfill)
+            if updated:
+                print(f"Backfilled department ownership for {updated} follow-up(s).")
+        finally:
+            db_backfill.close()
+    except Exception as ex:
+        print(f"Follow-up department ownership backfill check: {ex}")
 
     # Launch Dynamic Lead Auto-Assignment Background Scheduler
     try:

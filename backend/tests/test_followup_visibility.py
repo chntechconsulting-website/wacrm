@@ -108,6 +108,11 @@ class TestFollowupVisibilityAndSecurity(unittest.TestCase):
         self.db.refresh(self.fu_support)
 
     def tearDown(self):
+        # Delete by primary key as well as marker: some tests legitimately
+        # change the notes field, which previously left artifacts behind.
+        self.db.query(Followup).filter(
+            Followup.id.in_([self.fu_a.id, self.fu_b.id, self.fu_support.id])
+        ).delete(synchronize_session=False)
         self.db.query(Followup).filter(Followup.notes.like("%[TEST-VISIBILITY]%")).delete()
         self.db.commit()
         self.db.close()

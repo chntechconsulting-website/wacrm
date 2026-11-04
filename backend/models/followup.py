@@ -15,6 +15,14 @@ class Followup(Base):
     priority = Column(String(20), default="MEDIUM", nullable=False)  # LOW, MEDIUM, HIGH
     status = Column(String(20), default="Pending", nullable=False)  # Pending, Completed, Cancelled
     created_by = Column(Integer, ForeignKey("employees.id"), nullable=True)
+
+    # Immutable ownership snapshots. These are written from authenticated
+    # employee relationships at creation time and are never inferred from the
+    # lead's current assignee. owner_department is the department that owns the
+    # follow-up and is preserved for the lifetime of the record.
+    creator_department = Column(String(30), nullable=True, index=True)
+    assigned_department = Column(String(30), nullable=True, index=True)
+    owner_department = Column(String(30), nullable=True, index=True)
     
     # 1-Hour Reminder tracking
     reminder_sent = Column(Boolean, default=False, nullable=False)

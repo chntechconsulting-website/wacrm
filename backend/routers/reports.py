@@ -32,9 +32,9 @@ from services.hierarchy_service import (
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
-    get_authorized_call_employee_ids,
-    get_authorized_followup_employee_ids
+    get_authorized_call_employee_ids
 )
+from services.followup_visibility_service import apply_followup_visibility_filter
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -317,17 +317,7 @@ def build_support_dashboard_payload(
         .join(Lead, Followup.lead_id == Lead.id)
         .filter(Followup.status == "Pending")
     )
-    authorized_followup_employee_ids = get_authorized_followup_employee_ids(user, db)
-    if authorized_followup_employee_ids is not None:
-        if not authorized_followup_employee_ids:
-            followup_query = followup_query.filter(Followup.id == -1)
-        else:
-            followup_query = followup_query.filter(
-                or_(
-                    Followup.assigned_to.in_(authorized_followup_employee_ids),
-                    Followup.created_by.in_(authorized_followup_employee_ids),
-                )
-            )
+    followup_query = apply_followup_visibility_filter(followup_query, user, db)
 
     customer_followups = followup_query.count()
     upcoming_followups = []
@@ -551,19 +541,9 @@ def dashboard_stats(
     )
     meta_status_lead_counts = [{"status": st or "NEW", "count": count} for st, count in raw_meta_status_counts]
 
-    # Upcoming Follow-ups (top 5) strictly scoped by role and team
+    # Upcoming Follow-ups (top 5) strictly scoped by department and team
     f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id).filter(Followup.status == "Pending")
-    auth_fu_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if auth_fu_emp_ids is not None:
-        if not auth_fu_emp_ids:
-            f_query = f_query.filter(Followup.id == -1)
-        else:
-            f_query = f_query.filter(
-                or_(
-                    Followup.assigned_to.in_(auth_fu_emp_ids),
-                    Followup.created_by.in_(auth_fu_emp_ids)
-                )
-            )
+    f_query = apply_followup_visibility_filter(f_query, current_user, db)
     
     upcoming_f = f_query.order_by(Followup.followup_date.asc()).limit(5).all()
     upcoming_followups = []
@@ -900,17 +880,7 @@ def sales_overview_report(
 
     # 9. Real Upcoming Follow-ups (strictly scoped)
     real_f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id, isouter=True).filter(Followup.status == "Pending")
-    auth_overview_ids = get_authorized_followup_employee_ids(current_user, db)
-    if auth_overview_ids is not None:
-        if not auth_overview_ids:
-            real_f_query = real_f_query.filter(Followup.id == -1)
-        else:
-            real_f_query = real_f_query.filter(
-                or_(
-                    Followup.assigned_to.in_(auth_overview_ids),
-                    Followup.created_by.in_(auth_overview_ids)
-                )
-            )
+    real_f_query = apply_followup_visibility_filter(real_f_query, current_user, db)
     real_f = real_f_query.order_by(Followup.followup_date.asc()).limit(5).all()
     upcoming_followups = []
     for f in real_f:

@@ -24,7 +24,13 @@ from services.notification_service import create_notification
 from services.permission_service import get_authorized_followup_employee_ids
 from services.department_service import (
     apply_followup_department_filter,
+    employee_department,
     parse_admin_department,
+)
+from services.followup_visibility_service import (
+    FOLLOWUP_DEPARTMENTS,
+    apply_followup_visibility_filter,
+    build_followup_ownership,
 )
 from services.hierarchy_service import (
     normalize_role,
@@ -40,6 +46,30 @@ router = APIRouter(prefix="/followups", tags=["Followups"])
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
 
+def get_visible_followup(followup_id: int, db: Session, current_user: User) -> Followup:
+    """
+    Fetch a follow-up through the authenticated department/employee scope.
+
+    A record outside the caller's scope is reported as 403 (not 404) when it
+    exists, so URL tampering cannot be used to probe or access another
+    department's follow-ups.
+    """
+    visible = apply_followup_visibility_filter(
+        db.query(Followup).filter(Followup.id == followup_id),
+        current_user,
+        db,
+    ).first()
+    if visible:
+        return visible
+
+    exists = db.query(Followup.id).filter(Followup.id == followup_id).first()
+    if exists:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. This follow-up belongs to another department or team.",
+        )
+    raise HTTPException(status_code=404, detail="Follow-up not found")
+
 def build_followup_out(f: Followup) -> FollowupOut:
     return FollowupOut(
         id=f.id,
@@ -54,6 +84,9 @@ def build_followup_out(f: Followup) -> FollowupOut:
         priority=f.priority,
         status=f.status,
         created_by=f.created_by,
+        creator_department=f.creator_department,
+        assigned_department=f.assigned_department,
+        owner_department=f.owner_department,
         created_at=f.created_at,
         reminder_sent=getattr(f, 'reminder_sent', False),
         reminder_dismissed=getattr(f, 'reminder_dismissed', False)
@@ -115,23 +148,11 @@ def get_active_reminders(
       - MANAGER sees followups for themselves and their team.
       - ADMIN sees authorized pending followups.
     """
-    current_emp = get_employee_for_user(current_user, db)
-
     query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id).filter(
         Followup.status == "Pending",
         Followup.reminder_dismissed == False
     )
-
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if not authorized_emp_ids:
-            return []
-        query = query.filter(
-            or_(
-                Followup.assigned_to.in_(authorized_emp_ids),
-                Followup.created_by.in_(authorized_emp_ids)
-            )
-        )
+    query = apply_followup_visibility_filter(query, current_user, db)
 
     pending_followups = query.all()
     active_reminders: List[FollowupReminderOut] = []
@@ -206,15 +227,7 @@ def snooze_followup_reminder(
     """
     Snooze an active reminder for 10, 15, or 30 minutes without modifying the actual follow-up.
     """
-    f = db.query(Followup).filter(Followup.id == followup_id).first()
-    if not f:
-        raise HTTPException(status_code=404, detail="Follow-up not found")
-
-    current_emp = get_employee_for_user(current_user, db)
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if not current_emp or (f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids):
-            raise HTTPException(status_code=403, detail="Not authorized to snooze this reminder")
+    f = get_visible_followup(followup_id, db, current_user)
 
     mins = snooze_req.minutes if snooze_req.minutes > 0 else 15
     f.snoozed_until = datetime.now() + timedelta(minutes=mins)
@@ -237,15 +250,7 @@ def dismiss_followup_reminder(
     """
     Dismiss the reminder popup without modifying or deleting the underlying follow-up.
     """
-    f = db.query(Followup).filter(Followup.id == followup_id).first()
-    if not f:
-        raise HTTPException(status_code=404, detail="Follow-up not found")
-
-    current_emp = get_employee_for_user(current_user, db)
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if not current_emp or (f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids):
-            raise HTTPException(status_code=403, detail="Not authorized to dismiss this reminder")
+    f = get_visible_followup(followup_id, db, current_user)
 
     f.reminder_dismissed = True
     db.commit()
@@ -277,22 +282,10 @@ def list_followups(
     current_user: User = Depends(get_current_user)
 ):
     query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id)
-    current_emp = get_employee_for_user(current_user, db)
+    query = apply_followup_visibility_filter(query, current_user, db)
 
-    # Strictly filter by authenticated employee role and team visibility scope
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if not authorized_emp_ids:
-            return []
-        query = query.filter(
-            or_(
-                Followup.assigned_to.in_(authorized_emp_ids),
-                Followup.created_by.in_(authorized_emp_ids)
-            )
-        )
-
-    # Admin-only department filter. Existing role/team visibility for all other
-    # users is untouched, and non-admins cannot opt into department-wide data.
+    # Admin-only department filter. Non-admins are already locked to their own
+    # department by the visibility helper above and cannot opt into other data.
     if department is not None and str(department).strip():
         if normalize_role(current_user.role) != ROLE_ADMIN:
             raise HTTPException(
@@ -310,8 +303,6 @@ def list_followups(
 
     eff_assigned_to = assigned_to_filter if assigned_to_filter is not None else assigned_to
     if eff_assigned_to:
-        if authorized_emp_ids is not None and eff_assigned_to not in authorized_emp_ids:
-            return []
         query = query.filter(Followup.assigned_to == eff_assigned_to)
 
     eff_status = status_filter or status
@@ -365,17 +356,7 @@ def get_followup(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    f = db.query(Followup).filter(Followup.id == followup_id).first()
-    if not f:
-        raise HTTPException(status_code=404, detail="Follow-up not found")
-
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You are not authorized to view this follow-up."
-            )
+    f = get_visible_followup(followup_id, db, current_user)
 
     return build_followup_out(f)
 
@@ -397,15 +378,17 @@ def create_followup(
 
     norm_role = normalize_role(current_user.role)
     authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    actor_department = employee_department(current_emp)
+
+    if norm_role != ROLE_ADMIN and not current_emp:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. No employee profile found for user."
+        )
 
     # 1. Executive role authorization check
     if norm_role in [ROLE_SALES_EXECUTIVE, ROLE_SUPPORT_EXECUTIVE]:
-        if not current_emp:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. No employee profile found for user."
-            )
-        # Sales Executive can only schedule followups for leads assigned to them or unassigned
+        # Executives can only schedule followups for leads assigned to them or unassigned
         if lead.assigned_to and lead.assigned_to != current_emp.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -417,57 +400,76 @@ def create_followup(
         if authorized_emp_ids is not None and lead.assigned_to and lead.assigned_to not in authorized_emp_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only schedule followups for leads in your team."
+                detail="Access denied. You can only schedule followups for leads in your department/team."
             )
-        target_assigned_to = f_in.assigned_to or lead.assigned_to or creator_id or 1
+        # Never default a Support manager's new follow-up to a Sales lead owner
+        # (or vice versa). Only inherit the lead owner when they are already in
+        # the creator's authorised department/team; otherwise own it as self.
+        default_assignee = f_in.assigned_to
+        if default_assignee is None:
+            if (
+                lead.assigned_to
+                and authorized_emp_ids is not None
+                and lead.assigned_to in authorized_emp_ids
+            ):
+                default_assignee = lead.assigned_to
+            else:
+                default_assignee = current_emp.id
+        target_assigned_to = default_assignee
         if authorized_emp_ids is not None and target_assigned_to not in authorized_emp_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot assign follow-up to an employee outside your authorized team."
+                detail="Cannot assign follow-up to an employee outside your authorized department/team."
             )
     else:  # ADMIN
-        target_assigned_to = f_in.assigned_to or lead.assigned_to or creator_id or 1
+        target_assigned_to = f_in.assigned_to or lead.assigned_to or creator_id
+        if not target_assigned_to:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An assigned employee is required to create a follow-up."
+            )
 
-    # Check for existing pending followups for this lead to avoid duplicate pending entries
-    existing_pending = db.query(Followup).filter(
-        Followup.lead_id == f_in.lead_id,
-        Followup.status == "Pending"
-    ).all()
-
-    if existing_pending:
-        # Reuse existing pending record and update its schedule details
-        target_followup = existing_pending[0]
-        target_followup.followup_date = f_in.followup_date
-        target_followup.followup_time = f_in.followup_time or "10:00 AM"
-        target_followup.priority = f_in.priority or "MEDIUM"
-        if f_in.notes:
-            target_followup.notes = f_in.notes
-        target_followup.assigned_to = target_assigned_to
-        # Reset reminder state for new schedule
-        target_followup.reminder_sent = False
-        target_followup.reminder_sent_at = None
-        target_followup.snoozed_until = None
-        target_followup.reminder_dismissed = False
-
-        # Remove any extra duplicate pending records for this lead
-        for extra in existing_pending[1:]:
-            db.delete(extra)
-
-        followup_record = target_followup
-    else:
-        followup_record = Followup(
-            lead_id=f_in.lead_id,
-            assigned_to=target_assigned_to,
-            followup_date=f_in.followup_date,
-            followup_time=f_in.followup_time or "10:00 AM",
-            notes=f_in.notes,
-            priority=f_in.priority or "MEDIUM",
-            status=f_in.status or "Pending",
-            created_by=creator_id,
-            reminder_sent=False,
-            reminder_dismissed=False
+    target_employee = (
+        db.query(Employee).filter(Employee.id == target_assigned_to).first()
+        if target_assigned_to
+        else None
+    )
+    if not target_employee:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assigned employee was not found.",
         )
-        db.add(followup_record)
+
+    # Non-Admin follow-ups cannot cross department boundaries, regardless of
+    # what the frontend submits in assigned_to.
+    target_department = employee_department(target_employee)
+    if norm_role != ROLE_ADMIN and target_department != actor_department:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Follow-ups cannot be assigned across Sales and Support departments.",
+        )
+
+    ownership = build_followup_ownership(current_emp, target_employee)
+
+    # Always create a new record. Reusing or deleting another pending follow-up
+    # would overwrite historical ownership (especially during Sales -> Support
+    # handover) and would delete existing customer follow-ups.
+    followup_record = Followup(
+        lead_id=f_in.lead_id,
+        assigned_to=target_assigned_to,
+        followup_date=f_in.followup_date,
+        followup_time=f_in.followup_time or "10:00 AM",
+        notes=f_in.notes,
+        priority=f_in.priority or "MEDIUM",
+        status=f_in.status or "Pending",
+        created_by=creator_id,
+        creator_department=ownership["creator_department"],
+        assigned_department=ownership["assigned_department"],
+        owner_department=ownership["owner_department"],
+        reminder_sent=False,
+        reminder_dismissed=False
+    )
+    db.add(followup_record)
 
     # Sync lead status and dates
     lead.status = "FOLLOW-UP"
@@ -497,30 +499,70 @@ def update_followup(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    f = db.query(Followup).filter(Followup.id == followup_id).first()
-    if not f:
-        raise HTTPException(status_code=404, detail="Follow-up not found")
+    f = get_visible_followup(followup_id, db, current_user)
 
     current_emp = get_employee_for_user(current_user, db)
     emp_id = current_emp.id if current_emp else None
     emp_name = current_emp.name if current_emp else current_user.username
+    norm_role = normalize_role(current_user.role)
+    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
+    actor_department = employee_department(current_emp)
 
     # ROLE-BASED ACCESS CONTROL FOR UPDATE
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if not current_emp or (f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only update follow-ups within your authorized scope."
-            )
-        norm_role = normalize_role(current_user.role)
+    target_assigned_to = None
+    target_employee = None
+    if f_in.assigned_to is not None:
         if norm_role in [ROLE_SALES_EXECUTIVE, ROLE_SUPPORT_EXECUTIVE]:
-            f_in.assigned_to = None  # Executives cannot reassign follow-ups
-        elif f_in.assigned_to is not None and f_in.assigned_to not in authorized_emp_ids:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot assign follow-up to an employee outside your authorized team."
+            # Executives cannot reassign follow-ups.
+            target_assigned_to = None
+        elif norm_role == ROLE_ADMIN:
+            target_assigned_to = f_in.assigned_to
+        else:
+            if authorized_emp_ids is not None and f_in.assigned_to not in authorized_emp_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot assign follow-up to an employee outside your authorized department/team."
+                )
+            target_assigned_to = f_in.assigned_to
+
+        if target_assigned_to is not None:
+            target_employee = (
+                db.query(Employee)
+                .filter(Employee.id == target_assigned_to)
+                .first()
             )
+            if not target_employee:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Assigned employee was not found.",
+                )
+            target_department = employee_department(target_employee)
+            if norm_role != ROLE_ADMIN and target_department != actor_department:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Follow-ups cannot be assigned across Sales and Support departments.",
+                )
+            # Ownership is immutable after creation. Reassigning across
+            # functional departments would leave the record owned by one
+            # department while being assigned to another, making it invisible
+            # to its assignee.
+            if f.owner_department and target_department != f.owner_department:
+                if (
+                    f.owner_department in FOLLOWUP_DEPARTMENTS
+                    or norm_role != ROLE_ADMIN
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Follow-up ownership cannot be transferred across departments. Create a new follow-up in the target department.",
+                    )
+            # Records without a functional department owner (for example,
+            # Administration-created records) can be adopted into Sales/Support
+            # explicitly. Any existing Sales/Support ownership is never moved.
+            if (
+                target_department in FOLLOWUP_DEPARTMENTS
+                and f.owner_department not in FOLLOWUP_DEPARTMENTS
+            ):
+                f.owner_department = target_department
 
     old_status = f.status
     date_changed = (f_in.followup_date is not None and f_in.followup_date != f.followup_date) or \
@@ -531,7 +573,11 @@ def update_followup(
     if f_in.notes is not None: f.notes = f_in.notes
     if f_in.priority is not None: f.priority = f_in.priority
     if f_in.status is not None: f.status = f_in.status
-    if f_in.assigned_to is not None and current_user.role != "EMPLOYEE": f.assigned_to = f_in.assigned_to
+    if target_assigned_to is not None:
+        f.assigned_to = target_assigned_to
+        # Assignment snapshot moves with the assignment, but owner_department
+        # and creator_department remain immutable historical ownership.
+        f.assigned_department = employee_department(target_employee)
 
     # If scheduled date/time changed, reset reminder state for the new schedule
     if date_changed:
@@ -565,17 +611,7 @@ def delete_followup(
     current_user: User = Depends(get_current_user)
 ):
     from services.delete_request_service import handle_entity_deletion
-    f = db.query(Followup).filter(Followup.id == followup_id).first()
-    if not f:
-        raise HTTPException(status_code=404, detail="Follow-up not found")
-
-    authorized_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_emp_ids is not None:
-        if f.assigned_to not in authorized_emp_ids and f.created_by not in authorized_emp_ids:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You cannot delete follow-ups outside your authorized scope."
-            )
+    f = get_visible_followup(followup_id, db, current_user)
 
     lead_title = f.lead.name if f.lead else f"Lead #{f.lead_id}"
 

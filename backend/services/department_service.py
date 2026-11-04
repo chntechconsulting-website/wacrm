@@ -521,10 +521,10 @@ def _call_stats(
 
 
 def _followup_scope_clause(employee_ids: Sequence[int]):
-    """Follow-ups are owned by assignee; unassigned rows fall back to creator."""
+    """Follow-ups in scope are those assigned to or created by the employees."""
     return or_(
         Followup.assigned_to.in_(list(employee_ids)),
-        and_(Followup.assigned_to.is_(None), Followup.created_by.in_(list(employee_ids))),
+        Followup.created_by.in_(list(employee_ids)),
     )
 
 
@@ -533,6 +533,7 @@ def _followup_stats(
     employee_ids: Optional[Sequence[int]],
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    departments: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     if employee_ids is not None and not employee_ids:
         return {
@@ -544,6 +545,12 @@ def _followup_stats(
         }
 
     query = db.query(Followup)
+    if departments is not None:
+        from services.followup_visibility_service import (
+            apply_followup_department_filters,
+        )
+
+        query = apply_followup_department_filters(query, db, departments)
     if employee_ids is not None:
         query = query.filter(_followup_scope_clause(employee_ids))
     if date_from:
@@ -713,7 +720,9 @@ def _build_statistics(
         "employees": _employee_stats(employees),
         "teams": _team_stats(db, departments),
         "calls": _call_stats(db, employee_ids, date_from, date_to),
-        "followups": _followup_stats(db, employee_ids, date_from, date_to),
+        "followups": _followup_stats(
+            db, employee_ids, date_from, date_to, departments
+        ),
         "leads": _lead_stats(db, employee_ids),
         "handovers": _handover_stats(
             db, handover_department, employee_ids, date_from, date_to
@@ -841,13 +850,11 @@ def apply_call_department_filter(query, db: Session, department: str):
 
 def apply_followup_department_filter(query, db: Session, department: str):
     """Apply the Admin department scope to an existing Followup query."""
-    normalized = parse_admin_department(department)
-    if not normalized:
-        return query
-    employee_ids = get_department_employee_ids(db, normalized)
-    if not employee_ids:
-        return query.filter(false())
-    return query.filter(_followup_scope_clause(employee_ids))
+    from services.followup_visibility_service import (
+        apply_admin_followup_department_filter,
+    )
+
+    return apply_admin_followup_department_filter(query, db, department)
 
 
 def _serialize_handover(db: Session, handoff: SupportHandoff) -> Dict[str, Any]:

@@ -28,6 +28,9 @@ class FollowupOut(FollowupBase):
     lead_phone: str
     assigned_employee_name: str
     created_by: Optional[int] = None
+    creator_department: Optional[str] = None
+    assigned_department: Optional[str] = None
+    owner_department: Optional[str] = None
     created_at: datetime
     reminder_sent: Optional[bool] = False
     reminder_dismissed: Optional[bool] = False

@@ -40,13 +40,13 @@ from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
     get_authorized_call_employee_ids,
-    get_authorized_followup_employee_ids,
     is_support_lead_authorized,
     get_support_authorized_lead_ids
 )
 from services.delete_request_service import handle_entity_deletion
 from services.audit import log_audit
 from services.reinquiry_service import ReInquiryService
+from services.followup_visibility_service import apply_followup_visibility_filter
 from services.hierarchy_service import (
     get_team_employee_ids_from_user,
     normalize_role,
@@ -435,18 +435,10 @@ def get_leads_stats(
 
     scope = get_user_view_scope(current_user, "leads", db)
 
-    # Strictly scope follow-ups count to authorized employees
-    authorized_fu_emp_ids = get_authorized_followup_employee_ids(current_user, db)
-    if authorized_fu_emp_ids is not None:
-        if not authorized_fu_emp_ids:
-            followups_query = followups_query.filter(Followup.id == -1)
-        else:
-            followups_query = followups_query.filter(
-                or_(
-                    Followup.assigned_to.in_(authorized_fu_emp_ids),
-                    Followup.created_by.in_(authorized_fu_emp_ids)
-                )
-            )
+    # Strictly scope follow-ups to the authenticated department and team
+    followups_query = apply_followup_visibility_filter(
+        followups_query, current_user, db
+    )
 
     if only_my or scope == "own":
         if current_emp:
