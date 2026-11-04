@@ -340,17 +340,47 @@ flow is required for the exchangeable code and session logs.
 The module is hard-locked behind `WHATSAPP_COEXISTENCE_ENABLED=true`. For the
 recording, use a test business/number, not **7547900900**.
 
-### 5.2 Reviewer account does not exist yet
+### 5.2 Reviewer account setup
 
-Create a dedicated CRM user before submitting:
+Create a dedicated CRM user before submitting. The `META_REVIEWER` role is
+already seeded at backend startup; it can only open **Communication → WhatsApp**
+and **Settings → WhatsApp Connection** and is hard-blocked by the backend
+allowlist in `backend/services/reviewer_access.py`.
+
+Recommended: create the account and the seeded test conversation with the
+provisioning script on the production host:
+
+```bash
+cd /path/to/wacrm/backend
+printf '%s\n' 'USE-A-UNIQUE-STRONG-PASSWORD' | \
+  ./venv/bin/python migrations/provision_meta_reviewer.py \
+    --username meta.reviewer \
+    --email approot@wapluscrm.in \
+    --password-stdin \
+    --name "Meta App Reviewer" \
+    --seed-conversation \
+    --test-phone 9198XXXXXXXX \
+    --test-name "Review test contact"
+```
+
+The script never sends a WhatsApp message, refuses the live number
+**7547900900**, never overwrites a real WhatsApp Ads lead, and is safe to run
+twice. It prints the reviewer `user_id`, `employee_id`, `conversation_id`, and
+`lead_id`; record those in the internal review checklist, not in this file.
+
+Manual alternative:
 
 1. Sign in as an administrator.
-2. Open **Users & Roles**.
-3. Create a user such as `appreview@wapluscrm.in` with a strong password.
-4. Give it the minimum role that can open **Communication → WhatsApp** and the
-   WhatsApp connection page (Administrator is simplest for review).
-5. Confirm the account can log in at `https://www.wapluscrm.in/login`.
-6. Put the credentials only in the App Review form, not in this repository.
+2. Open **Users & Roles → Add User**.
+3. Choose department **Administration** and role **Meta App Reviewer
+   (limited)**, reporting to an active Admin.
+4. Confirm the account can log in at `https://www.wapluscrm.in/login` and lands
+   directly on **Communication → WhatsApp**.
+5. Put the credentials only in the App Review form, not in this repository.
+
+The reviewer's linked Employee record controls the inbox scope. If it has no
+Employee record, or no conversation is assigned to it, the inbox is empty.
+Assign the seeded test lead and conversation to that Employee.
 
 ### 5.3 Test conversation must exist in production
 
