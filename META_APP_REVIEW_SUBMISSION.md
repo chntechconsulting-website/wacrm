@@ -26,12 +26,15 @@ Last updated: 2026-11-04
 | Screen recording: `whatsapp_business_messaging` | To record |
 | Screen recording: `whatsapp_business_management` | To record via `/settings/whatsapp-connection` |
 
-The two permissions power different parts of the CRM:
+The permissions power different parts of the CRM:
 
 - `whatsapp_business_messaging` — the shared WhatsApp inbox where agents read and
   reply to customer messages.
 - `whatsapp_business_management` — connecting and managing the business's own
   WhatsApp Business Account (WABA), phone numbers, and message templates.
+- `business_management` — reading the business portfolio and WABA assets the
+  owner selects during Embedded Signup. Request it only if the Meta form lists
+  it for this app.
 
 ---
 
@@ -85,6 +88,24 @@ Specifically, we:
 
 We only act on accounts that the business has explicitly connected. We do not
 manage, modify, or message from accounts we do not own or have authorization for.
+```
+
+### 1.3 `business_management`
+
+```
+WA!CRM uses business_management only after a business owner authorizes the
+connection through Meta Embedded Signup. We use it to:
+- read the business portfolio and WhatsApp Business Account assets the owner
+  selected during Embedded Signup;
+- verify that the selected phone number belongs to that WABA;
+- subscribe our app to the WABA so message and account webhooks are delivered;
+- read phone number, verification, quality, and message-template status;
+- create and manage the message templates the business uses for replies and
+  follow-ups.
+
+We do not access, modify, or manage any business or asset that has not been
+explicitly connected. We do not use business_management for advertising,
+audience building, or resale.
 ```
 
 > If Embedded Signup is not built yet, do **not** submit the management
