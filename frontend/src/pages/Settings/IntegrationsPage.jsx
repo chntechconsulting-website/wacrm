@@ -887,6 +887,54 @@ const IntegrationsPage = () => {
                     </div>
                   )}
 
+                  {/* WhatsApp Business App Coexistence Strip */}
+                  {item.integration_type === 'WHATSAPP' && (
+                    <div style={{
+                      marginTop: '14px',
+                      padding: '12px 14px',
+                      background: '#f0fdf4',
+                      border: '1px solid #bbf7d0',
+                      borderRadius: '10px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '10px',
+                      flexWrap: 'wrap'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <MessageCircle size={18} style={{ color: '#16a34a' }} />
+                        <div>
+                          <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#166534' }}>
+                            Existing WhatsApp Business App number?
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: '#15803d' }}>
+                            Official Meta coexistence onboarding — keep using the Business App
+                          </div>
+                        </div>
+                      </div>
+
+                      <Link
+                        to="/settings/whatsapp-connection"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          color: '#ffffff',
+                          background: '#16a34a',
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          textDecoration: 'none',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <span>Open Connection</span>
+                        <ExternalLink size={13} />
+                      </Link>
+                    </div>
+                  )}
+
                   <div className="card-meta-info">
                     <span>
                       <strong>Last Tested:</strong>{' '}
@@ -1095,7 +1143,7 @@ const IntegrationsPage = () => {
                       <label>Graph API Version</label>
                       <input 
                         type="text" 
-                        value={modalState.config.api_version || 'v20.0'} 
+                        value={modalState.config.api_version || 'v26.0'}
                         onChange={(e) => handleConfigChange('api_version', e.target.value)}
                       />
                     </div>
@@ -1159,7 +1207,7 @@ const IntegrationsPage = () => {
                       <label>API Version</label>
                       <input 
                         type="text" 
-                        value={modalState.config.api_version || 'v20.0'} 
+                        value={modalState.config.api_version || 'v26.0'}
                         onChange={(e) => handleConfigChange('api_version', e.target.value)}
                       />
                     </div>

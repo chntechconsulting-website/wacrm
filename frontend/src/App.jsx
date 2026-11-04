@@ -48,6 +48,7 @@ import AnalyticsPage from './pages/Reports/AnalyticsPage';
 import SettingsPage from './pages/Settings/SettingsPage';
 import IntegrationsPage from './pages/Settings/IntegrationsPage';
 import MetaIntegrationPage from './pages/Settings/MetaIntegrationPage';
+import WhatsAppConnectionPage from './pages/Settings/WhatsAppConnectionPage';
 import UsersRolesPage from './pages/Settings/UsersRolesPage';
 import ProfilePage from './pages/Profile/ProfilePage';
 import NotificationsPage from './pages/Settings/NotificationsPage';
@@ -148,6 +149,9 @@ function App() {
               <Route path="/settings/integrations" element={<IntegrationsPage />} />
               <Route path="/settings/integrations/meta" element={<MetaIntegrationPage />} />
               <Route path="/integrations/meta" element={<MetaIntegrationPage />} />
+              <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+                <Route path="/settings/whatsapp-connection" element={<WhatsAppConnectionPage />} />
+              </Route>
               <Route path="/settings/delete-requests" element={<DeleteRequestsPage />} />
               <Route path="/organization/delete-requests" element={<DeleteRequestsPage />} />
               <Route path="/users" element={<UsersRolesPage />} />

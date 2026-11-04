@@ -54,7 +54,7 @@ WHATSAPP_API_TOKEN=EAAG...YOUR_ACCESS_TOKEN_HERE...
 WHATSAPP_PHONE_NUMBER_ID=100609346387084
 WHATSAPP_BUSINESS_ACCOUNT_ID=104928374829102
 WHATSAPP_VERIFY_TOKEN=wa_crm_verify_token_2026
-WHATSAPP_API_VERSION=v20.0
+WHATSAPP_API_VERSION=v26.0
 ```
 
 > 💡 **Note**: Once saved, restart your FastAPI backend server. The CRM status badge will automatically turn green and show **WhatsApp API Connected**.

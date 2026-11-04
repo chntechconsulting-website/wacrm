@@ -89,6 +89,7 @@ from integrations.website.router import router as website_lead_router
 from integrations.whatsapp.webhook import webhook_router as whatsapp_webhook_router
 from integrations.whatsapp_ads.webhook import router as whatsapp_ad_webhook_router
 from integrations.whatsapp_ads.router import router as whatsapp_ad_leads_router
+from integrations.whatsapp_coexistence.router import router as whatsapp_coexistence_router
 from integrations.quotetask.router import router as quotetask_router
 from integrations.waquote.router import router as waquote_router
 from integrations.proforma.router import router as proforma_integration_router
@@ -122,6 +123,7 @@ app.include_router(whatsapp_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_ad_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_ad_webhook_router)  # Direct /webhook/whatsapp for non-/api proxies
 app.include_router(whatsapp_ad_leads_router, prefix=settings.API_V1_STR)
+app.include_router(whatsapp_coexistence_router, prefix=settings.API_V1_STR)
 app.include_router(quotetask_router, prefix=settings.API_V1_STR)
 app.include_router(waquote_router, prefix=settings.API_V1_STR)
 app.include_router(proforma_integration_router, prefix=settings.API_V1_STR)

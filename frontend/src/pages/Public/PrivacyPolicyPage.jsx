@@ -44,7 +44,7 @@ const PrivacyPolicyPage = () => {
       <section style={{ marginBottom: '24px' }}>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '8px', color: '#0f172a' }}>5. Contact Information</h2>
         <p>
-          For privacy inquiries or data requests, please contact our administrator at <strong>admin@company.com</strong>.
+          For privacy inquiries or data requests, please contact our privacy team at <strong>privacy@chntechnologies.com</strong>.
         </p>
       </section>
     </div>

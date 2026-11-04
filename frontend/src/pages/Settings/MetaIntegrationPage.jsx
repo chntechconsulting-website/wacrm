@@ -294,7 +294,7 @@ const MetaIntegrationPage = () => {
           </div>
           <div className="meta-metric-content">
             <h4>Graph API Version</h4>
-            <p>{metaStatus?.api_version || 'v20.0'}</p>
+            <p>{metaStatus?.api_version || 'v26.0'}</p>
           </div>
         </div>
       </div>

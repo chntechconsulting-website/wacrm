@@ -21,6 +21,11 @@ from models.office_sim import OfficeSimMapping
 from models.team import Team
 from models.brochure_enquiry import BrochureEnquiry
 from models.whatsapp_ad_lead import WhatsAppAdAttribution, WhatsAppWebhookEvent
+from models.whatsapp_coexistence import (
+    WhatsAppCoexistenceConnection,
+    WhatsAppCoexistenceEvent,
+    WhatsAppSmbContact,
+)
 
 __all__ = [
     "Base",
@@ -58,4 +63,7 @@ __all__ = [
     "BrochureEnquiry",
     "WhatsAppAdAttribution",
     "WhatsAppWebhookEvent",
+    "WhatsAppCoexistenceConnection",
+    "WhatsAppCoexistenceEvent",
+    "WhatsAppSmbContact",
 ]

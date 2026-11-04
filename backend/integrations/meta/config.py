@@ -63,7 +63,7 @@ class MetaConfig:
         val = os.getenv("META_API_VERSION") or getattr(settings, "META_API_VERSION", "")
         if not val:
             val = MetaConfig._get_db_config().get("api_version", "")
-        return val or "v20.0"
+        return val or "v26.0"
 
     @staticmethod
     def is_configured() -> bool:

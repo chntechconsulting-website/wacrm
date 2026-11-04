@@ -16,7 +16,7 @@ const DataDeletionPage = () => {
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '8px', color: '#0f172a' }}>How to Request Data Deletion</h2>
         <ol style={{ marginLeft: '20px', marginTop: '8px' }}>
           <li>
-            Send an email to <strong>admin@company.com</strong> with the subject <em>"Data Deletion Request"</em>.
+            Send an email to <strong>privacy@chntechnologies.com</strong> with the subject <em>"Data Deletion Request"</em>.
           </li>
           <li>
             Provide the phone number or email address that you submitted in the Meta Lead Form so we can identify your lead record.

@@ -164,7 +164,7 @@ class WhatsAppAdLeadService:
     @classmethod
     def process_payload(
         cls, db: Session, payload: Dict[str, Any], raw_body: bytes = b""
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Any]:
         summary = {
             "processed": 0,
             "skipped": 0,
@@ -175,12 +175,43 @@ class WhatsAppAdLeadService:
         if not isinstance(payload, dict):
             return summary
 
+        # Coexistence fields (history, contacts, Business App echoes, account
+        # lifecycle) share the same Meta callback. Process them first; a failure
+        # here must never break Click-to-WhatsApp lead capture.
+        try:
+            from integrations.whatsapp_coexistence.service import (
+                WhatsAppCoexistenceService,
+            )
+
+            if WhatsAppCoexistenceService.payload_has_coexistence_fields(payload):
+                summary["coexistence"] = WhatsAppCoexistenceService.process_payload(
+                    db, payload
+                )
+        except Exception as exc:
+            logger.error("Coexistence webhook processing failed: %s", exc, exc_info=True)
+            summary["coexistence_error"] = str(exc)
+
         waba_filter = WhatsAppAdConfig.get_business_account_id()
+        allowed_wabas = {waba_filter} if waba_filter else set()
+        try:
+            from integrations.whatsapp_coexistence.service import (
+                WhatsAppCoexistenceService,
+            )
+
+            active_connection = WhatsAppCoexistenceService.get_active_connection(db)
+            if active_connection:
+                allowed_wabas.add(active_connection.waba_id)
+        except Exception:
+            pass
         mirror_entries = []
 
         for entry in payload.get("entry") or []:
             business_account_id = str(entry.get("id") or "").strip()
-            if waba_filter and business_account_id and business_account_id != waba_filter:
+            if (
+                allowed_wabas
+                and business_account_id
+                and business_account_id not in allowed_wabas
+            ):
                 logger.warning(
                     "Ignoring WhatsApp webhook entry for unexpected WABA %s "
                     "(configured %s).",

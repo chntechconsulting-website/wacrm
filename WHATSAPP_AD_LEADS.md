@@ -177,7 +177,10 @@ advanced access for the WhatsApp permissions.
 
 This keeps the number working in the WhatsApp Business App while Cloud API
 receives the same messages. It is **not available through a normal App
-Dashboard toggle** and is not implemented in this repository yet.
+Dashboard toggle**. The onboarding module is implemented in this repository but
+is **disabled by default** and the live number has not been onboarded. See
+[`WHATSAPP_COEXISTENCE.md`](WHATSAPP_COEXISTENCE.md) for setup, safety gates,
+the 24-hour sync window, and the live checklist.
 
 Official requirements:
 
@@ -189,26 +192,27 @@ Official requirements:
   `account_update`, `history`, `smb_app_state_sync`,
   `smb_message_echoes`, and `messages`
 
-The flow must:
+The implemented flow must:
 
 1. Create a Facebook Login for Business configuration and allowed HTTPS
    domains.
 2. Launch Embedded Signup with
    `featureType: "whatsapp_business_app_onboarding"` (v4) or the equivalent
    v5 configuration.
-3. Capture `waba_id`, `phone_number_id`, and the exchangeable token code from
-   the session event. The code expires after **30 seconds**, so exchange it
-   server-side immediately.
+3. Capture `waba_id`, the exchangeable token code, and `phone_number_id` when
+   Meta provides it. The coexistence session event may return only `waba_id`,
+   so the backend resolves the number from the WABA and refuses to guess
+   between ambiguous numbers. The code expires after **30 seconds**, so
+   exchange it server-side immediately.
 4. Onboard the customer, **skip phone-number registration** (the number is
    already registered), and subscribe the app to the customer's webhook.
 5. Synchronize contacts and chat history within **24 hours**, then process
    `smb_message_echoes` for messages sent from the Business App.
+6. Instruct the business to add a Meta payment method in WhatsApp Manager
+   before Cloud API messaging is fully enabled.
 
-The current CRM does not contain the Embedded Signup UI, token exchange,
-webhook subscription, or history/echo synchronization. Those are additional
-development work. If you are not a Tech Provider/Solution Partner, use
-Option A; do not attempt coexistence through WhatsApp Web, QR automation, or
-unofficial APIs.
+If you are not a Tech Provider/Solution Partner, use Option A; do not attempt
+coexistence through WhatsApp Web, QR automation, or unofficial APIs.
 
 **Check Tech Provider status before building anything:**
 
@@ -367,8 +371,11 @@ number** through Coexistence, but it is not a purely local configuration:
 - Onboarding must be done through **Embedded Signup** as a Meta **Tech
   Provider / Solution Partner**, with session logging and coexistence webhook
   payload digestion.
-- This repository does not contain that onboarding flow and no account or
-  number has been migrated.
+- The coexistence onboarding module is implemented in this repository and is
+  **disabled by default**. See [`WHATSAPP_COEXISTENCE.md`](WHATSAPP_COEXISTENCE.md)
+  for setup, safety gates, the 24-hour sync window, and the live checklist.
+- No account or number has been migrated. The production number has not been
+  touched.
 
 No number has been disconnected, migrated, or newly created. Before any
 account/number change, confirm eligibility and the onboarding path with Meta.
@@ -472,5 +479,6 @@ actually been observed with a real enquiry.
   actual sales roles.
 - `/webhook/whatsapp` is only directly reachable on the backend port unless
   nginx is changed; use `/api/webhook/whatsapp` with the current proxy.
-- Coexistence onboarding is not implemented in this repository and requires
-  Meta approval/Tech Provider access.
+- Coexistence onboarding is implemented but remains gated behind
+  `WHATSAPP_COEXISTENCE_ENABLED=true` and Meta approval; the live number
+  **7547900900** has not been onboarded.

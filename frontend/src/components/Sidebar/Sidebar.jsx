@@ -830,6 +830,16 @@ const Sidebar = ({
                   onClick={handleItemClick}
                 />
               )}
+              {isAdmin && (
+                <SidebarItem
+                  to="/settings/whatsapp-connection"
+                  exactMatch={true}
+                  icon={MessageCircle}
+                  label="WhatsApp Connection"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
               {(hasModule('users') || hasModule('roles') || isAdmin) && (
                 <SidebarItem
                   to="/users"

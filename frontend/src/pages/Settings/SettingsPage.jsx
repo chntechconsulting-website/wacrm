@@ -370,7 +370,7 @@ const SettingsPage = () => {
               </div>
               <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                 <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '600', display: 'block' }}>Graph API Version</span>
-                <span style={{ fontSize: '0.95rem', fontWeight: '800', color: '#2563eb', marginTop: '2px', display: 'block' }}>{metaStatus?.api_version || 'v20.0'}</span>
+                <span style={{ fontSize: '0.95rem', fontWeight: '800', color: '#2563eb', marginTop: '2px', display: 'block' }}>{metaStatus?.api_version || 'v26.0'}</span>
               </div>
               <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                 <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '600', display: 'block' }}>Total Meta Leads</span>
@@ -460,7 +460,7 @@ META_APP_SECRET=your_meta_app_secret
 META_ACCESS_TOKEN=EAABb... (Long-Lived Page Access Token)
 META_VERIFY_TOKEN=wacrm_meta_verify_secret
 META_PAGE_ID=1009988776655
-META_API_VERSION=v20.0`}
+META_API_VERSION=v26.0`}
                   </pre>
                 </div>
               </div>

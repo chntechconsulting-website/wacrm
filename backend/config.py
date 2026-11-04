@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     META_ACCESS_TOKEN: str = os.getenv("META_ACCESS_TOKEN", "")
     META_VERIFY_TOKEN: str = os.getenv("META_VERIFY_TOKEN", "")
     META_PAGE_ID: str = os.getenv("META_PAGE_ID", "")
-    META_API_VERSION: str = os.getenv("META_API_VERSION", "v20.0")
+    META_API_VERSION: str = os.getenv("META_API_VERSION", "v26.0")
 
     # WhatsApp Integration
     WHATSAPP_API_TOKEN: str = os.getenv("WHATSAPP_API_TOKEN", "")
