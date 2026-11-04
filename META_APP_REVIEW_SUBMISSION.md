@@ -497,7 +497,8 @@ already complete.
 ## 7. Final pre-submit checklist
 
 - [ ] Coexistence migration applied on production
-- [ ] Backend deployed with `WHATSAPP_COEXISTENCE_ENABLED=false`
+- [ ] Production app **2041712130118952** owns config **2372647743564644**
+- [ ] Backend deployed with `WHATSAPP_COEXISTENCE_ENABLED=false` and the Wacrmwap app/secret
 - [ ] Frontend deployed with `/settings/whatsapp-connection` and the email fix
 - [ ] Test business/number successfully onboarded for the recording
 - [ ] Reviewer account created and login tested
@@ -505,7 +506,8 @@ already complete.
 - [ ] Test conversation visible in production
 - [ ] `whatsapp_business_messaging` recording uploaded
 - [ ] `whatsapp_business_management` recording uploaded (live Embedded Signup)
-- [ ] Allowed usage text pasted for both permissions
+- [ ] `business_management` answers ready if Meta lists it for the app
+- [ ] Allowed usage text pasted for each requested permission
 - [ ] Data handling questionnaire answered
 - [ ] Reviewer instructions pasted with real URLs and credentials
 - [ ] `privacy@chntechnologies.com` deployed on `/privacy` and `/data-deletion`

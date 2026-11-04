@@ -365,9 +365,11 @@ Covered by the coexistence suite:
 
 ## 10. Live-onboarding checklist (after approval only)
 
-- [ ] App Review approved for both WhatsApp permissions
+- [ ] App Review approved for the WhatsApp permissions requested for the app
 - [ ] Tech Provider status approved
 - [ ] Business owner explicitly approved onboarding of **7547900900**
+- [ ] Config **2372647743564644** verified under app **2041712130118952** in Meta
+- [ ] Production has `WHATSAPP_COEXISTENCE_APP_ID=2041712130118952` and the matching app secret
 - [ ] Migration applied on production
 - [ ] Backend/frontend deployed with the gate still `false`
 - [ ] Configuration page shows all checks ready
