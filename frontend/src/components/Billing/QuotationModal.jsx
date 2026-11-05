@@ -51,6 +51,16 @@ import {
   getPlanByCode,
   WAHRMS_PACKAGE_CODES
 } from '../../utils/billingPackages';
+import {
+  ADDON_PRODUCTS,
+  ADDON_PRICING_TYPES,
+  ONE_TIME_ADDONS,
+  PER_EMPLOYEE_ADDONS,
+  createAddonLineItem,
+  findAddonLineIndex,
+  getAddonByCode,
+  isAddonLineItem
+} from '../../utils/addonProducts';
 import DocumentPdfPreviewModal from './PdfPreviewModal';
 import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
@@ -86,56 +96,9 @@ const DEFAULT_TERMS_INVOICE =
 
 const DEFAULT_NOTES_QUOTATION = '';
 
-export const ADD_ON_SERVICES = [
-  { 
-    name: 'Shift Roster',
-    description: 'Shift Roster', 
-    hsn: '998314', 
-    rate: 0, 
-    qty: 1, 
-    gstRate: 0.18 
-  },
-  { 
-    name: 'Live Tracking',
-    description: 'Live Tracking', 
-    hsn: '998314', 
-    rate: 0, 
-    qty: 1, 
-    gstRate: 0.18 
-  },
-  { 
-    name: 'Biometric Integration',
-    description: 'Biometric Integration', 
-    hsn: '998314', 
-    rate: 4999, 
-    qty: 1, 
-    gstRate: 0.18 
-  },
-  { 
-    name: 'Software Installation',
-    description: 'Software Installation', 
-    hsn: '998315', 
-    rate: 1000, 
-    qty: 1, 
-    gstRate: 0.18 
-  },
-  { 
-    name: 'WA Payroll Setup',
-    description: 'WA Payroll Cloud Setup & Deployment', 
-    hsn: '998315', 
-    rate: 5000, 
-    qty: 1, 
-    gstRate: 0.18 
-  },
-  { 
-    name: 'Comprehensive AMC',
-    description: 'Comprehensive Annual Maintenance Contract (AMC)', 
-    hsn: '998719', 
-    rate: 6000, 
-    qty: 1, 
-    gstRate: 0.18 
-  }
-];
+// Kept as an export for existing imports; the actual pricing lives in the
+// central add-on catalogue.
+export const ADD_ON_SERVICES = ADDON_PRODUCTS;
 
 export const formatItemDescriptionForEditor = (itemOrDesc) => {
   if (!itemOrDesc) return '';
@@ -355,6 +318,9 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
     || item.onboardingCount !== undefined
     || item.onboarding_count !== undefined;
   const savedQty = Number(item.qty ?? item.quantity ?? 1);
+  const addonCode = String(item.addonCode || item.addon_code || '').toLowerCase();
+  const addon = getAddonByCode(addonCode);
+  const isAddon = Boolean(item.isAddon || item.is_addon || addonCode);
 
   return {
     id: item.id || Date.now() + idx,
@@ -362,7 +328,12 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
     isBundleDetail,
     bundleId: item.bundleId || item.bundle_id || (isBundleItem ? incomingBundle : null),
     itemCode: item.itemCode || item.item_code || '',
-    name: item.name || '',
+    addonCode,
+    isAddon,
+    is_addon: isAddon,
+    pricingType: item.pricingType || item.pricing_type || addon?.pricingType || '',
+    billingUnit: item.billingUnit || item.billing_unit || addon?.billingUnit || '',
+    name: item.name || (addon ? addon.name : ''),
     baseDescription,
     planCode: isBundleDetail ? planCode : '',
     planName: isBundleDetail ? planName : '',
@@ -372,13 +343,15 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
     onboardingCount,
     description: isBundleDetail
       ? formatBundleDescription({ baseDescription, planName, durationMonths, onboardingCount, unitPrice: rate })
-      : formatItemDescriptionForEditor(rawDescription),
-    hsn: item.hsn || item.hsnCode || (isBio ? '85437099' : '998314'),
+      : isAddon
+        ? String(item.name || addon?.name || rawDescription).split(/\r?\n/)[0].trim()
+        : formatItemDescriptionForEditor(rawDescription),
+    hsn: item.hsn || item.hsnCode || addon?.hsn || (isBio ? '85437099' : '998314'),
     qty: isBundleDetail
       ? savedQty
       : Number(item.qty ?? item.quantity ?? 1),
     rate,
-    gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 0.18,
+    gstRate: item.gstRate !== undefined ? Number(item.gstRate) : (addon ? Number(addon.gstRate) : 0.18),
     discount: Number(item.discount ?? 0),
     quantityMode: isBundleDetail
       ? (item.quantityMode || (hasStructuredFields ? 'auto' : 'saved'))
@@ -629,6 +602,13 @@ export default function QuotationModal({
     return computeInvoice(lineItems, taxMode, true);
   }, [lineItems, taxMode]);
 
+  const selectedAddonCodes = new Set(
+    lineItems
+      .filter(isAddonLineItem)
+      .map((item) => String(item.addonCode || item.addon_code || '').toLowerCase())
+      .filter(Boolean)
+  );
+
   // Update terms on docType toggle
   const handleTypeChange = (newType) => {
     if (newType === 'invoice' && !isFinance) {
@@ -785,6 +765,18 @@ export default function QuotationModal({
       discount: 0
     };
     setLineItems(prev => [...prev, newItem]);
+  };
+
+  // Add-on cards are idempotent: clicking one that is already present leaves
+  // the existing line untouched. Removal happens from the line's trash button.
+  // The duplicate check runs inside the functional state update so rapid
+  // clicks cannot create duplicate rows.
+  const handleAddAddon = (addon) => {
+    setLineItems(prev => {
+      if (findAddonLineIndex(prev, addon.code) >= 0) return prev;
+      const newItem = createAddonLineItem(addon, { id: Date.now() + prev.length });
+      return newItem ? [...prev, newItem] : prev;
+    });
   };
 
   const handleRemoveLine = (idx) => {
@@ -1567,37 +1559,103 @@ export default function QuotationModal({
           {/* Section 3: Line Items */}
 
           <div className="quote-section">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+            <div className="quote-line-items-header">
               <h4 className="quote-section-title" style={{ margin: 0 }}>
                 <CreditCard size={16} /> Line Items & Pricing
               </h4>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#0f766e', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  + Add-ons:
-                </span>
-                {(productCategory === 'biometric' ? BIOMETRIC_ADD_ON_SERVICES : ADD_ON_SERVICES).map((addon, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => handleAddLine(addon)}
-                    className="btn btn-outline"
-                    style={{ 
-                      fontSize: '0.74rem', 
-                      padding: '4px 10px', 
-                      color: '#0f766e', 
-                      borderColor: '#99f6e4', 
-                      backgroundColor: '#f0fdfa',
-                      borderRadius: '6px',
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                    title={`Add ${addon.name} to line items`}
-                  >
-                    + {addon.name}
-                  </button>
-                ))}
-              </div>
             </div>
+
+            {productCategory === 'biometric' ? (
+              <div className="quote-addon-picker">
+                <div className="quote-addon-picker-header">
+                  <div>
+                    <div className="quote-addon-picker-title">Add-On Products</div>
+                    <div className="quote-addon-picker-hint">Click an add-on to add or remove its line item.</div>
+                  </div>
+                </div>
+                <div className="quote-addon-options">
+                  {BIOMETRIC_ADD_ON_SERVICES.map((addon) => (
+                    <button
+                      key={addon.name}
+                      type="button"
+                      onClick={() => handleAddLine(addon)}
+                      className="quote-addon-option"
+                      title={`Add ${addon.name} to line items`}
+                    >
+                      <span className="quote-addon-option-name">+ {addon.name}</span>
+                      <span className="quote-addon-option-price">
+                        ₹{Number(addon.rate || 0).toLocaleString('en-IN')}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="quote-addon-picker">
+                <div className="quote-addon-picker-header">
+                  <div>
+                    <div className="quote-addon-picker-title">Add-On Products</div>
+                    <div className="quote-addon-picker-hint">Click an add-on to add it. Remove it with the trash icon on its line. Quantity is editable on each row.</div>
+                  </div>
+                </div>
+
+                <div className="quote-addon-group">
+                  <div className="quote-addon-group-label">Recurring · Per Employee</div>
+                  <div className="quote-addon-options">
+                    {PER_EMPLOYEE_ADDONS.map((addon) => {
+                      const isSelected = selectedAddonCodes.has(addon.code);
+                      return (
+                        <button
+                          key={addon.code}
+                          type="button"
+                          onClick={() => handleAddAddon(addon)}
+                          className={`quote-addon-option ${isSelected ? 'selected' : ''}`}
+                          aria-pressed={isSelected}
+                          data-addon-code={addon.code}
+                          title={isSelected ? `${addon.name} is already added` : `Add ${addon.name} at ₹${addon.rate} per employee`}
+                        >
+                          <span className="quote-addon-option-name">
+                            {isSelected ? <Check size={12} strokeWidth={3} /> : null}
+                            {addon.name}
+                          </span>
+                          <span className="quote-addon-option-price">
+                            ₹{addon.rate.toLocaleString('en-IN')} / {addon.billingUnit}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="quote-addon-group one-time">
+                  <div className="quote-addon-group-label">One-Time Setup</div>
+                  <div className="quote-addon-options">
+                    {ONE_TIME_ADDONS.map((addon) => {
+                      const isSelected = selectedAddonCodes.has(addon.code);
+                      return (
+                        <button
+                          key={addon.code}
+                          type="button"
+                          onClick={() => handleAddAddon(addon)}
+                          className={`quote-addon-option one-time ${isSelected ? 'selected' : ''}`}
+                          aria-pressed={isSelected}
+                          data-addon-code={addon.code}
+                          title={isSelected ? `${addon.name} is already added` : `Add ${addon.name} at ₹${addon.rate} per device`}
+                        >
+                          <span className="quote-addon-option-name">
+                            {isSelected ? <Check size={12} strokeWidth={3} /> : null}
+                            {addon.name}
+                          </span>
+                          <span className="quote-addon-option-price">
+                            ₹{addon.rate.toLocaleString('en-IN')} / {addon.billingUnit} · one-time
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div style={{ overflowX: 'auto' }}>
               <table className="quote-items-table">
@@ -1633,7 +1691,11 @@ export default function QuotationModal({
                       && item.quantityMode === 'auto';
 
                     return (
-                      <tr key={item.id || idx}>
+                      <tr
+                        key={item.id || idx}
+                        className={item.isAddon ? 'quote-addon-line' : undefined}
+                        data-addon-code={item.addonCode || undefined}
+                      >
                         <td>
                           {item.isBundleItem && (
                             <div style={{ marginBottom: '5px' }}>
@@ -1699,6 +1761,10 @@ export default function QuotationModal({
                                   : 'Quantity updates automatically when duration and onboardings are entered.'}
                               </div>
                             </div>
+                          ) : item.isAddon ? (
+                            <div className="quote-addon-line-title">
+                              {item.description || item.name || 'Add-on'}
+                            </div>
                           ) : (
                             <textarea
                               rows={4}
@@ -1724,7 +1790,9 @@ export default function QuotationModal({
                             type="text" 
                             value={item.hsn} 
                             onChange={(e) => handleLineChange(idx, 'hsn', e.target.value)} 
-                            placeholder="HSN" 
+                            readOnly={Boolean(item.isAddon)}
+                            aria-label={item.isAddon ? `${item.name || 'Add-on'} HSN/SAC` : 'Line item HSN/SAC'}
+                            className={item.isAddon ? 'quote-addon-readonly-input' : undefined}
                           />
                         </td>
                         <td>
@@ -1739,14 +1807,29 @@ export default function QuotationModal({
                             <input
                               type="number"
                               min="1"
+                              step="1"
+                              inputMode="numeric"
                               value={item.qty}
                               onChange={(e) => handleLineChange(idx, 'qty', Number(e.target.value))}
+                              aria-label={item.isAddon
+                                ? `${item.name || 'Add-on'} quantity in ${item.billingUnit === 'device' ? 'devices' : 'employees'}`
+                                : 'Line item quantity'}
+                              title={item.isAddon
+                                ? (item.billingUnit === 'device' ? 'Device quantity' : 'Employee quantity')
+                                : undefined}
                             />
                           )}
                         </td>
                         <td>
                           {isBundleDetail ? (
                             <div className="bundle-rate-display" title="Edit the unit price in the bundle details">
+                              ₹ {Number(item.rate || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </div>
+                          ) : item.isAddon ? (
+                            <div
+                              className="quote-addon-rate"
+                              title={`${item.pricingType === ADDON_PRICING_TYPES.ONE_TIME ? 'One-time' : 'Recurring'} rate from the add-on catalogue`}
+                            >
                               ₹ {Number(item.rate || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                             </div>
                           ) : (
@@ -1778,7 +1861,7 @@ export default function QuotationModal({
                             type="button" 
                             onClick={() => handleRemoveLine(idx)}
                             style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', padding: '4px' }}
-                            title="Remove row"
+                            title={item.isAddon ? `Remove ${item.name || 'add-on'}` : 'Remove row'}
                           >
                             <Trash2 size={15} />
                           </button>
