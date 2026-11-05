@@ -42,9 +42,18 @@ jobs:
           script: |
             set -eu
             echo "HOSTNAME=$(hostname)"
+            echo "HOME=$HOME"
             id
-            if sudo -n true 2>/dev/null; then echo "SUDO_OK"; else echo "SUDO_NO"; fi
-            MAIN_PY=$(sudo find /home /var/www /opt /srv /root -maxdepth 6 -type f -path '*/backend/main.py' 2>/dev/null | head -n 1 || true)
+            echo "HOME_LISTING:"
+            ls -la "$HOME" 2>&1 | head -n 40 || true
+            echo "COMMON_DIRS:"
+            ls -la /var/www /opt /srv /home 2>&1 | head -n 80 || true
+            echo "SUDO_RULES:"
+            sudo -n -l 2>&1 | head -n 80 || true
+            echo "DEPLOY_SCRIPT_PATH_LINES:"
+            grep -nE 'cd |APP|DIR|venv|systemctl|git |wacrm' /usr/local/sbin/wacrm-deploy 2>&1 | head -n 120 || true
+            echo "FIND_CANDIDATES:"
+            MAIN_PY=$(find "$HOME" /var/www /opt /srv /home -maxdepth 7 -type f -path '*/backend/main.py' 2>/dev/null | head -n 1 || true)
             if [ -z "$MAIN_PY" ]; then
               echo "APP_NOT_FOUND"
               exit 1
@@ -64,7 +73,7 @@ jobs:
               PY=$(command -v python3)
             fi
             echo "PY=$PY"
-            sudo "$PY" - "${{ inputs.mode }}" "${{ inputs.lead_id }}" "${{ inputs.support_manager_id }}" "${{ inputs.reassign_to }}" <<'PY'
+            "$PY" - "${{ inputs.mode }}" "${{ inputs.lead_id }}" "${{ inputs.support_manager_id }}" "${{ inputs.reassign_to }}" <<'PY'
             import json
             import sys
             from datetime import datetime
