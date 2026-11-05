@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   LifeBuoy,
@@ -12,13 +12,22 @@ import {
   Calendar,
   MessageCircle,
   Award,
+  Eye,
+  X,
+  Package,
+  Building2,
+  Phone,
+  Mail,
+  UserCheck
 } from 'lucide-react';
 import { formatDateDDMMYYYY, formatTime12Hour } from '../../utils/dateUtils';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
+import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
 
 const SupportDashboard = ({ data }) => {
   const navigate = useNavigate();
   const support = data || {};
+  const [selectedCustomerTicket, setSelectedCustomerTicket] = useState(null);
 
   const totalTickets = support.total_tickets ?? 0;
   const openTickets = support.open_tickets ?? 0;
@@ -398,22 +407,23 @@ const SupportDashboard = ({ data }) => {
                   <th style={{ padding: '8px 10px' }}>Status</th>
                   <th style={{ padding: '8px 10px' }}>Assigned Agent</th>
                   <th style={{ padding: '8px 10px' }}>Created</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {recentTickets.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="text-center py-4 text-muted">No support tickets found.</td>
+                    <td colSpan="7" className="text-center py-4 text-muted">No support tickets found.</td>
                   </tr>
                 ) : (
                   recentTickets.map((ticket, index) => (
                     <tr
                       key={ticket.id}
                       style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background-color 0.15s ease' }}
-                      onClick={() => navigate('/support')}
+                      onClick={() => setSelectedCustomerTicket(ticket)}
                       onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = '#f8fafc'; }}
                       onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
-                      title={`Open ticket #${ticket.id} in the Support Queue`}
+                      title={`View customer profile & purchase details for #${ticket.id}`}
                     >
                       <td style={{ padding: '10px' }}>{index + 1}</td>
                       <td style={{ padding: '10px' }}>
@@ -437,6 +447,20 @@ const SupportDashboard = ({ data }) => {
                       </td>
                       <td style={{ padding: '10px', color: '#475569' }}>{ticket.assigned_agent_name || 'Unassigned'}</td>
                       <td style={{ padding: '10px', color: '#64748b' }}>{formatDateDDMMYYYY(ticket.created_at)}</td>
+                      <td style={{ padding: '10px', textAlign: 'right' }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          style={{ padding: '4px 8px', fontSize: '0.74rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedCustomerTicket(ticket);
+                          }}
+                          title="View customer profile & purchase details"
+                        >
+                          <Eye size={12} /> Profile
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -539,6 +563,151 @@ const SupportDashboard = ({ data }) => {
           </div>
         </div>
       </div>
+
+      {/* SUPPORT CUSTOMER PROFILE & PURCHASE DETAILS MODAL */}
+      {selectedCustomerTicket && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setSelectedCustomerTicket(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '840px',
+              maxHeight: '90vh',
+              padding: '24px',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px', paddingBottom: '12px', borderBottom: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                  color: '#2563eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <Package size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#0f172a' }}>
+                    Support Customer Profile #{selectedCustomerTicket.id}
+                  </h3>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>
+                    {selectedCustomerTicket.customer_name} {selectedCustomerTicket.company_name ? `• ${selectedCustomerTicket.company_name}` : ''}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedCustomerTicket(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', padding: '6px' }}
+                title="Close Profile"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Quick Summary Card */}
+            <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '12px', marginBottom: '18px', border: '1px solid #e2e8f0' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', fontSize: '0.85rem' }}>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>Customer</span>
+                  <strong style={{ color: '#0f172a' }}>{selectedCustomerTicket.customer_name || '—'}</strong>
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>Company</span>
+                  <strong style={{ color: '#0f172a' }}>{selectedCustomerTicket.company_name || '—'}</strong>
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>Contact Phone</span>
+                  <strong style={{ color: '#0f172a' }}>{selectedCustomerTicket.phone || '—'}</strong>
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>Support Status</span>
+                  <span style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: '8px',
+                    fontSize: '0.74rem',
+                    fontWeight: 700,
+                    marginTop: '2px',
+                    ...getStatusStyle(selectedCustomerTicket.support_status || selectedCustomerTicket.onboarding_status),
+                  }}>
+                    {selectedCustomerTicket.status_label || selectedCustomerTicket.support_status || 'New'}
+                  </span>
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>Support Agent</span>
+                  <strong style={{ color: '#0f172a' }}>{selectedCustomerTicket.assigned_agent_name || 'Unassigned'}</strong>
+                </div>
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>Support Manager</span>
+                  <strong style={{ color: '#0f172a' }}>{selectedCustomerTicket.support_manager_name || '—'}</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Dedicated Customer Purchase Details Component */}
+            <CustomerPurchaseDetails
+              purchaseDetails={selectedCustomerTicket.purchase_details}
+              leadId={selectedCustomerTicket.lead_id}
+              customerId={selectedCustomerTicket.customer_id}
+            />
+
+            {/* Modal Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => navigate('/support')}
+                style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+              >
+                Open in Support Queue
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => navigate('/support/assigned-leads')}
+                style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+              >
+                Open in Assigned Leads
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setSelectedCustomerTicket(null)}
+                style={{ fontSize: '0.82rem', padding: '8px 16px' }}
+              >
+                Close Profile
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

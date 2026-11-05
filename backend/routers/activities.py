@@ -6,6 +6,13 @@ from sqlalchemy import or_, and_, desc
 from database import get_db
 from models import LeadActivity, Lead, Customer, Employee, User
 from services.auth import get_current_user
+from services.activity_visibility_service import (
+    apply_activity_visibility_filter,
+    apply_admin_activity_department_filter,
+    apply_support_lead_scope,
+    user_activity_department,
+)
+from services.hierarchy_service import ROLE_ADMIN, normalize_role
 
 router = APIRouter(prefix="/activities", tags=["Activities"])
 
@@ -19,6 +26,7 @@ def get_activities(
     activity_type: Optional[str] = Query(None, description="Alternative alias for activity_type"),
     source: Optional[str] = Query(None, description="Filter by Lead Source (META, WEBSITE, MANUAL, EXCEL)"),
     scope: Optional[str] = Query(None, description="Activity Scope (MY, MANAGER, ADMIN, ALL)"),
+    department: Optional[str] = Query(None, description="Admin-only department filter (SALES, SUPPORT)"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -29,6 +37,22 @@ def get_activities(
     Supports filtering by lead_id, customer_id, employee_id, activity_type, source, and scope.
     """
     query = db.query(LeadActivity).outerjoin(Lead, LeadActivity.lead_id == Lead.id)
+
+    # 0. Strict department isolation. This runs before every user-supplied
+    # filter and cannot be bypassed with scope=ALL or employee_id.
+    query = apply_activity_visibility_filter(query, current_user, db)
+    query = apply_support_lead_scope(query, current_user, db)
+
+    if department is not None and str(department).strip():
+        if normalize_role(current_user.role) != ROLE_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Department filtering is available to Administrators only.",
+            )
+        try:
+            query = apply_admin_activity_department_filter(query, db, department)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # 1. Lead ID Filter
     if lead_id is not None:
@@ -160,6 +184,7 @@ def create_activity(
         activity_type=act_type,
         related_entity_type=related_type,
         related_entity_id=related_id,
+        department=user_activity_department(current_user, db),
         description=desc.strip()
     )
     db.add(new_act)

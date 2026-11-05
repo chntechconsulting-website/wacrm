@@ -44,6 +44,7 @@ from utils.support_status import (
     normalize_support_status,
     support_status_storage_values,
 )
+from services.purchase_details_service import build_support_purchase_details
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -290,9 +291,12 @@ def build_support_dashboard_payload(
         meta = SUPPORT_STATUS_META[support_status]
         recent_tickets.append({
             "id": record.id,
+            "lead_id": record.lead_id,
+            "customer_id": record.customer_id,
             "customer_name": record.customer_name,
             "company_name": record.company_name,
             "phone": record.phone,
+            "email": record.email,
             "product_service": record.product_service,
             "support_status": support_status,
             # Legacy key retained for existing clients.
@@ -303,6 +307,7 @@ def build_support_dashboard_payload(
             "support_manager_name": record.support_manager_name,
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+            "purchase_details": build_support_purchase_details(db, record),
         })
 
     # Customer follow-ups use the same authorized follow-up scope as the

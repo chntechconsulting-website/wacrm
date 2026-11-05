@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY, formatLeadReceivedFull } from '../../utils/dateUtils';
 import IVRCallModal from '../../components/IVR/IVRCallModal';
 import PingoPopupService from '../../services/pingoPopupService';
+import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
 import './Workflow.css';
 import {
   LifeBuoy,
@@ -931,8 +932,8 @@ const SupportQueuePage = () => {
                     </div>
                   )}
 
-                  {/* Itemized Purchased Products Snapshot */}
-                  {selectedTicket.purchased_products && selectedTicket.purchased_products.length > 0 && (
+                  {/* Itemized Purchased Products Snapshot (legacy fallback) */}
+                  {!selectedTicket.purchase_details && selectedTicket.purchased_products && selectedTicket.purchased_products.length > 0 && (
                     <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #e2e8f0' }}>
                       <span style={{ color: '#0f172a', fontWeight: 700, fontSize: '0.8rem', display: 'block', marginBottom: '6px' }}>
                         Purchased Products & Plan:
@@ -965,8 +966,8 @@ const SupportQueuePage = () => {
                     </div>
                   )}
 
-                  {/* Add-ons list */}
-                  {selectedTicket.addons_summary && selectedTicket.addons_summary.length > 0 && (
+                  {/* Add-ons list (legacy fallback) */}
+                  {!selectedTicket.purchase_details && selectedTicket.addons_summary && selectedTicket.addons_summary.length > 0 && (
                     <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                       {selectedTicket.addons_summary.map((add, idx) => (
                         <span key={idx} style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 600 }}>
@@ -975,6 +976,15 @@ const SupportQueuePage = () => {
                       ))}
                     </div>
                   )}
+
+                  {/* Dedicated, read-only Customer Purchase Details */}
+                  <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                    <CustomerPurchaseDetails
+                      purchaseDetails={selectedTicket.purchase_details}
+                      leadId={selectedTicket.lead_id}
+                      compact
+                    />
+                  </div>
 
                   {selectedTicket.customer_requirements && (
                     <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #e2e8f0', fontSize: '0.8rem' }}>

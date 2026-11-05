@@ -14,6 +14,10 @@ class LeadActivity(Base):
     activity_type = Column(String(50), nullable=False)  # CREATED, ASSIGNED, ASSIGNMENT_CHANGED, STATUS_CHANGED, NOTE_ADDED, FOLLOW_UP_CREATED, CONVERTED, LOST, CALL, FOLLOWUP, WHATSAPP
     related_entity_type = Column(String(50), nullable=True)  # LEAD, CUSTOMER, CALL, FOLLOWUP, WHATSAPP, EMPLOYEE
     related_entity_id = Column(Integer, nullable=True)
+    # Immutable department snapshot written at insert time. It is never
+    # re-derived from the lead's current assignee, so a Sales -> Support
+    # handover cannot transfer historical Sales notes to Support.
+    department = Column(String(30), nullable=True, index=True)
     description = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -45,6 +49,7 @@ class LeadActivity(Base):
             "lead_name": lead_name_str,
             "related_entity_type": self.related_entity_type or ("LEAD" if self.lead_id else "CUSTOMER" if self.customer_id else "EMPLOYEE" if self.employee_id else "SYSTEM"),
             "related_entity_id": self.related_entity_id or self.lead_id or self.customer_id or self.employee_id,
+            "department": self.department,
             "description": self.description,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }

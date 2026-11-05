@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY, formatLeadReceivedFull } from '../../utils/dateUtils';
+import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
 import './SupportAssignedLeadsPage.css';
 
 import {
@@ -794,6 +795,13 @@ export default function SupportAssignedLeadsPage() {
                 >
                   Activities & Timeline ({leadActivities.length})
                 </button>
+                <button
+                  type="button"
+                  className={`modal-tab-btn ${activeDrawerTab === 'purchase' ? 'active' : ''}`}
+                  onClick={() => setActiveDrawerTab('purchase')}
+                >
+                  Customer Purchase Details
+                </button>
               </div>
 
               {/* Tab 1: Overview & Contact */}
@@ -963,6 +971,14 @@ export default function SupportAssignedLeadsPage() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Tab 4: Customer Purchase Details */}
+              {activeDrawerTab === 'purchase' && (
+                <CustomerPurchaseDetails
+                  purchaseDetails={selectedLead.purchase_details}
+                  leadId={selectedLead.id}
+                />
               )}
             </div>
 

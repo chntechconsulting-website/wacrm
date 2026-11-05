@@ -429,7 +429,8 @@ async def startup_db_client():
                     "customer_id": "INT NULL",
                     "employee_id": "INT NULL",
                     "related_entity_type": "VARCHAR(50) NULL",
-                    "related_entity_id": "INT NULL"
+                    "related_entity_id": "INT NULL",
+                    "department": "VARCHAR(30) NULL"
                 }
                 for col_name, col_type in missing_act_cols.items():
                     if col_name not in act_cols:
@@ -437,6 +438,15 @@ async def startup_db_client():
                         conn.commit()
                 conn.execute(text("ALTER TABLE lead_activities MODIFY COLUMN lead_id INT NULL"))
                 conn.commit()
+                act_idx_result = conn.execute(text("SHOW INDEX FROM lead_activities"))
+                act_indexes = {row[2] for row in act_idx_result.fetchall()}
+                if "ix_lead_activities_department" not in act_indexes:
+                    conn.execute(text(
+                        "ALTER TABLE lead_activities ADD INDEX "
+                        "ix_lead_activities_department (department)"
+                    ))
+                    conn.commit()
+                    print("Auto-added missing index 'ix_lead_activities_department'.")
                 print("Lead activities table schema synchronized successfully.")
             except Exception as ex:
                 print(f"Lead activities column sync check: {ex}")
@@ -505,6 +515,18 @@ async def startup_db_client():
                         print(f"Auto-added missing column '{col_name}' to 'field_visits' table.")
             except Exception as ex:
                 print(f"Field visits column sync check: {ex}")
+            # support_handoffs schema sync for the immutable purchase snapshot.
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM support_handoffs"))
+                sh_cols = [row[0] for row in result.fetchall()]
+                if "purchase_snapshot" not in sh_cols:
+                    conn.execute(text(
+                        "ALTER TABLE support_handoffs ADD COLUMN purchase_snapshot JSON NULL"
+                    ))
+                    conn.commit()
+                    print("Auto-added 'purchase_snapshot' to 'support_handoffs' table.")
+            except Exception as ex:
+                print(f"Support handoffs column sync check: {ex}")
             # quotations table schema sync
             try:
                 result = conn.execute(text("SHOW COLUMNS FROM quotations"))
@@ -563,6 +585,38 @@ async def startup_db_client():
             db_backfill.close()
     except Exception as ex:
         print(f"Follow-up department ownership backfill check: {ex}")
+
+    # Backfill immutable activity department snapshots for legacy rows. Rows
+    # with no attributable employee remain Admin-only rather than being guessed
+    # into Sales or Support.
+    try:
+        from services.activity_visibility_service import backfill_activity_departments
+
+        db_backfill = SessionLocal()
+        try:
+            updated = backfill_activity_departments(db_backfill)
+            if updated:
+                print(f"Backfilled department ownership for {updated} lead activity row(s).")
+        finally:
+            db_backfill.close()
+    except Exception as ex:
+        print(f"Lead activity department backfill check: {ex}")
+
+    # Capture immutable purchase snapshots for handovers that pre-date the
+    # additive column. Additive only: customers, quotations and prices are
+    # never modified.
+    try:
+        from services.purchase_details_service import backfill_support_purchase_snapshots
+
+        db_backfill = SessionLocal()
+        try:
+            updated = backfill_support_purchase_snapshots(db_backfill)
+            if updated:
+                print(f"Captured purchase snapshots for {updated} Support handover(s).")
+        finally:
+            db_backfill.close()
+    except Exception as ex:
+        print(f"Support purchase snapshot backfill check: {ex}")
 
     # Launch Dynamic Lead Auto-Assignment Background Scheduler
     try:

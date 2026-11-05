@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import QuotationModal from '../../components/Billing/QuotationModal';
+import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
 import { 
   Users, 
   Search, 
@@ -20,6 +22,13 @@ import {
 
 const Customers = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const userRole = (user?.role || '').toUpperCase();
+  const userDept = (user?.department || '').toUpperCase();
+  const isSupportRole = userRole.includes('SUPPORT') || userDept === 'SUPPORT';
+  const isAdmin = userRole === 'ADMIN';
+  const canViewPurchaseDetails = isAdmin || isSupportRole;
+
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -284,6 +293,17 @@ const Customers = () => {
                   </div>
                 </div>
 
+                {/* DEDICATED CUSTOMER PURCHASE DETAILS (SUPPORT & ADMIN ONLY) */}
+                {canViewPurchaseDetails && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <CustomerPurchaseDetails
+                      purchaseDetails={selectedCustomer.purchase_details}
+                      customerId={selectedCustomer.id}
+                      leadId={selectedCustomer.converted_from_lead}
+                    />
+                  </div>
+                )}
+
                 {/* INDEPENDENT BILLING DOCUMENTS SECTION (WAHRMS & BIOMETRIC) */}
                 <div style={{ marginTop: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
@@ -397,10 +417,10 @@ const Customers = () => {
                                     {dType}
                                   </td>
                                   <td style={{ padding: '8px 12px', color: '#64748b' }}>
-                                    {d.issueDateFormatted || '—'}
+                                    {d.issueDateFormatted || 'â€”'}
                                   </td>
                                   <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
-                                    ₹ {(d.grandTotal || 0).toLocaleString('en-IN')}
+                                    â‚¹ {(d.grandTotal || 0).toLocaleString('en-IN')}
                                   </td>
                                   <td style={{ padding: '8px 12px' }}>
                                     <span style={{

@@ -81,6 +81,10 @@ class SupportHandoffOut(BaseModel):
     biometric_device_count: Optional[int] = 0
     deal_adjustment_reason: Optional[str] = None
 
+    # Read-only Support-facing purchase projection. It is built from the
+    # immutable handover snapshot plus the linked quotation/proforma/invoice.
+    purchase_details: Optional[Dict[str, Any]] = None
+
     paid_amount: float
     payment_status: str
     payment_date: Optional[datetime] = None

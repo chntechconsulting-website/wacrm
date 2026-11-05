@@ -14,6 +14,7 @@ from models.notification import Notification
 from models.activity import LeadActivity
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.audit_log import AuditLog
+from services.purchase_details_service import build_purchase_snapshot
 from utils.support_status import (
     SUPPORT_STATUS_NEW,
     SUPPORT_STATUS_RESOLVED,
@@ -24,6 +25,76 @@ from utils.support_status import (
 
 
 logger = logging.getLogger("workflow_service")
+
+# Saved bundle subscription lines keep structured values as explicit keys.
+# Legacy lines may only contain the human-readable block produced by the
+# quotation editor, so the same labels are parsed as a fallback.
+_DURATION_RE = re.compile(r"Duration\s*:?\s*(\d+(?:\.\d+)?)", re.I)
+_ONBOARDING_RE = re.compile(r"No\.?\s*Of\s*Onboardings?\s*:?\s*(\d+(?:\.\d+)?)", re.I)
+_PLAN_NAME_RE = re.compile(r"(?:^|\n)\s*Plan\s*:?\s*([^\n]+)", re.I)
+
+
+def _positive_int(value) -> Optional[int]:
+    """Return a positive integer or None without inventing a default."""
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _parse_bundle_line_details(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Read plan/duration/onboarding values from explicit keys or description."""
+    description = str(item.get("description") or item.get("name") or "")
+    plan_code = str(
+        item.get("planCode") or item.get("plan_code") or ""
+    ).strip().lower()
+    plan_name = str(
+        item.get("planName") or item.get("plan_name") or ""
+    ).strip()
+
+    if not plan_code:
+        try:
+            from services.billing_catalog import extract_plan_code
+
+            plan_code = extract_plan_code(item) or ""
+        except Exception:
+            plan_code = ""
+    if not plan_name:
+        plan_match = _PLAN_NAME_RE.search(description)
+        if plan_match:
+            plan_name = plan_match.group(1).strip()
+
+    duration = _positive_int(
+        item.get("durationMonths")
+        if item.get("durationMonths") is not None
+        else item.get("duration_months")
+    )
+    if duration is None:
+        match = _DURATION_RE.search(description)
+        if match:
+            duration = _positive_int(match.group(1))
+
+    onboarding_count = _positive_int(
+        item.get("onboardingCount")
+        if item.get("onboardingCount") is not None
+        else item.get("onboarding_count")
+    )
+    if onboarding_count is None:
+        match = _ONBOARDING_RE.search(description)
+        if match:
+            onboarding_count = _positive_int(match.group(1))
+
+    return {
+        "plan_code": plan_code,
+        "plan_name": plan_name,
+        "duration_months": duration,
+        "onboarding_count": onboarding_count,
+    }
 
 class WorkflowService:
     """
@@ -690,6 +761,16 @@ class WorkflowService:
             rate = float(itm.get("rate") or itm.get("price") or itm.get("unitPrice") or 0.0)
             gst_rate = float(itm.get("gstRate") or itm.get("gst_rate") or 0.18)
             discount = float(itm.get("discount") or 0.0)
+            line_details = _parse_bundle_line_details(itm)
+            addon_code = str(
+                itm.get("addonCode") or itm.get("addon_code") or ""
+            ).strip().lower()
+            pricing_type = str(
+                itm.get("pricingType") or itm.get("pricing_type") or ""
+            ).strip().lower()
+            billing_unit = str(
+                itm.get("billingUnit") or itm.get("billing_unit") or ""
+            ).strip().lower()
 
             taxable_rate = rate * (1 - (discount / 100.0 if discount > 0 else 0))
             item_subtotal = round(taxable_rate * qty, 2)
@@ -733,7 +814,13 @@ class WorkflowService:
             if is_bio_item and not is_service and any(w in desc.lower() for w in ["terminal", "device", "face", "fingerprint", "machine", "hardware terminal", "mb160"]):
                 biometric_devices += qty
 
-            # Look for explicit employee / user licence count in description or item configuration
+            # Look for explicit employee / onboarding counts first. These are
+            # written by the quotation editor and are authoritative. Only fall
+            # back to the description text for legacy documents.
+            if line_details["onboarding_count"]:
+                if extracted_licences is None or line_details["onboarding_count"] > extracted_licences:
+                    extracted_licences = line_details["onboarding_count"]
+
             user_match = re.search(r'(?:No\s+Of\s+onboardings?|onboardings?|licen[cs]es?|users?|employees?|staff)[:\s]+(\d+)', desc, re.I)
             if not user_match:
                 user_match = re.search(r'(\d+)\s*(?:users?|employees?|onboardings?|licen[cs]es?)', desc, re.I)
@@ -744,7 +831,7 @@ class WorkflowService:
 
             # Check if item is an add-on
             is_bundle_item = bool(itm.get("isBundleItem") or itm.get("is_bundle_item") or itm.get("bundleId") or itm.get("bundle"))
-            explicit_addon = bool(itm.get("is_addon") or itm.get("isAddon"))
+            explicit_addon = bool(itm.get("is_addon") or itm.get("isAddon") or addon_code)
             keyword_addon = (
                 any(w in item_code for w in ["SETUP", "INSTALL", "INTEGRATION", "TRAINING", "CUSTOM", "BRIDGE", "ADDON", "SIM"]) or
                 any(w in desc.lower() for w in ["setup", "deployment", "integration", "training", "customization", "cloud bridge", "sim card"])
@@ -754,6 +841,7 @@ class WorkflowService:
             item_dict = {
                 "id": itm.get("id") or idx + 1,
                 "item_code": item_code,
+                "addon_code": addon_code,
                 "name": itm.get("name") or desc.split("\n")[0],
                 "description": desc,
                 "hsn": hsn,
@@ -766,6 +854,12 @@ class WorkflowService:
                 "total": item_total,
                 "is_bundle_item": is_bundle_item,
                 "is_addon": is_addon,
+                "pricing_type": pricing_type,
+                "billing_unit": billing_unit,
+                "plan_code": line_details["plan_code"],
+                "plan_name": line_details["plan_name"],
+                "duration_months": line_details["duration_months"],
+                "onboarding_count": line_details["onboarding_count"],
                 "category": "BIOMETRIC" if is_bio_item else "WAHRMS"
             }
             parsed_items.append(item_dict)
@@ -1171,6 +1265,14 @@ class WorkflowService:
             support_handoff.support_manager_name = manager_name
             support_handoff.customer_requirements = won_data.get("customer_requirements") or lead.requirement_notes
             support_handoff.won_at = now_utc
+
+        # Capture the immutable purchase snapshot on first handover only. A
+        # later catalogue/document revision must not rewrite what the customer
+        # actually purchased.
+        if not support_handoff.purchase_snapshot:
+            support_handoff.purchase_snapshot = build_purchase_snapshot(
+                support_handoff, proforma, finance_handoff
+            )
 
         db.commit()
         db.refresh(support_handoff)

@@ -47,6 +47,7 @@ from services.delete_request_service import handle_entity_deletion
 from services.audit import log_audit
 from services.reinquiry_service import ReInquiryService
 from services.followup_visibility_service import apply_followup_visibility_filter
+from services.purchase_details_service import build_support_purchase_details
 from services.hierarchy_service import (
     get_team_employee_ids_from_user,
     normalize_role,
@@ -61,6 +62,7 @@ from services.excel_service import (
     parse_and_validate_excel_leads,
     generate_error_rows_excel
 )
+from services.activity_visibility_service import can_view_activity
 from utils.support_status import (
     InvalidSupportStatusError,
     require_support_status,
@@ -97,9 +99,18 @@ def log_lead_activity(db: Session, lead_id: int, performed_by_id: Optional[int],
     )
     db.add(activity)
 
-def build_lead_out(lead: Lead) -> LeadOut:
+def build_lead_out(
+    lead: Lead,
+    current_user: Optional[User] = None,
+    db: Optional[Session] = None
+) -> LeadOut:
     activities_out = []
     for act in lead.activities:
+        # Department isolation is enforced on every embedded activity list, not
+        # only on the shared /activities feed. Sales users never receive
+        # Support onboarding notes and vice versa.
+        if not can_view_activity(act, current_user, db):
+            continue
         perf_name = act.performed_by_employee.name if act.performed_by_employee else "System"
         activities_out.append(LeadActivityOut(
             id=act.id,
@@ -434,7 +445,7 @@ def list_leads(
     order_clause = asc(Lead.created_at) if is_asc else desc(Lead.created_at)
     leads = query.order_by(order_clause, desc(Lead.id) if not is_asc else asc(Lead.id)).offset(offset).limit(eff_page_size).all()
 
-    items = [build_lead_out(l) for l in leads]
+    items = [build_lead_out(l, current_user, db) for l in leads]
     return leads_page_response(total, items, eff_page, eff_page_size)
 
 @router.get("/stats")
@@ -583,7 +594,7 @@ def list_my_leads(
     eff_page, eff_page_size, offset = resolve_leads_pagination(page, page_size, skip, limit)
     leads = query.order_by(desc(Lead.created_at)).offset(offset).limit(eff_page_size).all()
 
-    items = [build_lead_out(l) for l in leads]
+    items = [build_lead_out(l, current_user, db) for l in leads]
     return leads_page_response(total, items, eff_page, eff_page_size)
 
 @router.get("/export/template")
@@ -738,7 +749,7 @@ def create_lead(
         details=details_str
     )
 
-    return build_lead_out(lead)
+    return build_lead_out(lead, current_user, db)
 
 
 # =========================================================================
@@ -956,6 +967,7 @@ def get_support_assigned_leads(
             "next_followup_date": l.followup_date.isoformat() if l.followup_date else None,
             "next_followup_time": l.followup_time,
             "notes": (h.support_notes if h else None) or l.requirement_notes,
+            "purchase_details": build_support_purchase_details(db, h) if h else None,
             "activities_count": len(l.activities) if l.activities else 0
         })
 
@@ -965,6 +977,62 @@ def get_support_assigned_leads(
         "page": (skip // limit) + 1,
         "limit": limit
     }
+
+
+@router.get("/{lead_id}/purchase-details")
+def get_lead_purchase_details(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Read-only customer purchase details for the Support handover.
+
+    Only Admin and Support roles may call this endpoint. Sales roles are
+    rejected even when they can otherwise view the lead, so the Support
+    purchase view cannot become an API-level leak. The projection reuses the
+    immutable handover snapshot and never creates or re-prices records.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Sales users cannot access Support purchase details."
+        )
+    if norm_role != ROLE_ADMIN and not _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Only Support team and Admin can access purchase details."
+        )
+
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if norm_role != ROLE_ADMIN and not is_support_lead_authorized(lead, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: This customer is not assigned to your Support team."
+        )
+
+    from models.workflow import SupportHandoff
+
+    handoff = (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id == lead.id)
+        .order_by(desc(SupportHandoff.created_at))
+        .first()
+    )
+    if not handoff:
+        raise HTTPException(
+            status_code=404,
+            detail="No Sales handover exists for this lead yet."
+        )
+
+    details = build_support_purchase_details(db, handoff)
+    if not details:
+        raise HTTPException(status_code=404, detail="Purchase details are not available.")
+    return details
 
 
 @router.get("/support/team-members")
@@ -1158,7 +1226,7 @@ def get_lead(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access forbidden: Support team cannot access this Sales lead."
             )
-        return build_lead_out(lead)
+        return build_lead_out(lead, current_user, db)
 
     if not user_has_permission(current_user, "leads", "view", db):
         raise HTTPException(
@@ -1184,7 +1252,7 @@ def get_lead(
                 detail="Access denied. You can only view leads assigned to your team or unassigned leads."
             )
 
-    return build_lead_out(lead)
+    return build_lead_out(lead, current_user, db)
 
 @router.put("/{lead_id}", response_model=LeadOut)
 def update_lead(
@@ -1320,7 +1388,7 @@ def update_lead(
         details=f"Lead #{lead.id} ({lead.name}) updated by {current_user.username}."
     )
 
-    return build_lead_out(lead)
+    return build_lead_out(lead, current_user, db)
 
 @router.put("/{lead_id}/assign", response_model=LeadOut)
 def assign_lead(
@@ -1384,7 +1452,7 @@ def assign_lead(
     )
 
     db.refresh(lead)
-    return build_lead_out(lead)
+    return build_lead_out(lead, current_user, db)
 
 @router.put("/{lead_id}/status", response_model=LeadOut)
 def change_lead_status(
@@ -1467,7 +1535,7 @@ def change_lead_status(
 
     db.commit()
     db.refresh(lead)
-    return build_lead_out(lead)
+    return build_lead_out(lead, current_user, db)
 
 @router.get("/{lead_id}/proformas")
 def get_lead_proformas_list(
@@ -1622,7 +1690,7 @@ def add_lead_note(
 
     db.commit()
     db.refresh(lead)
-    return build_lead_out(lead)
+    return build_lead_out(lead, current_user, db)
 
 @router.delete("/{lead_id}")
 def delete_lead(

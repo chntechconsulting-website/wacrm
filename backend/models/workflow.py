@@ -94,6 +94,10 @@ class SupportHandoff(Base):
     selected_bundle = Column(String(100), nullable=True)
     product_category = Column(String(50), nullable=True)
     addons_summary = Column(JSON, nullable=True)
+    # Immutable purchase snapshot captured at the Sales -> Support handover.
+    # It preserves the package, plan, duration and purchased add-on prices even
+    # if the linked quotation/proforma is revised later.
+    purchase_snapshot = Column(JSON, nullable=True)
     biometric_device_count = Column(Integer, default=0, nullable=True)
     deal_adjustment_reason = Column(Text, nullable=True)
     invoice_number = Column(String(100), nullable=True)

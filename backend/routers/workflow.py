@@ -23,6 +23,7 @@ from schemas.workflow import (
 from services.auth import get_current_user, require_permission
 from services.permission_service import user_has_permission, get_user_view_scope
 from services.workflow_service import WorkflowService
+from services.purchase_details_service import build_support_purchase_details
 from services.hierarchy_service import (
     normalize_role,
     get_team_employee_ids_from_user,
@@ -49,6 +50,14 @@ def get_team_employee_ids(manager_emp_id: int, db: Session) -> List[int]:
     subordinates = db.query(Employee.id).filter(Employee.manager_id == manager_emp_id).all()
     sub_ids = [s[0] for s in subordinates]
     return [manager_emp_id] + sub_ids
+
+
+def support_handoff_out(record: SupportHandoff, db: Session) -> SupportHandoffOut:
+    """Serialize a Support handover with its read-only purchase projection."""
+    output = SupportHandoffOut.model_validate(record)
+    return output.model_copy(
+        update={"purchase_details": build_support_purchase_details(db, record)}
+    )
 
 # ============================================================================
 # FINANCE WORKFLOW ENDPOINTS
@@ -417,7 +426,7 @@ def list_support_handoffs(
         )
 
     records = q.order_by(desc(SupportHandoff.created_at)).offset((page - 1) * limit).limit(limit).all()
-    return records
+    return [support_handoff_out(record, db) for record in records]
 
 @router.get("/support/handoffs/{support_id}", response_model=SupportHandoffOut)
 def get_support_handoff_detail(
@@ -461,7 +470,7 @@ def get_support_handoff_detail(
             if not current_emp or (record.support_manager_id not in team_ids and record.assigned_agent_id not in team_ids):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
-    return record
+    return support_handoff_out(record, db)
 
 @router.put("/support/handoffs/{support_id}/status", response_model=SupportHandoffOut)
 def update_support_onboarding_status(
@@ -521,7 +530,7 @@ def update_support_onboarding_status(
             update_data=payload.dict(exclude_unset=True),
             current_user=current_user
         )
-        return updated
+        return support_handoff_out(updated, db)
     except InvalidSupportStatusError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except ValueError as ve:
@@ -553,7 +562,7 @@ def reassign_support_manager(
             new_manager_id=payload.support_manager_id,
             current_user=current_user
         )
-        return updated
+        return support_handoff_out(updated, db)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
@@ -651,13 +660,13 @@ def get_deal_workflow_summary(
 
     finance_dict = None
     if finance:
-        finance_dict = FinanceHandoffOut.from_orm(finance).dict()
+        finance_dict = FinanceHandoffOut.model_validate(finance).model_dump()
         if not can_manage_finance:
             finance_dict["bank_reference"] = None
             finance_dict["bank_name"] = None
             finance_dict["internal_finance_notes"] = None
 
-    support_dict = SupportHandoffOut.from_orm(support).dict() if support else None
+    support_dict = support_handoff_out(support, db).model_dump() if support else None
 
     return {
         "ok": True,
