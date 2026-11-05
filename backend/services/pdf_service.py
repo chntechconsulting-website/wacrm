@@ -545,17 +545,28 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         desc = item.get("description", "Item")
         # Split multiline descriptions nicely, supporting linebreaks or delimiter patterns
         raw_str = str(desc)
-        raw_str = re.sub(r'No\s*Of\s*[\r\n]+\s*Onboardings?', 'No Of Onboardings', raw_str, flags=re.I)
+        raw_str = re.sub(r'No\.?\s*Of\s*[\r\n]+\s*Onboardings?', 'No. of Onboardings', raw_str, flags=re.I)
         raw_str = re.sub(r'Unit\s*[\r\n]+\s*Price', 'Unit Price', raw_str, flags=re.I).strip()
         raw_lines = [l.strip() for l in raw_str.split("\n") if l.strip()]
         desc_parts = []
-        delimiter_regex = re.compile(r'(?=(?:WaPayroll|Duration\s*:?|(?:No\s*Of\s+onboardings?|(?<!No\s*Of\s+)onboardings?)\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))', re.I)
+        # Match whole labels so the word "Onboardings" inside "No. of Onboardings"
+        # is consumed together with its label. Each label stays with its value.
+        label_regex = re.compile(r'\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|SIM\s*Card|FACE\+FINGER)\b\s*:?', re.I)
         for line_seg in raw_lines:
-            parts = [p.strip() for p in delimiter_regex.split(line_seg) if p.strip()]
-            if len(parts) > 1:
-                desc_parts.extend(parts)
-            else:
+            normalized = re.sub(r'\s+', ' ', line_seg).strip()
+            matches = list(label_regex.finditer(normalized))
+            if not matches:
                 desc_parts.append(line_seg)
+                continue
+            base = normalized[:matches[0].start()].strip()
+            if base:
+                desc_parts.append(base)
+            for i, match in enumerate(matches):
+                start = match.start()
+                end = matches[i + 1].start() if i + 1 < len(matches) else len(normalized)
+                segment = normalized[start:end].strip()
+                if segment:
+                    desc_parts.append(segment)
         if not desc_parts:
             desc_parts = ["Item"]
         desc_flowable = [Paragraph(f"<b>{desc_parts[0]}</b>", style_td)]

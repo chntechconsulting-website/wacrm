@@ -53,8 +53,7 @@ export function splitDescriptionIntoLines(rawDescription) {
   
   // Normalize and mend any accidental linebreaks inside key labels
   let rawStr = String(rawDescription)
-    .replace(/No\s*Of\s*[\r\n]+\s*Onboardings?/gi, 'No Of Onboardings')
-    .replace(/No\s*of\s*[\r\n]+\s*onboardings?/gi, 'No Of onboardings')
+    .replace(/No\.?\s*Of\s*[\r\n]+\s*Onboardings?/gi, 'No. of Onboardings')
     .replace(/Unit\s*[\r\n]+\s*Price/gi, 'Unit Price')
     .trim();
 
@@ -62,17 +61,27 @@ export function splitDescriptionIntoLines(rawDescription) {
   const rawLines = rawStr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   
   const finalLines = [];
-  // Notice we use negative lookbehind or non-overlapping pattern so "Onboardings" does not split "No Of onboardings"
-  const delimiterPattern = /(?=(?:WaPayroll|Duration\s*:?|(?:No\s*Of\s+onboardings?|(?<!No\s*Of\s+)onboardings?)\s*:?|Unit\s*Price\s*:?|Price\s*per\s*user\s*:?|SIM\s*Card|FACE\+FINGER))/i;
-  
+  // Match whole labels so the word "Onboardings" inside "No. of Onboardings"
+  // is consumed together with its label. Each label stays with its value.
+  const labelPattern = /\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|SIM\s*Card|FACE\+FINGER)\b\s*:?/gi;
+
   for (const line of rawLines) {
-    const normalized = line.replace(/\s+/g, ' ');
-    const parts = normalized.split(delimiterPattern).map(p => p.trim()).filter(Boolean);
-    if (parts.length > 1) {
-      finalLines.push(...parts);
-    } else {
+    const normalized = line.replace(/\s+/g, ' ').trim();
+    const matches = [...normalized.matchAll(labelPattern)];
+    if (matches.length === 0) {
       finalLines.push(line);
+      continue;
     }
+
+    const base = normalized.slice(0, matches[0].index).trim();
+    if (base) finalLines.push(base);
+
+    matches.forEach((match, index) => {
+      const start = match.index;
+      const end = index + 1 < matches.length ? matches[index + 1].index : normalized.length;
+      const segment = normalized.slice(start, end).trim();
+      if (segment) finalLines.push(segment);
+    });
   }
   
   return finalLines.length > 0 ? finalLines : ['—'];
