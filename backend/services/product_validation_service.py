@@ -57,7 +57,8 @@ class ProductValidationService:
     WAHRMS_BUNDLE_CODES = {
         "hr_atm",
         "hr_payroll",
-        "hr_atm_payroll"  # Note: hr_atm_payroll bundle contains a biometric hardware package, making it mixed!
+        "hr_atm_payroll",
+        "bio_payroll",  # Biometric + Payroll software subscription (no hardware line)
     }
 
     # Explicit physical biometric hardware keywords
@@ -157,7 +158,7 @@ class ProductValidationService:
                 is_wahrms = True
                 reasons.append(f"SAC code '{hsn}' indicates software / cloud subscription")
 
-        if any(code in item_code for code in ["HR_ATM_SUB", "HR_PAYROLL_SUB", "PAYROLL_SETUP", "WAHRMS_"]):
+        if any(code in item_code for code in ["HR_ATM_SUB", "HR_PAYROLL_SUB", "HR_ATM_PAYROLL_SUB", "BIO_PAYROLL_SUB", "PAYROLL_SETUP", "WAHRMS_"]):
             is_wahrms = True
             reasons.append(f"Item code '{item_code}' indicates WAHRMS cloud software module")
 

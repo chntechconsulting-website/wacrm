@@ -283,13 +283,53 @@
 
 .wahrms-bundle-cards-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1024px) {
+  .wahrms-bundle-cards-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
   .wahrms-bundle-cards-grid {
     grid-template-columns: 1fr;
+  }
+
+  .quote-modal-header {
+    padding: 14px 16px;
+  }
+
+  .quote-modal-body {
+    padding: 16px;
+  }
+
+  .quote-modal-footer {
+    padding: 12px 16px;
+  }
+
+  .quote-footer-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .quote-footer-actions .btn {
+    flex: 1 1 calc(50% - 5px);
+    justify-content: center;
+  }
+
+  .quote-footer-actions .btn:last-child {
+    flex-basis: 100%;
+  }
+
+  .wahrms-bundle-header {
+    flex-wrap: wrap;
+  }
+
+  .wahrms-bundle-header > div:first-child {
+    flex: 1 1 100%;
   }
 }
 
@@ -415,6 +455,86 @@
 .wahrms-feature-check {
   color: #0f766e;
   flex-shrink: 0;
+}
+
+.wahrms-plan-options {
+  margin: 0 0 12px 0;
+  padding: 10px 9px;
+  border-radius: 9px;
+  background: rgba(240, 253, 250, 0.75);
+  border: 1px solid #ccfbf1;
+}
+
+.wahrms-bundle-card:not(.selected) .wahrms-plan-options {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.wahrms-plan-options-label {
+  font-size: 0.66rem;
+  font-weight: 800;
+  color: #0f766e;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.wahrms-plan-option-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wahrms-plan-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.wahrms-plan-option:hover {
+  border-color: #5eead4;
+  background: #f0fdfa;
+}
+
+.wahrms-plan-option.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(15, 118, 110, 0.25);
+}
+
+.wahrms-plan-option.custom {
+  border-style: dashed;
+}
+
+.wahrms-plan-option.custom.active {
+  border-style: solid;
+}
+
+.wahrms-plan-name {
+  font-size: 0.73rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.wahrms-plan-price {
+  font-size: 0.67rem;
+  font-weight: 600;
+  opacity: 0.85;
+  text-align: right;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .wahrms-bundle-card-footer {

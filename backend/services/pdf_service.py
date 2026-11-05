@@ -6,6 +6,7 @@ Builds separate, pixel-perfect PDF documents using ReportLab.
 """
 
 import io
+import re
 from datetime import datetime
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -545,13 +546,16 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         desc = item.get("description", "Item")
         # Split multiline descriptions nicely, supporting linebreaks or delimiter patterns
         raw_str = str(desc)
+        # ReportLab's built-in fonts do not include the Indian rupee glyph.
+        # Saved descriptions may contain it, so render a readable equivalent.
+        raw_str = raw_str.replace("₹", "Rs. ")
         raw_str = re.sub(r'No\.?\s*Of\s*[\r\n]+\s*Onboardings?', 'No. of Onboardings', raw_str, flags=re.I)
         raw_str = re.sub(r'Unit\s*[\r\n]+\s*Price', 'Unit Price', raw_str, flags=re.I).strip()
         raw_lines = [l.strip() for l in raw_str.split("\n") if l.strip()]
         desc_parts = []
         # Match whole labels so the word "Onboardings" inside "No. of Onboardings"
         # is consumed together with its label. Each label stays with its value.
-        label_regex = re.compile(r'\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|SIM\s*Card|FACE\+FINGER)\b\s*:?', re.I)
+        label_regex = re.compile(r'\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|Plan(?=\s*:)|SIM\s*Card|FACE\+FINGER)\b\s*:?', re.I)
         for line_seg in raw_lines:
             normalized = re.sub(r'\s+', ' ', line_seg).strip()
             matches = list(label_regex.finditer(normalized))

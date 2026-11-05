@@ -37,11 +37,20 @@ import {
   calculateBundleQuantity,
   createBundleSubscriptionFields,
   formatBundleDescription,
+  getPlanCodeFromItems,
   isBundleSubscriptionItem,
   parseBundleDetail,
   toNonNegativeNumber,
-  toPositiveInteger
+  toPositiveInteger,
+  validateBundlePlanLines
 } from '../../utils/bundleLineItems';
+import {
+  FALLBACK_WAHRMS_BUNDLES,
+  getBundlePlans,
+  getDefaultPlanCode,
+  getPlanByCode,
+  WAHRMS_PACKAGE_CODES
+} from '../../utils/billingPackages';
 import DocumentPdfPreviewModal from './PdfPreviewModal';
 import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
@@ -137,114 +146,6 @@ export const formatItemDescriptionForEditor = (itemOrDesc) => {
 };
 
 export const PRESET_SERVICES = ADD_ON_SERVICES;
-
-export const FALLBACK_WAHRMS_BUNDLES = [
-  {
-    bundleCode: 'hr_atm',
-    name: 'HR + ATM',
-    tagline: 'Core HR with attendance & time.',
-    description: 'Integrated employee directory, leave management, and real-time biometric attendance capture.',
-    badge: null,
-    features: [
-      'Core HR & Employee Directory',
-      'Attendance & Time Tracking',
-      'Leave & Holiday Management',
-      'Biometric Device Integration'
-    ],
-    items: [
-      {
-        item_code: 'HR_ATM_SUB',
-        name: 'WAHRMS HR + Attendance Subscription',
-        description: 'WAHRMS HR + Payroll  + Biometric  Integration',
-        hsn: '998314',
-        qty: 120,
-        rate: 45,
-        gstRate: 0.18,
-        discount: 0
-      },
-      {
-        item_code: 'BIO_INTEGRATION',
-        name: 'Biometric Integration',
-        description: 'Biometric Integration',
-        hsn: '998314',
-        qty: 1,
-        rate: 4999,
-        gstRate: 0.18,
-        discount: 0
-      }
-    ]
-  },
-  {
-    bundleCode: 'hr_atm_payroll',
-    name: 'HR + ATM + Payroll',
-    tagline: 'The full suite.',
-    description: 'The complete all-in-one workforce powerhouse: Core HR, biometric attendance, statutory payroll, and self-service.',
-    badge: 'Full Suite • Best Value',
-    features: [
-      'Core HR & Lifecycle Management',
-      'Biometric Attendance Sync',
-      'Statutory Payroll & Compliance Engine',
-      'One-Click Payslips & Direct Bank Advice'
-    ],
-    items: [
-      {
-        item_code: 'HR_ATM_PAYROLL_SUB',
-        name: 'WAHRMS Complete Suite (HR + ATM + Payroll) Subscription',
-        description: 'WAHRMS HR + Payroll  + Biometric  Integration',
-        hsn: '998314',
-        qty: 120,
-        rate: 65,
-        gstRate: 0.18,
-        discount: 0
-      },
-      {
-        item_code: 'BIO_PAYROLL_PACKAGE',
-        name: 'bio & payroll Integrated Package',
-        description: 'bio & payroll Integrated Package',
-        hsn: '85437099',
-        qty: 1,
-        rate: 24500,
-        gstRate: 0.18,
-        discount: 0
-      }
-    ]
-  },
-  {
-    bundleCode: 'hr_payroll',
-    name: 'HR + Payroll',
-    tagline: 'Core HR with payroll & statutory.',
-    description: 'Comprehensive employee records paired with full salary computation, payslips, PF, ESI, TDS, and statutory compliance.',
-    badge: null,
-    features: [
-      'Core HR & Employee Profiles',
-      'Statutory Payroll Engine',
-      'PF, ESI, PT & TDS Filings',
-      'One-Click Payslips & Direct Bank Advice'
-    ],
-    items: [
-      {
-        item_code: 'HR_PAYROLL_SUB',
-        name: 'WAHRMS HR + Payroll Cloud Subscription',
-        description: 'WAHRMS HR + Payroll  + Biometric  Integration',
-        hsn: '998314',
-        qty: 120,
-        rate: 50,
-        gstRate: 0.18,
-        discount: 0
-      },
-      {
-        item_code: 'PAYROLL_SETUP',
-        name: 'WA Payroll Cloud Setup & Deployment',
-        description: 'WA Payroll Cloud Setup & Deployment',
-        hsn: '998315',
-        qty: 1,
-        rate: 5000,
-        gstRate: 0.18,
-        discount: 0
-      }
-    ]
-  }
-];
 
 export const BIOMETRIC_ADD_ON_SERVICES = [
   { 
@@ -443,6 +344,11 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
   const durationMonths = item.durationMonths ?? item.duration_months ?? parsed.durationMonths ?? '';
   const onboardingCount = item.onboardingCount ?? item.onboarding_count ?? parsed.onboardingCount ?? '';
   const rate = Number(item.rate ?? item.unitPrice ?? item.price ?? 0);
+  const planName = String(item.planName || item.plan_name || parsed.planName || '').trim();
+  const planCode = String(
+    item.planCode || item.plan_code || getPlanCodeFromItems([{ ...item, description: rawDescription }]) || ''
+  ).toLowerCase();
+  const isCustomPlan = planCode === 'custom';
   const baseDescription = item.baseDescription || parsed.baseDescription || rawDescription;
   const hasStructuredFields = item.durationMonths !== undefined
     || item.duration_months !== undefined
@@ -458,10 +364,14 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
     itemCode: item.itemCode || item.item_code || '',
     name: item.name || '',
     baseDescription,
+    planCode: isBundleDetail ? planCode : '',
+    planName: isBundleDetail ? planName : '',
+    planRate: isBundleDetail ? (isCustomPlan ? null : rate) : null,
+    isCustomPlan: isBundleDetail && isCustomPlan,
     durationMonths,
     onboardingCount,
     description: isBundleDetail
-      ? formatBundleDescription({ baseDescription, durationMonths, onboardingCount, unitPrice: rate })
+      ? formatBundleDescription({ baseDescription, planName, durationMonths, onboardingCount, unitPrice: rate })
       : formatItemDescriptionForEditor(rawDescription),
     hsn: item.hsn || item.hsnCode || (isBio ? '85437099' : '998314'),
     qty: isBundleDetail
@@ -476,7 +386,7 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
   };
 };
 
-const buildMasterBundleLineItem = (item, idx, bundleCode, isBio) => {
+const buildMasterBundleLineItem = (item, idx, bundleCode, isBio, planCode = '', bundlePlans = []) => {
   const bundleMarker = {
     ...item,
     isBundleItem: true,
@@ -496,7 +406,7 @@ const buildMasterBundleLineItem = (item, idx, bundleCode, isBio) => {
   };
 
   if (isBundleDetail) {
-    const detailFields = createBundleSubscriptionFields(item);
+    const detailFields = createBundleSubscriptionFields(item, planCode, bundlePlans);
     return {
       ...baseFields,
       ...detailFields,
@@ -567,6 +477,11 @@ export default function QuotationModal({
   const [selectedBundle, setSelectedBundle] = useState(
     initialData.selectedBundle || initialData.selected_bundle || (!isEditMode ? 'hr_atm' : null)
   );
+  const [selectedPlan, setSelectedPlan] = useState(() => {
+    const savedPlan = initialData.selectedPlan || initialData.selected_plan
+      || getPlanCodeFromItems(initialData.lineItems || []);
+    return String(savedPlan || (isEditMode ? '' : 'pro')).toLowerCase();
+  });
 
 
   // Fetch bundles from backend master API with graceful fallback handling
@@ -627,6 +542,11 @@ export default function QuotationModal({
 
       const defaultBundleCode = incomingCategory === 'biometric' ? 'bio_standard' : 'hr_atm';
       const incomingBundle = initialData.selectedBundle || initialData.selected_bundle || null;
+      const incomingPlan = String(
+        initialData.selectedPlan || initialData.selected_plan
+        || getPlanCodeFromItems(initialData.lineItems || [])
+        || ''
+      ).toLowerCase();
       if (incomingBundle) {
         setSelectedBundle(incomingBundle);
       } else if (!isEditMode && (!initialData.lineItems || initialData.lineItems.length === 0)) {
@@ -637,15 +557,20 @@ export default function QuotationModal({
 
       if (initialData.lineItems && Array.isArray(initialData.lineItems) && initialData.lineItems.length > 0) {
         const isBio = incomingCategory === 'biometric';
+        setSelectedPlan(incomingPlan);
         setLineItems(initialData.lineItems.map((item, idx) => buildSavedLineItem(item, idx, incomingBundle, isBio)));
       } else {
         const defaultCode = incomingBundle || defaultBundleCode;
         const activeBundleObj = bundles.find(b => (b.bundleCode || b.bundle_code) === defaultCode) 
           || (incomingCategory === 'biometric' ? FALLBACK_BIOMETRIC_BUNDLES[0] : FALLBACK_WAHRMS_BUNDLES[0]);
         const targetCode = activeBundleObj.bundleCode || activeBundleObj.bundle_code;
+        const availablePlans = getBundlePlans(activeBundleObj);
+        const targetPlanCode = getPlanByCode(availablePlans, incomingPlan)?.code
+          || getDefaultPlanCode(availablePlans);
         setSelectedBundle(targetCode);
+        setSelectedPlan(targetPlanCode);
         const isBio = incomingCategory === 'biometric';
-        setLineItems((activeBundleObj.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, targetCode, isBio)));
+        setLineItems((activeBundleObj.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, targetCode, isBio, targetPlanCode, availablePlans)));
       }
 
       setTerms(
@@ -674,7 +599,8 @@ export default function QuotationModal({
       return initialData.lineItems.map((item, idx) => buildSavedLineItem(item, idx, incomingBundle, initialCategory === 'biometric'));
     }
     const defaultBundle = FALLBACK_WAHRMS_BUNDLES[0];
-    return (defaultBundle.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, defaultBundle.bundleCode, false));
+    const defaultPlan = getDefaultPlanCode(getBundlePlans(defaultBundle));
+    return (defaultBundle.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, defaultBundle.bundleCode, false, defaultPlan, getBundlePlans(defaultBundle)));
   });
 
   const [terms, setTerms] = useState(() => 
@@ -721,14 +647,20 @@ export default function QuotationModal({
   };
 
   // Bundle Selection Handler: replaces bundle modules while preserving additional custom products
-  const handleSelectBundle = (bundle) => {
+  const handleSelectBundle = (bundle, planCode = null) => {
     const bCode = bundle.bundleCode || bundle.bundle_code;
     const fallbackBundle = ALL_FALLBACK_BUNDLES.find(b => (b.bundleCode || b.bundle_code) === bCode);
     const bundleSource = Array.isArray(bundle.items) && bundle.items.length > 0
       ? bundle
       : (fallbackBundle || bundle);
+    const availablePlans = getBundlePlans(bundleSource);
+    const isSamePackage = selectedBundle === bCode;
+    const requestedPlan = planCode || (isSamePackage ? selectedPlan : '');
+    const targetPlanCode = getPlanByCode(availablePlans, requestedPlan)?.code
+      || getDefaultPlanCode(availablePlans);
 
     setSelectedBundle(bCode);
+    setSelectedPlan(targetPlanCode);
     if (bundle.category) {
       setProductCategory(bundle.category.toLowerCase());
     }
@@ -738,10 +670,54 @@ export default function QuotationModal({
 
     // Build new bundle items from the selected package master
     const isBio = (bundle.category || productCategory || '').toUpperCase() === 'BIOMETRIC';
-    const newBundleItems = (bundleSource.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, bCode, isBio));
+    const newBundleItems = (bundleSource.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, bCode, isBio, targetPlanCode, availablePlans));
 
     // Place bundle modules first and preserve every manually added add-on
     setLineItems([...newBundleItems, ...customItems]);
+  };
+
+  // Plan changes keep the entered duration/onboardings and only re-price the
+  // subscription line. Selecting a plan on another card switches package too.
+  const handleSelectPlan = (bundle, planCode) => {
+    const bCode = bundle.bundleCode || bundle.bundle_code;
+    if (selectedBundle !== bCode) {
+      handleSelectBundle(bundle, planCode);
+      return;
+    }
+
+    const fallbackBundle = ALL_FALLBACK_BUNDLES.find(b => (b.bundleCode || b.bundle_code) === bCode);
+    const bundleSource = Array.isArray(bundle.items) && bundle.items.length > 0
+      ? bundle
+      : (fallbackBundle || bundle);
+    const plan = getPlanByCode(getBundlePlans(bundleSource), planCode);
+    if (!plan) return;
+
+    setSelectedPlan(plan.code);
+    setLineItems(prev => prev.map((item) => {
+      if (!item.isBundleDetail) return item;
+
+      const isAlreadyCustom = String(item.planCode || '').toLowerCase() === 'custom';
+      const nextRate = plan.isCustom
+        ? (isAlreadyCustom ? item.rate : '')
+        : plan.rate;
+      const updated = {
+        ...item,
+        planCode: plan.code,
+        planName: plan.name,
+        planRate: plan.isCustom ? null : plan.rate,
+        isCustomPlan: Boolean(plan.isCustom),
+        rate: nextRate
+      };
+
+      updated.description = formatBundleDescription({
+        baseDescription: updated.baseDescription,
+        planName: updated.planName,
+        durationMonths: updated.durationMonths,
+        onboardingCount: updated.onboardingCount,
+        unitPrice: updated.rate
+      });
+      return updated;
+    }));
   };
 
   const handleCategoryChange = (newCat) => {
@@ -767,6 +743,7 @@ export default function QuotationModal({
 
   const handleClearBundle = () => {
     setSelectedBundle(null);
+    setSelectedPlan('');
     const customItems = lineItems.filter(item => !item.isBundleItem && !item.bundleId);
     if (customItems.length === 0) {
       setLineItems([{
@@ -830,6 +807,9 @@ export default function QuotationModal({
     if (field === 'rate' && rawValue !== '' && !/^\d*\.?\d{0,2}$/.test(rawValue)) {
       return;
     }
+    if (field === 'rate' && String(lineItems[idx]?.planCode || '').toLowerCase()) {
+      setSelectedPlan('custom');
+    }
 
     setLineItems(prev => {
       const next = [...prev];
@@ -838,6 +818,14 @@ export default function QuotationModal({
         ...current,
         [field]: field === 'rate' ? (rawValue === '' ? '' : Number(rawValue)) : rawValue
       };
+
+      // Editing the plan rate records a negotiated Custom plan.
+      if (field === 'rate' && String(current.planCode || '').toLowerCase()) {
+        updated.planCode = 'custom';
+        updated.planName = 'Custom';
+        updated.planRate = null;
+        updated.isCustomPlan = true;
+      }
 
       // Quantity is derived only when duration or onboarding count changes.
       // Legacy saved quantities stay intact until one of those inputs is edited.
@@ -849,6 +837,7 @@ export default function QuotationModal({
 
       updated.description = formatBundleDescription({
         baseDescription: updated.baseDescription,
+        planName: updated.planName,
         durationMonths: updated.durationMonths,
         onboardingCount: updated.onboardingCount,
         unitPrice: updated.rate
@@ -956,6 +945,11 @@ export default function QuotationModal({
       setError('Please provide a Customer Name or Company Name.');
       return;
     }
+    const planError = validateBundlePlanLines(lineItems);
+    if (planError) {
+      setError(planError);
+      return;
+    }
     try {
       setSaving(true);
       setError('');
@@ -1042,6 +1036,11 @@ export default function QuotationModal({
     setAllowDuplicateIntent(true);
     setShowDuplicateConflict(false);
     setError('');
+    const planError = validateBundlePlanLines(lineItems);
+    if (planError) {
+      setError(planError);
+      return;
+    }
     try {
       setSaving(true);
       const payload = buildDocPayload(true);
@@ -1417,7 +1416,7 @@ export default function QuotationModal({
                 <p className="wahrms-bundle-subtitle">
                   {productCategory === 'biometric'
                     ? 'Select your Biometric Hardware configuration for CHN Technologies.'
-                    : 'Select your package: HR + ATM, HR + ATM + Payroll, or HR + Payroll.'}
+                    : 'Select a package, then choose Pro, Business, or Custom. Subscription prices are per employee, per month.'}
                 </p>
               </div>
               {selectedBundle && (
@@ -1446,12 +1445,12 @@ export default function QuotationModal({
                   if (productCategory === 'biometric') {
                     return bCat === 'biometric' || ['bio_standard', 'bio_atm', 'bio_enterprise'].includes(b.bundleCode || b.bundle_code);
                   }
-                  return ['hr_atm', 'hr_atm_payroll', 'hr_payroll'].includes(b.bundleCode || b.bundle_code);
+                  return WAHRMS_PACKAGE_CODES.includes(b.bundleCode || b.bundle_code);
                 })
                 .sort((a, b) => {
                   const order = productCategory === 'biometric'
                     ? ['bio_standard', 'bio_atm', 'bio_enterprise']
-                    : ['hr_atm', 'hr_atm_payroll', 'hr_payroll'];
+                    : WAHRMS_PACKAGE_CODES;
                   const codeA = a.bundleCode || a.bundle_code;
                   const codeB = b.bundleCode || b.bundle_code;
                   return order.indexOf(codeA) - order.indexOf(codeB);
@@ -1459,15 +1458,22 @@ export default function QuotationModal({
                 .map((bundle) => {
                   const bCode = bundle.bundleCode || bundle.bundle_code;
                   const isSelected = selectedBundle === bCode;
+                  const plans = getBundlePlans(bundle);
+                  const activePlan = isSelected ? getPlanByCode(plans, selectedPlan) : null;
 
                   return (
                     <div
                       key={bCode}
                       className={`wahrms-bundle-card ${isSelected ? 'selected' : ''}`}
-                      onClick={() => handleSelectBundle(bundle)}
+                      data-bundle-code={bCode}
+                      onClick={(e) => {
+                        if (e.target.closest('.wahrms-plan-options')) return;
+                        handleSelectBundle(bundle);
+                      }}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return;
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
                           handleSelectBundle(bundle);
@@ -1505,11 +1511,47 @@ export default function QuotationModal({
                         ))}
                       </div>
 
+                      {plans.length > 0 && (
+                        <div
+                          className="wahrms-plan-options"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <div className="wahrms-plan-options-label">Choose a plan</div>
+                          <div className="wahrms-plan-option-grid">
+                            {plans.map((plan) => {
+                              const planActive = isSelected && activePlan?.code === plan.code;
+                              return (
+                                <button
+                                  key={plan.code}
+                                  type="button"
+                                  className={`wahrms-plan-option ${planActive ? 'active' : ''} ${plan.isCustom ? 'custom' : ''}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSelectPlan(bundle, plan.code);
+                                  }}
+                                  aria-pressed={planActive}
+                                  title={plan.isCustom
+                                    ? 'Enter a negotiated per-employee rate'
+                                    : `${plan.name} plan at ₹${plan.rate} per employee`}
+                                >
+                                  <span className="wahrms-plan-name">{plan.name}</span>
+                                  <span className="wahrms-plan-price">
+                                    {plan.isCustom ? 'Custom Pricing' : `₹${plan.rate}/employee`}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="wahrms-bundle-card-footer">
                         <div className={`wahrms-select-pill ${isSelected ? 'active' : ''}`}>
                           {isSelected ? (
                             <>
-                              <Check size={13} strokeWidth={3} /> Active Package
+                              <Check size={13} strokeWidth={3} />
+                              {activePlan ? `${activePlan.name} Plan Active` : 'Active Package'}
                             </>
                           ) : (
                             'Select Package'
@@ -1847,7 +1889,7 @@ export default function QuotationModal({
             Tax Engine: <strong>{taxMode === 'intra' ? 'Intra-State (CGST 50% + SGST 50%)' : 'Inter-State (IGST 100%)'}</strong>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div className="quote-footer-actions" style={{ display: 'flex', gap: '10px' }}>
             <button 
               type="button" 
               onClick={onClose} 

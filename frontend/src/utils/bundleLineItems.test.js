@@ -39,7 +39,7 @@ test('formats all bundle detail lines, using an em dash for empty values', () =>
       onboardingCount: '250',
       unitPrice: '45'
     }),
-    'WAHRMS HR + ATM Subscription\nDuration: 12 Months\nNo. of Onboardings: 250\nUnit Price: ₹45'
+    'WAHRMS HR + ATM Subscription\nDuration: 12 Months\nNo. of Onboardings: 250\nUnit Price: Rs. 45'
   );
 
   assert.equal(
@@ -59,7 +59,7 @@ test('formats all bundle detail lines, using an em dash for empty values', () =>
       onboardingCount: '',
       unitPrice: '45'
     }),
-    'WAHRMS HR + ATM Subscription\nDuration: 12 Months\nNo. of Onboardings: —\nUnit Price: ₹45'
+    'WAHRMS HR + ATM Subscription\nDuration: 12 Months\nNo. of Onboardings: —\nUnit Price: Rs. 45'
   );
 });
 
@@ -87,7 +87,7 @@ test('new package fields discard arbitrary legacy defaults but keep the package 
   assert.equal(fields.qty, 0);
   assert.equal(
     fields.description,
-    'WAHRMS HR + Attendance Subscription\nDuration: —\nNo. of Onboardings: —\nUnit Price: ₹45'
+    'WAHRMS HR + Attendance Subscription\nDuration: —\nNo. of Onboardings: —\nUnit Price: Rs. 45'
   );
   assert.match(fields.description, /Duration: —/);
   assert.match(fields.description, /No\. of Onboardings: —/);

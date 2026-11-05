@@ -6,12 +6,21 @@
  * PDFs and saved documents. `rate` remains the authoritative unit price.
  */
 
-const DETAIL_LABEL_PATTERN = /(?:\bDuration\s*:|\bNo\.?\s*Of\s*Onboardings?\s*:|\bUnit\s*Price\s*:|\bPrice\s*per\s*user\s*:)/i;
-const DETAIL_LINE_PATTERN = /^\s*(?:Duration\b|No\.?\s*Of\s*Onboardings?\b|Unit\s*Price\b|Price\s*per\s*user\b)/i;
+import {
+  getDefaultPlanCode,
+  getPlanByCode,
+  normalizeBundlePlans,
+  normalizePlanName,
+  planCodeFromName
+} from './billingPackages.js';
+
+const DETAIL_LABEL_PATTERN = /(?:\bDuration\s*:|\bNo\.?\s*Of\s*Onboardings?\s*:|\bUnit\s*Price\s*:|\bPrice\s*per\s*user\s*:|\bPlan\s*:)/i;
+const DETAIL_LINE_PATTERN = /^\s*(?:Duration\b|No\.?\s*Of\s*Onboardings?\b|Unit\s*Price\b|Price\s*per\s*user\b|Plan\b)/i;
 
 const DURATION_PATTERN = /Duration\s*:?\s*(\d+(?:\.\d+)?)/i;
 const ONBOARDING_PATTERN = /No\.?\s*Of\s*Onboardings?\s*:?\s*(\d+(?:\.\d+)?)/i;
 const UNIT_PRICE_PATTERN = /(?:Unit\s*Price|Price\s*per\s*user)\s*:?\s*(?:₹|Rs\.?|INR)?\s*(\d+(?:\.\d+)?)/i;
+const PLAN_PATTERN = /(?:^|\n)\s*Plan\s*:?\s*([^\n]+)/i;
 
 export function toPositiveInteger(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -38,13 +47,15 @@ export function parseBundleDetail(rawDescription) {
       baseDescription: '',
       durationMonths: null,
       onboardingCount: null,
-      unitPrice: null
+      unitPrice: null,
+      planName: ''
     };
   }
 
   const durationMatch = description.match(DURATION_PATTERN);
   const onboardingMatch = description.match(ONBOARDING_PATTERN);
   const unitPriceMatch = description.match(UNIT_PRICE_PATTERN);
+  const planMatch = description.match(PLAN_PATTERN);
 
   const firstDetailIndex = description.search(DETAIL_LABEL_PATTERN);
   const baseSource = firstDetailIndex > 0 ? description.slice(0, firstDetailIndex) : (firstDetailIndex === 0 ? '' : description);
@@ -59,7 +70,8 @@ export function parseBundleDetail(rawDescription) {
     baseDescription,
     durationMonths: durationMatch ? toPositiveInteger(durationMatch[1]) : null,
     onboardingCount: onboardingMatch ? toPositiveInteger(onboardingMatch[1]) : null,
-    unitPrice: unitPriceMatch ? toNonNegativeNumber(unitPriceMatch[1]) : null
+    unitPrice: unitPriceMatch ? toNonNegativeNumber(unitPriceMatch[1]) : null,
+    planName: planMatch ? normalizePlanName(planMatch[1]) : ''
   };
 }
 
@@ -69,11 +81,12 @@ function formatAmount(value) {
 
 /**
  * Build the text-only bundle detail block used by the preview and PDF.
- * All three lines are always present; empty or invalid values use an em dash
- * so the document never silently drops a bundle detail.
+ * All three bundle detail lines are always present; empty or invalid values
+ * use an em dash. The plan line is included when a plan is known.
  */
 export function formatBundleDescription({
   baseDescription = '',
+  planName = '',
   durationMonths = '',
   onboardingCount = '',
   unitPrice = ''
@@ -82,6 +95,9 @@ export function formatBundleDescription({
   const base = String(baseDescription || '').trim();
   if (base) lines.push(base);
 
+  const plan = normalizePlanName(planName);
+  if (plan) lines.push(`Plan: ${plan}`);
+
   const duration = toPositiveInteger(durationMonths);
   lines.push(`Duration: ${duration !== null ? `${duration} Months` : '—'}`);
 
@@ -89,7 +105,7 @@ export function formatBundleDescription({
   lines.push(`No. of Onboardings: ${onboardings !== null ? onboardings : '—'}`);
 
   const price = toNonNegativeNumber(unitPrice);
-  lines.push(`Unit Price: ${price !== null ? `₹${formatAmount(price)}` : '—'}`);
+  lines.push(`Unit Price: ${price !== null ? `Rs. ${formatAmount(price)}` : '—'}`);
 
   return lines.join('\n');
 }
@@ -125,26 +141,96 @@ export function isBundleSubscriptionItem(item = {}) {
 /**
  * Build the structured fields for a subscription module loaded from the
  * bundle master. Arbitrary values embedded in the old master description are
- * intentionally discarded; only the real package rate is carried forward.
+ * intentionally discarded; only the selected plan rate is carried forward.
  */
-export function createBundleSubscriptionFields(item = {}) {
+export function createBundleSubscriptionFields(item = {}, planCode = '', bundlePlans = []) {
   const parsed = parseBundleDetail(item.description || item.name || '');
   const baseDescription = String(item.name || '').trim()
     || parsed.baseDescription
     || String(item.description || '').trim();
-  const rate = toNonNegativeNumber(item.rate);
+
+  const itemPlans = normalizeBundlePlans(item.plans);
+  const plans = itemPlans.length > 0 ? itemPlans : normalizeBundlePlans(bundlePlans);
+  const requestedPlanCode = planCode || item.planCode || item.plan_code || '';
+  const resolvedPlan = getPlanByCode(plans, requestedPlanCode);
+  const resolvedPlanCode = resolvedPlan?.code
+    || String(requestedPlanCode || '').toLowerCase()
+    || getDefaultPlanCode(plans);
+  const isCustom = Boolean(resolvedPlan?.isCustom) || resolvedPlanCode === 'custom';
+  const fallbackRate = toNonNegativeNumber(item.rate);
+
+  const rate = resolvedPlan
+    ? (resolvedPlan.isCustom ? '' : resolvedPlan.rate)
+    : (fallbackRate === null ? '' : fallbackRate);
+  const planName = normalizePlanName(
+    resolvedPlan?.name || item.planName || item.plan_name || parsed.planName || ''
+  );
 
   return {
     baseDescription,
+    planCode: resolvedPlanCode,
+    planName,
+    planRate: isCustom ? null : (resolvedPlan?.rate ?? (fallbackRate === null ? null : fallbackRate)),
+    isCustomPlan: isCustom,
     durationMonths: '',
     onboardingCount: '',
-    rate: rate === null ? 0 : rate,
+    rate,
     qty: 0,
     description: formatBundleDescription({
       baseDescription,
+      planName,
       durationMonths: '',
       onboardingCount: '',
       unitPrice: rate
     })
   };
+}
+
+/**
+ * Restore the selected plan code from saved line items. Newer documents save
+ * planCode/planName; legacy documents may only carry a Plan: line.
+ */
+export function getPlanCodeFromItems(items = []) {
+  if (!Array.isArray(items)) return '';
+
+  for (const item of items) {
+    const directCode = item.planCode || item.plan_code;
+    if (directCode) return String(directCode).toLowerCase();
+
+    const directName = item.planName || item.plan_name;
+    if (directName) {
+      const code = planCodeFromName(directName);
+      if (code) return code;
+    }
+
+    const parsed = parseBundleDetail(item.description || '');
+    const parsedCode = planCodeFromName(parsed.planName);
+    if (parsedCode) return parsedCode;
+  }
+
+  return '';
+}
+
+/**
+ * Custom plan rates are negotiated, never inherited from Pro or Business.
+ * Blank, zero and non-numeric rates block document issuance.
+ */
+export function validateBundlePlanLines(lineItems = []) {
+  if (!Array.isArray(lineItems)) return '';
+
+  for (const item of lineItems) {
+    if (!item?.isBundleDetail) continue;
+
+    const planCode = String(
+      item.planCode || planCodeFromName(item.planName) || ''
+    ).toLowerCase();
+    if (planCode !== 'custom') continue;
+
+    const rate = toNonNegativeNumber(item.rate);
+    if (rate === null || rate <= 0) {
+      return 'Enter a negotiated per-employee rate greater than zero for the Custom plan before issuing this document.';
+    }
+  }
+
+  return '';
 }

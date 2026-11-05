@@ -645,6 +645,7 @@ class WorkflowService:
             "hr_atm": "HR + ATM",
             "hr_payroll": "HR + Payroll",
             "hr_atm_payroll": "HR + ATM + Payroll",
+            "bio_payroll": "Biometric + Payroll",
             "bio_standard": "Biometric Standard (MB160)",
             "bio_atm": "WA ATM Biometric Hardware",
             "bio_enterprise": "Biometric Multi-Location Suite"
@@ -658,6 +659,9 @@ class WorkflowService:
                     selected_bundle = b
                     break
                 name_and_desc = f"{itm.get('name', '')} {itm.get('description', '')}"
+                if "biometric + payroll" in name_and_desc.lower() or "bio_payroll" in name_and_desc.lower():
+                    selected_bundle = "Biometric + Payroll"
+                    break
                 if "hr + atm + payroll" in name_and_desc.lower() or "hr_atm_payroll" in name_and_desc.lower():
                     selected_bundle = "HR + ATM + Payroll"
                     break

@@ -32,6 +32,14 @@ from services.hierarchy_service import (
     ROLE_SUPPORT_MANAGER,
     ROLE_SUPPORT_EXECUTIVE
 )
+from services.billing_catalog import (
+    DEFAULT_WAHRMS_BUNDLES,
+    enrich_bundle_items_with_plans,
+    get_bundle_plans,
+    get_default_bundle,
+    validate_custom_plan_items,
+    WAHRMS_PACKAGE_CODES
+)
 
 logger = logging.getLogger("waquote_router")
 
@@ -102,120 +110,6 @@ def test_waquote_connection(
         "message": f"Connected to native CRM Quotes engine. {count} billing documents in database.",
         "error_details": None
     }
-
-DEFAULT_WAHRMS_BUNDLES = [
-    {
-        "bundle_code": "hr_atm",
-        "name": "HR + ATM",
-        "tagline": "Core HR with attendance & time.",
-        "description": "Integrated employee directory, leave management, and real-time biometric attendance capture.",
-        "badge": None,
-        "features": [
-            "Core HR & Employee Directory",
-            "Attendance & Time Tracking",
-            "Leave & Holiday Management",
-            "Biometric Device Integration"
-        ],
-        "items": [
-            {
-                "item_code": "HR_ATM_SUB",
-                "name": "WAHRMS HR + Attendance Subscription",
-                "description": "WAHRMS HR + Payroll  + Biometric  Integration",
-                "hsn": "998314",
-                "qty": 120,
-                "rate": 45.0,
-                "gstRate": 0.18,
-                "discount": 0.0
-            },
-            {
-                "item_code": "BIO_INTEGRATION",
-                "name": "Biometric Integration",
-                "description": "Biometric Integration",
-                "hsn": "998314",
-                "qty": 1,
-                "rate": 4999.0,
-                "gstRate": 0.18,
-                "discount": 0.0
-            }
-        ],
-        "sort_order": 1,
-        "is_active": 1
-    },
-    {
-        "bundle_code": "hr_atm_payroll",
-        "name": "HR + ATM + Payroll",
-        "tagline": "The full suite.",
-        "description": "The complete all-in-one workforce powerhouse: Core HR, biometric attendance, statutory payroll, and self-service.",
-        "badge": "Full Suite • Best Value",
-        "features": [
-            "Core HR & Lifecycle Management",
-            "Biometric Attendance Sync",
-            "Statutory Payroll & Compliance Engine",
-            "One-Click Payslips & Direct Bank Advice"
-        ],
-        "items": [
-            {
-                "item_code": "HR_ATM_PAYROLL_SUB",
-                "name": "WAHRMS Complete Suite (HR + ATM + Payroll) Subscription",
-                "description": "WAHRMS HR + Payroll  + Biometric  Integration",
-                "hsn": "998314",
-                "qty": 120,
-                "rate": 65.0,
-                "gstRate": 0.18,
-                "discount": 0.0
-            },
-            {
-                "item_code": "BIO_PAYROLL_PACKAGE",
-                "name": "bio & payroll Integrated Package",
-                "description": "bio & payroll Integrated Package",
-                "hsn": "85437099",
-                "qty": 1,
-                "rate": 24500.0,
-                "gstRate": 0.18,
-                "discount": 0.0
-            }
-        ],
-        "sort_order": 2,
-        "is_active": 1
-    },
-    {
-        "bundle_code": "hr_payroll",
-        "name": "HR + Payroll",
-        "tagline": "Core HR with payroll & statutory.",
-        "description": "Comprehensive employee records paired with full salary computation, payslips, PF, ESI, TDS, and statutory compliance.",
-        "badge": None,
-        "features": [
-            "Core HR & Employee Profiles",
-            "Statutory Payroll Engine",
-            "PF, ESI, PT & TDS Filings",
-            "One-Click Payslips & Direct Bank Advice"
-        ],
-        "items": [
-            {
-                "item_code": "HR_PAYROLL_SUB",
-                "name": "WAHRMS HR + Payroll Cloud Subscription",
-                "description": "WAHRMS HR + Payroll  + Biometric  Integration",
-                "hsn": "998314",
-                "qty": 120,
-                "rate": 50.0,
-                "gstRate": 0.18,
-                "discount": 0.0
-            },
-            {
-                "item_code": "PAYROLL_SETUP",
-                "name": "WA Payroll Cloud Setup & Deployment",
-                "description": "WA Payroll Cloud Setup & Deployment",
-                "hsn": "998315",
-                "qty": 1,
-                "rate": 5000.0,
-                "gstRate": 0.18,
-                "discount": 0.0
-            }
-        ],
-        "sort_order": 3,
-        "is_active": 1
-    }
-]
 
 DEFAULT_BIOMETRIC_BUNDLES = [
     {
@@ -362,24 +256,51 @@ def get_wahrms_bundles(
     Seeds default configuration if not present.
     """
     try:
-        q = db.query(WAHRMSBundle).filter(WAHRMSBundle.is_active == 1)
-        if category and category.strip().lower() != "all":
-            q = q.filter(WAHRMSBundle.category.ilike(category.strip()))
-        bundles = q.order_by(WAHRMSBundle.sort_order).all()
-        
-        if not bundles and (not category or category.strip().lower() == "all" or category.strip().upper() == "WAHRMS"):
-            # Seed default bundles
-            for b_data in DEFAULT_WAHRMS_BUNDLES:
-                new_b = WAHRMSBundle(**b_data)
-                db.add(new_b)
+        category_filter = (category or "").strip()
+        is_all = not category_filter or category_filter.lower() == "all"
+        include_wahrms = is_all or category_filter.upper() == "WAHRMS"
+
+        if include_wahrms:
+            # Seed any newly introduced package without disturbing existing rows.
+            existing_codes = {
+                row.bundle_code
+                for row in db.query(WAHRMSBundle.bundle_code).all()
+            }
+            for code in WAHRMS_PACKAGE_CODES:
+                if code in existing_codes:
+                    continue
+                default_bundle = get_default_bundle(code)
+                if default_bundle:
+                    db.add(WAHRMSBundle(**default_bundle))
             db.commit()
-            q = db.query(WAHRMSBundle).filter(WAHRMSBundle.is_active == 1)
-            if category and category.strip().lower() != "all":
-                q = q.filter(WAHRMSBundle.category.ilike(category.strip()))
-            bundles = q.order_by(WAHRMSBundle.sort_order).all()
+
+            # Legacy bundle rows predate plan metadata. Enrich them in place so
+            # the package cards can offer Pro/Business/Custom without a
+            # database migration.
+            changed = False
+            legacy_rows = (
+                db.query(WAHRMSBundle)
+                .filter(WAHRMSBundle.bundle_code.in_(WAHRMS_PACKAGE_CODES))
+                .all()
+            )
+            for row in legacy_rows:
+                enriched_items = enrich_bundle_items_with_plans(
+                    row.bundle_code, row.items or []
+                )
+                if enriched_items != (row.items or []):
+                    row.items = enriched_items
+                    changed = True
+            if changed:
+                db.commit()
+
+        q = db.query(WAHRMSBundle).filter(WAHRMSBundle.is_active == 1)
+        if not is_all:
+            q = q.filter(WAHRMSBundle.category.ilike(category_filter))
+        bundles = q.order_by(WAHRMSBundle.sort_order).all()
 
         formatted = []
         for b in bundles:
+            items = enrich_bundle_items_with_plans(b.bundle_code, b.items or [])
             formatted.append({
                 "id": b.id,
                 "bundleCode": b.bundle_code,
@@ -389,7 +310,8 @@ def get_wahrms_bundles(
                 "description": b.description,
                 "badge": b.badge,
                 "features": b.features or [],
-                "items": b.items or [],
+                "items": items,
+                "plans": get_bundle_plans(b.bundle_code, items),
                 "isActive": bool(b.is_active),
                 "sortOrder": b.sort_order
             })
@@ -400,8 +322,9 @@ def get_wahrms_bundles(
     except Exception as e:
         logger.error(f"Error fetching product bundles: {e}")
         all_fallbacks = [
-            {**b, "category": "WAHRMS"} for b in DEFAULT_WAHRMS_BUNDLES
+            get_default_bundle(code) for code in WAHRMS_PACKAGE_CODES
         ]
+        all_fallbacks = [b for b in all_fallbacks if b]
         if category and category.strip().upper() == "BIOMETRIC":
             active_fallback = DEFAULT_BIOMETRIC_BUNDLES
         elif category and category.strip().upper() == "WAHRMS":
@@ -409,25 +332,27 @@ def get_wahrms_bundles(
         else:
             active_fallback = all_fallbacks + DEFAULT_BIOMETRIC_BUNDLES
 
+        fallback_bundles = []
+        for idx, b in enumerate(active_fallback):
+            items = enrich_bundle_items_with_plans(b["bundle_code"], b["items"])
+            fallback_bundles.append({
+                "id": idx + 1,
+                "bundleCode": b["bundle_code"],
+                "category": b.get("category", "WAHRMS"),
+                "name": b["name"],
+                "tagline": b["tagline"],
+                "description": b["description"],
+                "badge": b["badge"],
+                "features": b["features"],
+                "items": items,
+                "plans": get_bundle_plans(b["bundle_code"], items),
+                "isActive": True,
+                "sortOrder": b["sort_order"]
+            })
         return {
             "ok": True,
             "fallback": True,
-            "bundles": [
-                {
-                    "id": idx + 1,
-                    "bundleCode": b["bundle_code"],
-                    "category": b.get("category", "WAHRMS"),
-                    "name": b["name"],
-                    "tagline": b["tagline"],
-                    "description": b["description"],
-                    "badge": b["badge"],
-                    "features": b["features"],
-                    "items": b["items"],
-                    "isActive": True,
-                    "sortOrder": b["sort_order"]
-                }
-                for idx, b in enumerate(active_fallback)
-            ]
+            "bundles": fallback_bundles
         }
 
 
@@ -868,6 +793,10 @@ def create_document(
     doc_type_norm = (payload.doc_type or "quotation").lower().strip()
     cat_norm = (payload.product_category or "wahrms").lower().strip()
 
+    plan_error = validate_custom_plan_items(payload.line_items)
+    if plan_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=plan_error)
+
     current_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
     creator_emp_id = current_emp.id if current_emp else None
     norm_role = normalize_role(current_user.role)
@@ -1253,6 +1182,10 @@ def update_waquote_document(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access Denied: Only authorized Finance Team members can edit, issue, or finalize Tax Invoices."
             )
+
+    plan_error = validate_custom_plan_items(payload.line_items)
+    if plan_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=plan_error)
 
     r.doc_type = target_type
     if payload.customer_name:

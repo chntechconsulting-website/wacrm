@@ -63,7 +63,7 @@ export function splitDescriptionIntoLines(rawDescription) {
   const finalLines = [];
   // Match whole labels so the word "Onboardings" inside "No. of Onboardings"
   // is consumed together with its label. Each label stays with its value.
-  const labelPattern = /\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|SIM\s*Card|FACE\+FINGER)\b\s*:?/gi;
+  const labelPattern = /\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|Plan(?=\s*:)|SIM\s*Card|FACE\+FINGER)\b\s*:?/gi;
 
   for (const line of rawLines) {
     const normalized = line.replace(/\s+/g, ' ').trim();
