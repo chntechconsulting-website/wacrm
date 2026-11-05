@@ -31,7 +31,7 @@ test('parses a legacy single-line bundle description', () => {
   assert.equal(parsed.unitPrice, 25);
 });
 
-test('formats only entered bundle values for preview and PDF text', () => {
+test('formats all bundle detail lines, using an em dash for empty values', () => {
   assert.equal(
     formatBundleDescription({
       baseDescription: 'WAHRMS HR + ATM Subscription',
@@ -49,7 +49,17 @@ test('formats only entered bundle values for preview and PDF text', () => {
       onboardingCount: '',
       unitPrice: ''
     }),
-    'WAHRMS HR + ATM Subscription'
+    'WAHRMS HR + ATM Subscription\nDuration: —\nNo. of Onboardings: —\nUnit Price: —'
+  );
+
+  assert.equal(
+    formatBundleDescription({
+      baseDescription: 'WAHRMS HR + ATM Subscription',
+      durationMonths: '12',
+      onboardingCount: '',
+      unitPrice: '45'
+    }),
+    'WAHRMS HR + ATM Subscription\nDuration: 12 Months\nNo. of Onboardings: —\nUnit Price: ₹45'
   );
 });
 
@@ -77,10 +87,10 @@ test('new package fields discard arbitrary legacy defaults but keep the package 
   assert.equal(fields.qty, 0);
   assert.equal(
     fields.description,
-    'WAHRMS HR + Attendance Subscription\nUnit Price: ₹45'
+    'WAHRMS HR + Attendance Subscription\nDuration: —\nNo. of Onboardings: —\nUnit Price: ₹45'
   );
-  assert.doesNotMatch(fields.description, /Duration:/);
-  assert.doesNotMatch(fields.description, /Onboardings:/);
+  assert.match(fields.description, /Duration: —/);
+  assert.match(fields.description, /No\. of Onboardings: —/);
 });
 
 test('identifies subscription modules without treating hardware as subscription', () => {

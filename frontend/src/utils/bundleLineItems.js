@@ -69,7 +69,8 @@ function formatAmount(value) {
 
 /**
  * Build the text-only bundle detail block used by the preview and PDF.
- * Empty values are omitted so documents never show blank labels.
+ * All three lines are always present; empty or invalid values use an em dash
+ * so the document never silently drops a bundle detail.
  */
 export function formatBundleDescription({
   baseDescription = '',
@@ -82,13 +83,13 @@ export function formatBundleDescription({
   if (base) lines.push(base);
 
   const duration = toPositiveInteger(durationMonths);
-  if (duration !== null) lines.push(`Duration: ${duration} Months`);
+  lines.push(`Duration: ${duration !== null ? `${duration} Months` : '—'}`);
 
   const onboardings = toPositiveInteger(onboardingCount);
-  if (onboardings !== null) lines.push(`No. of Onboardings: ${onboardings}`);
+  lines.push(`No. of Onboardings: ${onboardings !== null ? onboardings : '—'}`);
 
   const price = toNonNegativeNumber(unitPrice);
-  if (price !== null) lines.push(`Unit Price: ₹${formatAmount(price)}`);
+  lines.push(`Unit Price: ${price !== null ? `₹${formatAmount(price)}` : '—'}`);
 
   return lines.join('\n');
 }
