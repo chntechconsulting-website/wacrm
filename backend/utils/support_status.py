@@ -47,12 +47,12 @@ SUPPORT_STATUS_META: Dict[str, Dict[str, str]] = {
         "bucket": "open",
     },
     SUPPORT_STATUS_INSTALLATION_PENDING: {
-        "label": "Installation Pending",
+        "label": "Onboarding Pending",
         "color": "#8b5cf6",
         "bucket": "open",
     },
     SUPPORT_STATUS_INSTALLATION_COMPLETED: {
-        "label": "Installation Completed",
+        "label": "Onboarding Completed",
         "color": "#0ea5e9",
         "bucket": "open",
     },

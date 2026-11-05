@@ -43,8 +43,8 @@ const formatINR = (val) => {
 const LIFECYCLE_STAGES = [
   { key: 'NEW', label: 'New', badgeClass: 'wf-badge-pending' },
   { key: 'ONBOARDING', label: 'Onboarding', badgeClass: 'wf-badge-contacted' },
-  { key: 'INSTALLATION_PENDING', label: 'Installation Pending', badgeClass: 'wf-badge-inprogress' },
-  { key: 'INSTALLATION_COMPLETED', label: 'Installation Completed', badgeClass: 'wf-badge-inprogress' },
+  { key: 'INSTALLATION_PENDING', label: 'Onboarding Pending', badgeClass: 'wf-badge-inprogress' },
+  { key: 'INSTALLATION_COMPLETED', label: 'Onboarding Completed', badgeClass: 'wf-badge-inprogress' },
   { key: 'TRAINING', label: 'Training', badgeClass: 'wf-badge-inprogress' },
   { key: 'ACTIVE', label: 'Active', badgeClass: 'wf-badge-completed' },
   { key: 'ISSUE_RAISED', label: 'Issue Raised', badgeClass: 'wf-badge-rejected' },
@@ -402,7 +402,7 @@ const SupportQueuePage = () => {
           <div>
             <div className="workflow-kpi-label">Open Work</div>
             <div className="workflow-kpi-value text-sky-700">{inProgressCount}</div>
-            <div className="workflow-kpi-sub">Installation, training & issues</div>
+            <div className="workflow-kpi-sub">Onboarding, training & issues</div>
           </div>
         </div>
 

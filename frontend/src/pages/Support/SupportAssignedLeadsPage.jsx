@@ -37,8 +37,8 @@ import {
 const SUPPORT_STATUS_OPTIONS = [
   { value: 'NEW', label: 'New' },
   { value: 'ONBOARDING', label: 'Onboarding' },
-  { value: 'INSTALLATION_PENDING', label: 'Installation Pending' },
-  { value: 'INSTALLATION_COMPLETED', label: 'Installation Completed' },
+  { value: 'INSTALLATION_PENDING', label: 'Onboarding Pending' },
+  { value: 'INSTALLATION_COMPLETED', label: 'Onboarding Completed' },
   { value: 'TRAINING', label: 'Training' },
   { value: 'ACTIVE', label: 'Active' },
   { value: 'ISSUE_RAISED', label: 'Issue Raised' },

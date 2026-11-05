@@ -50,7 +50,7 @@ const SupportDashboard = ({ data }) => {
       key: 'open',
       label: 'Open Tickets',
       value: openTickets,
-      subtext: 'Onboarding, installation, training or issues',
+      subtext: 'Onboarding, training or issues',
       icon: Clock,
       color: '#8b5cf6',
       bg: 'rgba(139, 92, 246, 0.12)',
