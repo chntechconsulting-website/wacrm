@@ -1,16 +1,37 @@
-name: Ops - Inspect Lead 268
+name: Ops - Lead 268
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "inspect or set_won"
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - set_won
+      lead_id:
+        description: "Lead ID"
+        required: true
+        default: "268"
+      support_manager_id:
+        description: "Optional support manager employee ID for set_won"
+        required: false
+        default: ""
+      reassign_to:
+        description: "Optional sales employee ID to assign"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
-  inspect:
+  lead-status:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect production deployment
+      - name: Inspect or update production lead
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -23,7 +44,342 @@ jobs:
             echo "HOSTNAME=$(hostname)"
             id
             if sudo -n true 2>/dev/null; then echo "SUDO_OK"; else echo "SUDO_NO"; fi
-            echo "APP_CANDIDATES:"
-            sudo find /home /var/www /opt /srv /root -maxdepth 6 -type f -path '*/backend/main.py' 2>/dev/null | head -n 10 || true
-            echo "SERVICES:"
-            systemctl list-units --type=service --all 2>/dev/null | grep -iE 'wacrm|wa-crm|crm' | head -n 20 || true
+            MAIN_PY=$(sudo find /home /var/www /opt /srv /root -maxdepth 6 -type f -path '*/backend/main.py' 2>/dev/null | head -n 1 || true)
+            if [ -z "$MAIN_PY" ]; then
+              echo "APP_NOT_FOUND"
+              exit 1
+            fi
+            BACKEND_DIR=$(dirname "$MAIN_PY")
+            APP_DIR=$(dirname "$BACKEND_DIR")
+            echo "APP_DIR=$APP_DIR"
+            echo "BACKEND_DIR=$BACKEND_DIR"
+            cd "$BACKEND_DIR"
+            if [ -x "$BACKEND_DIR/venv/bin/python" ]; then
+              PY="$BACKEND_DIR/venv/bin/python"
+            elif [ -x "$APP_DIR/venv/bin/python" ]; then
+              PY="$APP_DIR/venv/bin/python"
+            elif [ -x "$BACKEND_DIR/.venv/bin/python" ]; then
+              PY="$BACKEND_DIR/.venv/bin/python"
+            else
+              PY=$(command -v python3)
+            fi
+            echo "PY=$PY"
+            sudo "$PY" - "${{ inputs.mode }}" "${{ inputs.lead_id }}" "${{ inputs.support_manager_id }}" "${{ inputs.reassign_to }}" <<'PY'
+            import json
+            import sys
+            from datetime import datetime
+
+            from sqlalchemy import or_
+
+            from database import SessionLocal
+            from models.activity import LeadActivity
+            from models.customer import Customer
+            from models.employee import Employee
+            from models.lead import Lead, LeadStatusHistory
+            from models.quotation import Quotation
+            from models.user import User
+            from models.workflow import FinanceHandoff, SupportHandoff
+
+            mode, lead_id_raw, support_manager_raw, reassign_raw = sys.argv[1:5]
+            lead_id = int(lead_id_raw)
+            support_manager_id = int(support_manager_raw) if support_manager_raw.strip() else None
+            reassign_to = int(reassign_raw) if reassign_raw.strip() else None
+
+            db = SessionLocal()
+
+
+            def dump(label, value):
+                print(f"=== {label} ===")
+                print(json.dumps(value, indent=2, default=str, ensure_ascii=False))
+
+
+            try:
+                lead = db.query(Lead).filter(Lead.id == lead_id).first()
+                if not lead:
+                    matches = (
+                        db.query(Lead)
+                        .filter(
+                            or_(
+                                Lead.phone.like("%9994061870%"),
+                                Lead.name.ilike("%SABARI%"),
+                                Lead.email.ilike("%ksischool893%"),
+                            )
+                        )
+                        .all()
+                    )
+                    dump(
+                        "LEAD_NOT_FOUND",
+                        {
+                            "requested_lead_id": lead_id,
+                            "phone_name_email_matches": [
+                                {
+                                    "id": m.id,
+                                    "name": m.name,
+                                    "phone": m.phone,
+                                    "email": m.email,
+                                    "status": m.status,
+                                }
+                                for m in matches
+                            ],
+                        },
+                    )
+                    raise SystemExit(2)
+
+                assignee = lead.assigned_employee
+                dump(
+                    "LEAD",
+                    {
+                        "id": lead.id,
+                        "name": lead.name,
+                        "phone": lead.phone,
+                        "email": lead.email,
+                        "company": lead.company,
+                        "status": lead.status,
+                        "source": lead.source,
+                        "product_category": lead.product_category,
+                        "assigned_to": lead.assigned_to,
+                        "assigned_employee": assignee.name if assignee else None,
+                        "assigned_at": lead.assigned_at,
+                        "quotetask_quotation_number": lead.quotetask_quotation_number,
+                        "quotetask_quotation_status": lead.quotetask_quotation_status,
+                        "quotetask_quotation_amount": lead.quotetask_quotation_amount,
+                        "created_at": lead.created_at,
+                        "updated_at": lead.updated_at,
+                    },
+                )
+
+                history = (
+                    db.query(LeadStatusHistory)
+                    .filter(LeadStatusHistory.lead_id == lead.id)
+                    .order_by(LeadStatusHistory.changed_at.asc())
+                    .all()
+                )
+                dump(
+                    "STATUS_HISTORY",
+                    [
+                        {
+                            "id": h.id,
+                            "old_status": h.old_status,
+                            "new_status": h.new_status,
+                            "changed_by": h.changed_by,
+                            "changed_by_name": h.changed_by_employee.name if h.changed_by_employee else None,
+                            "changed_at": h.changed_at,
+                        }
+                        for h in history
+                    ],
+                )
+
+                customers = (
+                    db.query(Customer)
+                    .filter(or_(Customer.converted_from_lead == lead.id, Customer.phone == lead.phone))
+                    .all()
+                )
+                dump(
+                    "CUSTOMERS",
+                    [
+                        {
+                            "id": c.id,
+                            "company_name": c.company_name,
+                            "contact_name": c.contact_name,
+                            "phone": c.phone,
+                            "email": c.email,
+                            "converted_from_lead": c.converted_from_lead,
+                            "created_at": c.created_at,
+                        }
+                        for c in customers
+                    ],
+                )
+
+                finance_handoffs = db.query(FinanceHandoff).filter(FinanceHandoff.lead_id == lead.id).all()
+                dump(
+                    "FINANCE_HANDOFFS",
+                    [
+                        {
+                            "id": f.id,
+                            "customer_id": f.customer_id,
+                            "quotation_number": f.quotation_number,
+                            "proforma_number": f.proforma_number,
+                            "final_amount": f.final_amount,
+                            "paid_amount": f.paid_amount,
+                            "status": f.status,
+                            "payment_status": f.payment_status,
+                            "created_at": f.created_at,
+                        }
+                        for f in finance_handoffs
+                    ],
+                )
+
+                support_handoffs = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).all()
+                dump(
+                    "SUPPORT_HANDOFFS",
+                    [
+                        {
+                            "id": s.id,
+                            "customer_id": s.customer_id,
+                            "support_manager_id": s.support_manager_id,
+                            "support_manager_name": s.support_manager_name,
+                            "onboarding_status": s.onboarding_status,
+                            "support_status": s.support_status,
+                            "won_at": s.won_at,
+                            "created_at": s.created_at,
+                        }
+                        for s in support_handoffs
+                    ],
+                )
+
+                quotations = (
+                    db.query(Quotation)
+                    .filter(or_(Quotation.lead_id == lead.id, Quotation.customer_id.in_([c.id for c in customers])))
+                    .order_by(Quotation.created_at.desc())
+                    .all()
+                )
+                dump(
+                    "QUOTATIONS",
+                    [
+                        {
+                            "id": q.id,
+                            "doc_type": q.doc_type,
+                            "doc_number": q.doc_number,
+                            "status": q.status,
+                            "payment_status": q.payment_status,
+                            "grand_total": q.grand_total,
+                            "created_at": q.created_at,
+                        }
+                        for q in quotations
+                    ],
+                )
+
+                gowtham_employees = (
+                    db.query(Employee)
+                    .filter(or_(Employee.name.ilike("%gowtham%"), Employee.username.ilike("%gowtham%")))
+                    .all()
+                )
+                dump(
+                    "GOWTHAM_EMPLOYEES",
+                    [
+                        {
+                            "id": e.id,
+                            "name": e.name,
+                            "username": e.username,
+                            "role": e.role,
+                            "department": e.department,
+                            "status": e.status,
+                            "user_id": e.user_id,
+                        }
+                        for e in gowtham_employees
+                    ],
+                )
+
+                support_employees = (
+                    db.query(Employee)
+                    .filter(
+                        or_(
+                            Employee.role.ilike("%SUPPORT%"),
+                            Employee.department.ilike("%SUPPORT%"),
+                        )
+                    )
+                    .order_by(Employee.name.asc())
+                    .all()
+                )
+                dump(
+                    "SUPPORT_EMPLOYEES",
+                    [
+                        {
+                            "id": e.id,
+                            "name": e.name,
+                            "role": e.role,
+                            "department": e.department,
+                            "status": e.status,
+                        }
+                        for e in support_employees
+                    ],
+                )
+
+                activities = (
+                    db.query(LeadActivity)
+                    .filter(LeadActivity.lead_id == lead.id)
+                    .order_by(LeadActivity.created_at.desc())
+                    .limit(15)
+                    .all()
+                )
+                dump(
+                    "RECENT_ACTIVITIES",
+                    [
+                        {
+                            "id": a.id,
+                            "activity_type": a.activity_type,
+                            "description": a.description,
+                            "created_at": a.created_at,
+                        }
+                        for a in activities
+                    ],
+                )
+
+                if mode == "inspect":
+                    print("=== RESULT ===")
+                    print("INSPECT_ONLY")
+                    raise SystemExit(0)
+
+                if mode != "set_won":
+                    raise SystemExit(f"Unsupported mode: {mode}")
+
+                if lead.status == "WON":
+                    print("=== RESULT ===")
+                    print("ALREADY_WON")
+                    raise SystemExit(0)
+
+                old_status = lead.status
+
+                if reassign_to is not None:
+                    target = (
+                        db.query(Employee)
+                        .filter(Employee.id == reassign_to, Employee.status == "ACTIVE")
+                        .first()
+                    )
+                    if not target:
+                        raise SystemExit(f"Reassignment target employee {reassign_to} not found or inactive")
+                    lead.assigned_to = target.id
+                    lead.assigned_at = datetime.utcnow()
+
+                lead.status = "WON"
+                db.add(
+                    LeadStatusHistory(
+                        lead_id=lead.id,
+                        old_status=old_status,
+                        new_status="WON",
+                        changed_by=None,
+                        changed_at=datetime.utcnow(),
+                    )
+                )
+                db.add(
+                    LeadActivity(
+                        lead_id=lead.id,
+                        activity_type="STATUS_CHANGED",
+                        related_entity_type="LEAD",
+                        related_entity_id=lead.id,
+                        description=(
+                            f"Sales status corrected {old_status} -> WON after confirming "
+                            "the deal was won (operations correction)."
+                        ),
+                        created_at=datetime.utcnow(),
+                    )
+                )
+                db.commit()
+                db.refresh(lead)
+
+                dump(
+                    "RESULT",
+                    {
+                        "lead_id": lead.id,
+                        "old_status": old_status,
+                        "new_status": lead.status,
+                        "assigned_to": lead.assigned_to,
+                        "assigned_employee": lead.assigned_employee.name if lead.assigned_employee else None,
+                        "support_handoffs": len(support_handoffs),
+                        "finance_handoffs": len(finance_handoffs),
+                        "customers": len(customers),
+                    },
+                )
+            finally:
+                db.close()
+            PY
