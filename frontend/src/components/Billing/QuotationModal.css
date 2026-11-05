@@ -461,6 +461,89 @@
   letter-spacing: 0.02em;
 }
 
+.bundle-detail-editor {
+  min-width: 300px;
+}
+
+.bundle-detail-title {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.4;
+  margin-bottom: 8px;
+  white-space: pre-line;
+}
+
+.bundle-detail-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bundle-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.01em;
+}
+
+.bundle-detail-field input {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  font-size: 0.82rem;
+  color: #1e293b;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+
+.bundle-detail-field input:focus {
+  outline: none;
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.bundle-detail-hint {
+  margin-top: 7px;
+  font-size: 0.72rem;
+  color: #0f766e;
+  font-weight: 600;
+}
+
+.bundle-detail-error {
+  margin-top: 7px;
+  font-size: 0.72rem;
+  color: #b91c1c;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.bundle-qty-display,
+.bundle-rate-display {
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid #99f6e4;
+  background: #f0fdfa;
+  color: #0f766e;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .bundle-detail-editor {
+    min-width: 240px;
+  }
+
+  .bundle-detail-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Category Switcher Tabs (WAHRMS vs Biometric) */
 .product-category-tabs {
   display: flex;

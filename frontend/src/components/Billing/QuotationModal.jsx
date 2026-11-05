@@ -33,6 +33,15 @@ import {
   numberToIndianWords
 } from '../../utils/billingMoney';
 import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
+import {
+  calculateBundleQuantity,
+  createBundleSubscriptionFields,
+  formatBundleDescription,
+  isBundleSubscriptionItem,
+  parseBundleDetail,
+  toNonNegativeNumber,
+  toPositiveInteger
+} from '../../utils/bundleLineItems';
 import DocumentPdfPreviewModal from './PdfPreviewModal';
 import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
@@ -146,7 +155,7 @@ export const FALLBACK_WAHRMS_BUNDLES = [
       {
         item_code: 'HR_ATM_SUB',
         name: 'WAHRMS HR + Attendance Subscription',
-        description: 'WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25',
+        description: 'WAHRMS HR + Payroll  + Biometric  Integration',
         hsn: '998314',
         qty: 120,
         rate: 45,
@@ -181,7 +190,7 @@ export const FALLBACK_WAHRMS_BUNDLES = [
       {
         item_code: 'HR_ATM_PAYROLL_SUB',
         name: 'WAHRMS Complete Suite (HR + ATM + Payroll) Subscription',
-        description: 'WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25',
+        description: 'WAHRMS HR + Payroll  + Biometric  Integration',
         hsn: '998314',
         qty: 120,
         rate: 65,
@@ -216,7 +225,7 @@ export const FALLBACK_WAHRMS_BUNDLES = [
       {
         item_code: 'HR_PAYROLL_SUB',
         name: 'WAHRMS HR + Payroll Cloud Subscription',
-        description: 'WAHRMS HR + Payroll  + Biometric  Integration\nDuration: 12 Months\nNo Of onboardings: 250\nUnit Price: 25',
+        description: 'WAHRMS HR + Payroll  + Biometric  Integration',
         hsn: '998314',
         qty: 120,
         rate: 50,
@@ -419,6 +428,94 @@ export const ALL_FALLBACK_BUNDLES = [
   ...FALLBACK_BIOMETRIC_BUNDLES.map(b => ({ ...b, category: 'BIOMETRIC' }))
 ];
 
+const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
+  const rawDescription = item.description || item.name || '';
+  const parsed = parseBundleDetail(rawDescription);
+  const isBundleItem = item.isBundleItem !== undefined
+    ? Boolean(item.isBundleItem)
+    : Boolean(item.bundleId || (incomingBundle && idx < 2));
+  const isBundleDetail = Boolean(item.isBundleDetail) || isBundleSubscriptionItem({
+    ...item,
+    isBundleItem,
+    description: rawDescription
+  });
+
+  const durationMonths = item.durationMonths ?? item.duration_months ?? parsed.durationMonths ?? '';
+  const onboardingCount = item.onboardingCount ?? item.onboarding_count ?? parsed.onboardingCount ?? '';
+  const rate = Number(item.rate ?? item.unitPrice ?? item.price ?? 0);
+  const baseDescription = item.baseDescription || parsed.baseDescription || rawDescription;
+  const hasStructuredFields = item.durationMonths !== undefined
+    || item.duration_months !== undefined
+    || item.onboardingCount !== undefined
+    || item.onboarding_count !== undefined;
+  const savedQty = Number(item.qty ?? item.quantity ?? 1);
+
+  return {
+    id: item.id || Date.now() + idx,
+    isBundleItem,
+    isBundleDetail,
+    bundleId: item.bundleId || item.bundle_id || (isBundleItem ? incomingBundle : null),
+    itemCode: item.itemCode || item.item_code || '',
+    name: item.name || '',
+    baseDescription,
+    durationMonths,
+    onboardingCount,
+    description: isBundleDetail
+      ? formatBundleDescription({ baseDescription, durationMonths, onboardingCount, unitPrice: rate })
+      : formatItemDescriptionForEditor(rawDescription),
+    hsn: item.hsn || item.hsnCode || (isBio ? '85437099' : '998314'),
+    qty: isBundleDetail
+      ? savedQty
+      : Number(item.qty ?? item.quantity ?? 1),
+    rate,
+    gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 0.18,
+    discount: Number(item.discount ?? 0),
+    quantityMode: isBundleDetail
+      ? (item.quantityMode || (hasStructuredFields ? 'auto' : 'saved'))
+      : 'manual'
+  };
+};
+
+const buildMasterBundleLineItem = (item, idx, bundleCode, isBio) => {
+  const bundleMarker = {
+    ...item,
+    isBundleItem: true,
+    bundleId: bundleCode
+  };
+  const isBundleDetail = isBundleSubscriptionItem(bundleMarker);
+  const baseFields = {
+    id: Date.now() + idx,
+    isBundleItem: true,
+    isBundleDetail,
+    bundleId: bundleCode,
+    itemCode: item.item_code || item.itemCode || '',
+    name: item.name || '',
+    hsn: item.hsn || (isBio ? '85437099' : '998314'),
+    gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 0.18,
+    discount: Number(item.discount || 0)
+  };
+
+  if (isBundleDetail) {
+    const detailFields = createBundleSubscriptionFields(item);
+    return {
+      ...baseFields,
+      ...detailFields,
+      quantityMode: 'auto'
+    };
+  }
+
+  return {
+    ...baseFields,
+    baseDescription: '',
+    durationMonths: '',
+    onboardingCount: '',
+    description: formatItemDescriptionForEditor(item.description || item.name || ''),
+    qty: Number(item.qty !== undefined ? item.qty : 1),
+    rate: Number(item.rate !== undefined ? item.rate : 0),
+    quantityMode: 'manual'
+  };
+};
+
 export default function QuotationModal({
   isOpen,
   onClose,
@@ -540,17 +637,7 @@ export default function QuotationModal({
 
       if (initialData.lineItems && Array.isArray(initialData.lineItems) && initialData.lineItems.length > 0) {
         const isBio = incomingCategory === 'biometric';
-        setLineItems(initialData.lineItems.map((item, idx) => ({
-          id: item.id || Date.now() + idx,
-          isBundleItem: item.isBundleItem !== undefined ? Boolean(item.isBundleItem) : Boolean(item.bundleId || (incomingBundle && idx < 2)),
-          bundleId: item.bundleId || (item.isBundleItem ? incomingBundle : null),
-          description: formatItemDescriptionForEditor(item.description || item.name || ''),
-          hsn: item.hsn || item.hsnCode || (isBio ? '85437099' : '998314'),
-          qty: Number(item.qty ?? item.quantity ?? 1),
-          rate: Number(item.rate ?? item.unitPrice ?? item.price ?? 0),
-          gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 0.18,
-          discount: Number(item.discount ?? 0)
-        })));
+        setLineItems(initialData.lineItems.map((item, idx) => buildSavedLineItem(item, idx, incomingBundle, isBio)));
       } else {
         const defaultCode = incomingBundle || defaultBundleCode;
         const activeBundleObj = bundles.find(b => (b.bundleCode || b.bundle_code) === defaultCode) 
@@ -558,17 +645,7 @@ export default function QuotationModal({
         const targetCode = activeBundleObj.bundleCode || activeBundleObj.bundle_code;
         setSelectedBundle(targetCode);
         const isBio = incomingCategory === 'biometric';
-        setLineItems((activeBundleObj.items || []).map((itm, idx) => ({
-          id: Date.now() + idx,
-          isBundleItem: true,
-          bundleId: targetCode,
-          description: formatItemDescriptionForEditor(itm.description || itm.name || ''),
-          hsn: itm.hsn || (isBio ? '85437099' : '998314'),
-          qty: Number(itm.qty !== undefined ? itm.qty : 1),
-          rate: Number(itm.rate !== undefined ? itm.rate : 0),
-          gstRate: itm.gstRate !== undefined ? Number(itm.gstRate) : 0.18,
-          discount: Number(itm.discount || 0)
-        })));
+        setLineItems((activeBundleObj.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, targetCode, isBio)));
       }
 
       setTerms(
@@ -593,30 +670,11 @@ export default function QuotationModal({
   const [lineItems, setLineItems] = useState(() => {
     if (initialData.lineItems && initialData.lineItems.length > 0) {
       const incomingBundle = initialData.selectedBundle || initialData.selected_bundle || null;
-      return initialData.lineItems.map((item, idx) => ({
-        id: item.id || Date.now() + idx,
-        isBundleItem: item.isBundleItem !== undefined ? Boolean(item.isBundleItem) : Boolean(item.bundleId),
-        bundleId: item.bundleId || (item.isBundleItem ? incomingBundle : null),
-        description: formatItemDescriptionForEditor(item.description || item.name || ''),
-        hsn: item.hsn || item.hsnCode || '998314',
-        qty: Number(item.qty ?? item.quantity ?? 1),
-        rate: Number(item.rate ?? item.unitPrice ?? item.price ?? 0),
-        gstRate: item.gstRate !== undefined ? Number(item.gstRate) : 0.18,
-        discount: Number(item.discount ?? 0)
-      }));
+      const initialCategory = (initialData.productCategory || initialData.product_category || 'wahrms').toLowerCase();
+      return initialData.lineItems.map((item, idx) => buildSavedLineItem(item, idx, incomingBundle, initialCategory === 'biometric'));
     }
     const defaultBundle = FALLBACK_WAHRMS_BUNDLES[0];
-    return (defaultBundle.items || []).map((itm, idx) => ({
-      id: Date.now() + idx,
-      isBundleItem: true,
-      bundleId: defaultBundle.bundleCode,
-      description: formatItemDescriptionForEditor(itm.description || itm.name || ''),
-      hsn: itm.hsn || '998314',
-      qty: Number(itm.qty !== undefined ? itm.qty : 1),
-      rate: Number(itm.rate !== undefined ? itm.rate : 0),
-      gstRate: itm.gstRate !== undefined ? Number(itm.gstRate) : 0.18,
-      discount: Number(itm.discount || 0)
-    }));
+    return (defaultBundle.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, defaultBundle.bundleCode, false));
   });
 
   const [terms, setTerms] = useState(() => 
@@ -665,6 +723,11 @@ export default function QuotationModal({
   // Bundle Selection Handler: replaces bundle modules while preserving additional custom products
   const handleSelectBundle = (bundle) => {
     const bCode = bundle.bundleCode || bundle.bundle_code;
+    const fallbackBundle = ALL_FALLBACK_BUNDLES.find(b => (b.bundleCode || b.bundle_code) === bCode);
+    const bundleSource = Array.isArray(bundle.items) && bundle.items.length > 0
+      ? bundle
+      : (fallbackBundle || bundle);
+
     setSelectedBundle(bCode);
     if (bundle.category) {
       setProductCategory(bundle.category.toLowerCase());
@@ -673,21 +736,11 @@ export default function QuotationModal({
     // Keep all custom/extra products added separately by the user
     const customItems = lineItems.filter(item => !item.isBundleItem && !item.bundleId);
 
-    // Build new bundle items from bundle master
+    // Build new bundle items from the selected package master
     const isBio = (bundle.category || productCategory || '').toUpperCase() === 'BIOMETRIC';
-    const newBundleItems = (bundle.items || []).map((itm, idx) => ({
-      id: Date.now() + idx,
-      isBundleItem: true,
-      bundleId: bCode,
-      description: formatItemDescriptionForEditor(itm.description || itm.name || ''),
-      hsn: itm.hsn || (isBio ? '85437099' : '998314'),
-      qty: Number(itm.qty !== undefined ? itm.qty : 1),
-      rate: Number(itm.rate !== undefined ? itm.rate : 0),
-      gstRate: itm.gstRate !== undefined ? Number(itm.gstRate) : 0.18,
-      discount: Number(itm.discount || 0)
-    }));
+    const newBundleItems = (bundleSource.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, bCode, isBio));
 
-    // Avoid duplicate items and place bundle items first
+    // Place bundle modules first and preserve every manually added add-on
     setLineItems([...newBundleItems, ...customItems]);
   };
 
@@ -766,6 +819,42 @@ export default function QuotationModal({
     setLineItems(prev => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: val };
+      return next;
+    });
+  };
+
+  const handleBundleDetailChange = (idx, field, rawValue) => {
+    if ((field === 'durationMonths' || field === 'onboardingCount') && rawValue !== '' && !/^\d+$/.test(rawValue)) {
+      return;
+    }
+    if (field === 'rate' && rawValue !== '' && !/^\d*\.?\d{0,2}$/.test(rawValue)) {
+      return;
+    }
+
+    setLineItems(prev => {
+      const next = [...prev];
+      const current = next[idx];
+      const updated = {
+        ...current,
+        [field]: field === 'rate' ? (rawValue === '' ? '' : Number(rawValue)) : rawValue
+      };
+
+      // Quantity is derived only when duration or onboarding count changes.
+      // Legacy saved quantities stay intact until one of those inputs is edited.
+      if (field === 'durationMonths' || field === 'onboardingCount') {
+        const calculatedQty = calculateBundleQuantity(updated.durationMonths, updated.onboardingCount);
+        updated.qty = calculatedQty === null ? 0 : calculatedQty;
+        updated.quantityMode = 'auto';
+      }
+
+      updated.description = formatBundleDescription({
+        baseDescription: updated.baseDescription,
+        durationMonths: updated.durationMonths,
+        onboardingCount: updated.onboardingCount,
+        unitPrice: updated.rate
+      });
+
+      next[idx] = updated;
       return next;
     });
   };
@@ -1402,6 +1491,9 @@ export default function QuotationModal({
                             )}
                           </div>
                         </div>
+                        {bundle.description && (
+                          <p className="wahrms-bundle-tagline">{bundle.description}</p>
+                        )}
                       </div>
 
                       <div className="wahrms-bundle-features">
@@ -1480,7 +1572,24 @@ export default function QuotationModal({
                 </thead>
                 <tbody>
                   {lineItems.map((item, idx) => {
-                    const lineTot = Math.max(0, (Number(item.qty || 1) * Number(item.rate || 0) - Number(item.discount || 0)) * (1 + Number(item.gstRate || 0.18)));
+                    const lineTot = Math.max(0, (Number(item.qty ?? 0) * Number(item.rate || 0) - Number(item.discount || 0)) * (1 + Number(item.gstRate || 0.18)));
+                    const isBundleDetail = Boolean(item.isBundleDetail);
+                    const calculatedQty = isBundleDetail
+                      ? calculateBundleQuantity(item.durationMonths, item.onboardingCount)
+                      : null;
+                    const durationInvalid = isBundleDetail
+                      && item.durationMonths !== '' && item.durationMonths !== null && item.durationMonths !== undefined
+                      && toPositiveInteger(item.durationMonths) === null;
+                    const onboardingInvalid = isBundleDetail
+                      && item.onboardingCount !== '' && item.onboardingCount !== null && item.onboardingCount !== undefined
+                      && toPositiveInteger(item.onboardingCount) === null;
+                    const unitPriceInvalid = isBundleDetail
+                      && item.rate !== '' && item.rate !== null && item.rate !== undefined
+                      && toNonNegativeNumber(item.rate) === null;
+                    const showQuantityEquation = isBundleDetail
+                      && calculatedQty !== null
+                      && item.quantityMode === 'auto';
+
                     return (
                       <tr key={item.id || idx}>
                         <td>
@@ -1491,23 +1600,82 @@ export default function QuotationModal({
                               </span>
                             </div>
                           )}
-                          <textarea 
-                            rows={4}
-                            value={item.description} 
-                            onChange={(e) => handleLineChange(idx, 'description', e.target.value)} 
-                            placeholder="Item / Description&#10;Duration: 12 Months&#10;No Of onboardings: 250&#10;Unit Price: 25" 
-                            style={{
-                              width: '100%',
-                              minHeight: '78px',
-                              padding: '8px 10px',
-                              fontSize: '0.84rem',
-                              borderRadius: '6px',
-                              border: '1px solid #cbd5e1',
-                              lineHeight: '1.45',
-                              resize: 'vertical',
-                              whiteSpace: 'pre-wrap'
-                            }}
-                          />
+                          {isBundleDetail ? (
+                            <div className="bundle-detail-editor">
+                              <div className="bundle-detail-title">
+                                {item.baseDescription || item.name || 'Bundle subscription'}
+                              </div>
+                              <div className="bundle-detail-fields">
+                                <label className="bundle-detail-field">
+                                  <span>Duration (Months)</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    inputMode="numeric"
+                                    value={item.durationMonths ?? ''}
+                                    onChange={(e) => handleBundleDetailChange(idx, 'durationMonths', e.target.value)}
+                                    placeholder="Enter duration"
+                                    aria-label="Duration in months"
+                                  />
+                                </label>
+                                <label className="bundle-detail-field">
+                                  <span>Number of Onboardings</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    inputMode="numeric"
+                                    value={item.onboardingCount ?? ''}
+                                    onChange={(e) => handleBundleDetailChange(idx, 'onboardingCount', e.target.value)}
+                                    placeholder="Enter onboardings"
+                                    aria-label="Number of onboardings"
+                                  />
+                                </label>
+                                <label className="bundle-detail-field">
+                                  <span>Unit Price (₹)</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    inputMode="decimal"
+                                    value={item.rate ?? ''}
+                                    onChange={(e) => handleBundleDetailChange(idx, 'rate', e.target.value)}
+                                    placeholder="Enter unit price"
+                                    aria-label="Unit price in rupees"
+                                  />
+                                </label>
+                              </div>
+                              {(durationInvalid || onboardingInvalid || unitPriceInvalid) && (
+                                <div className="bundle-detail-error">
+                                  Enter valid values. Duration and onboardings must be whole numbers greater than zero; unit price cannot be negative.
+                                </div>
+                              )}
+                              <div className="bundle-detail-hint">
+                                {showQuantityEquation
+                                  ? `${toPositiveInteger(item.durationMonths)} × ${toPositiveInteger(item.onboardingCount)} = ${calculatedQty.toLocaleString('en-IN')} units`
+                                  : 'Quantity updates automatically when duration and onboardings are entered.'}
+                              </div>
+                            </div>
+                          ) : (
+                            <textarea
+                              rows={4}
+                              value={item.description}
+                              onChange={(e) => handleLineChange(idx, 'description', e.target.value)}
+                              placeholder="Item / Description"
+                              style={{
+                                width: '100%',
+                                minHeight: '78px',
+                                padding: '8px 10px',
+                                fontSize: '0.84rem',
+                                borderRadius: '6px',
+                                border: '1px solid #cbd5e1',
+                                lineHeight: '1.45',
+                                resize: 'vertical',
+                                whiteSpace: 'pre-wrap'
+                              }}
+                            />
+                          )}
                         </td>
                         <td>
                           <input 
@@ -1518,20 +1686,35 @@ export default function QuotationModal({
                           />
                         </td>
                         <td>
-                          <input 
-                            type="number" 
-                            min="1" 
-                            value={item.qty} 
-                            onChange={(e) => handleLineChange(idx, 'qty', Number(e.target.value))} 
-                          />
+                          {isBundleDetail ? (
+                            <div
+                              className="bundle-qty-display"
+                              title="Automatically calculated as duration × onboardings"
+                            >
+                              {Number(item.qty) > 0 ? Number(item.qty).toLocaleString('en-IN') : '—'}
+                            </div>
+                          ) : (
+                            <input
+                              type="number"
+                              min="1"
+                              value={item.qty}
+                              onChange={(e) => handleLineChange(idx, 'qty', Number(e.target.value))}
+                            />
+                          )}
                         </td>
                         <td>
-                          <input 
-                            type="number" 
-                            min="0" 
-                            value={item.rate} 
-                            onChange={(e) => handleLineChange(idx, 'rate', Number(e.target.value))} 
-                          />
+                          {isBundleDetail ? (
+                            <div className="bundle-rate-display" title="Edit the unit price in the bundle details">
+                              ₹ {Number(item.rate || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </div>
+                          ) : (
+                            <input
+                              type="number"
+                              min="0"
+                              value={item.rate}
+                              onChange={(e) => handleLineChange(idx, 'rate', Number(e.target.value))}
+                            />
+                          )}
                         </td>
                         <td>
                           <select 

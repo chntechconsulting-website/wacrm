@@ -376,7 +376,7 @@ export function generateBillingPdf(docData, download = true) {
   let calculatedIgst = 0;
 
   const itemRows = (docData.lineItems || []).map((line, idx) => {
-    const qty = Number(line.qty || 1);
+    const qty = Number(line.qty ?? 1);
     const rate = Number(line.rate || 0);
     const discount = Number(line.discount || 0);
     const amount = Math.max(0, qty * rate - discount);
