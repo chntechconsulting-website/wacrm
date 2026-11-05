@@ -41,10 +41,49 @@ const formatINR = (val) => {
 };
 
 const LIFECYCLE_STAGES = [
-  { key: 'PENDING_ONBOARDING', label: 'Pending Onboarding', badgeClass: 'wf-badge-pending' },
-  { key: 'CONTACTED', label: 'Contacted', badgeClass: 'wf-badge-contacted' },
-  { key: 'ONBOARDING_IN_PROGRESS', label: 'In Progress', badgeClass: 'wf-badge-inprogress' },
-  { key: 'COMPLETED', label: 'Completed', badgeClass: 'wf-badge-completed' }
+  { key: 'NEW', label: 'New', badgeClass: 'wf-badge-pending' },
+  { key: 'ONBOARDING', label: 'Onboarding', badgeClass: 'wf-badge-contacted' },
+  { key: 'INSTALLATION_PENDING', label: 'Installation Pending', badgeClass: 'wf-badge-inprogress' },
+  { key: 'INSTALLATION_COMPLETED', label: 'Installation Completed', badgeClass: 'wf-badge-inprogress' },
+  { key: 'TRAINING', label: 'Training', badgeClass: 'wf-badge-inprogress' },
+  { key: 'ACTIVE', label: 'Active', badgeClass: 'wf-badge-completed' },
+  { key: 'ISSUE_RAISED', label: 'Issue Raised', badgeClass: 'wf-badge-rejected' },
+  { key: 'RESOLVED', label: 'Resolved', badgeClass: 'wf-badge-completed' }
+];
+
+const LEGACY_SUPPORT_STATUS_MAP = {
+  PENDING_ONBOARDING: 'NEW',
+  PENDING_CONTACT: 'NEW',
+  CONTACTED: 'ONBOARDING',
+  ONBOARDING_IN_PROGRESS: 'ONBOARDING',
+  IN_PROGRESS: 'ONBOARDING',
+  IN_TRAINING: 'TRAINING',
+  LIVE: 'ACTIVE',
+  COMPLETED: 'RESOLVED',
+  COMPLETE: 'RESOLVED',
+  DONE: 'RESOLVED'
+};
+
+const normalizeSupportStatus = (value) => {
+  const key = String(value || 'NEW').trim().toUpperCase().replace(/[\s-]/g, '_');
+  return LEGACY_SUPPORT_STATUS_MAP[key] || key;
+};
+
+const getTicketSupportStatus = (ticket) =>
+  normalizeSupportStatus(ticket?.support_status || ticket?.onboarding_status);
+
+const supportStatusLabel = (value) => {
+  const canonical = normalizeSupportStatus(value);
+  return LIFECYCLE_STAGES.find((stage) => stage.key === canonical)?.label
+    || canonical.replace(/_/g, ' ');
+};
+
+const OPEN_SUPPORT_STATUSES = [
+  'ONBOARDING',
+  'INSTALLATION_PENDING',
+  'INSTALLATION_COMPLETED',
+  'TRAINING',
+  'ISSUE_RAISED'
 ];
 
 const SupportQueuePage = () => {
@@ -58,7 +97,7 @@ const SupportQueuePage = () => {
   // Status Update Modal
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [statusForm, setStatusForm] = useState({
-    onboarding_status: 'PENDING_ONBOARDING',
+    support_status: 'NEW',
     support_notes: '',
     assigned_agent_id: ''
   });
@@ -137,8 +176,8 @@ const SupportQueuePage = () => {
     }
 
     // If ticket is pending onboarding, show notification
-    if (ticket.onboarding_status === 'PENDING_ONBOARDING') {
-      setToastMessage(`Call placed to ${ticket.customer_name} (${ticket.phone}). Update status to CONTACTED once connected!`);
+    if (getTicketSupportStatus(ticket) === 'NEW') {
+      setToastMessage(`Call placed to ${ticket.customer_name} (${ticket.phone}). Update Support status to Onboarding once connected!`);
       setTimeout(() => setToastMessage(null), 6000);
     }
   };
@@ -160,7 +199,7 @@ const SupportQueuePage = () => {
   const handleOpenStatusModal = (ticket) => {
     setSelectedTicket(ticket);
     setStatusForm({
-      onboarding_status: ticket.onboarding_status || 'PENDING_ONBOARDING',
+      support_status: getTicketSupportStatus(ticket),
       support_notes: ticket.support_notes || '',
       assigned_agent_id: ticket.assigned_agent_id || ''
     });
@@ -173,18 +212,19 @@ const SupportQueuePage = () => {
     try {
       setUpdating(true);
       await API.put(`/workflow/support/handoffs/${selectedTicket.id}/status`, {
-        onboarding_status: statusForm.onboarding_status,
+        support_status: statusForm.support_status,
         support_notes: statusForm.support_notes,
         assigned_agent_id: statusForm.assigned_agent_id ? parseInt(statusForm.assigned_agent_id) : null
       });
 
-      setToastMessage(`Onboarding ticket #${selectedTicket.id} updated to ${statusForm.onboarding_status}!`);
+      const statusLabel = supportStatusLabel(statusForm.support_status);
+      setToastMessage(`Support ticket #${selectedTicket.id} updated to ${statusLabel}!`);
       setTimeout(() => setToastMessage(null), 5000);
       PingoPopupService.triggerStatusUpdate({
         module: 'Support Onboarding',
-        status: statusForm.onboarding_status,
+        status: statusForm.support_status,
         reference: `Ticket #${selectedTicket.id}`,
-        customMessage: `Ticket #${selectedTicket.id} status updated to ${statusForm.onboarding_status}!`
+        customMessage: `Ticket #${selectedTicket.id} Support status updated to ${statusLabel}!`
       });
       setSelectedTicket(null);
       fetchTickets();
@@ -227,14 +267,16 @@ const SupportQueuePage = () => {
     }
   };
 
-  // KPI Calculations
-  const pendingCount = tickets.filter((t) => t.onboarding_status === 'PENDING_ONBOARDING').length;
-  const contactedCount = tickets.filter((t) => t.onboarding_status === 'CONTACTED').length;
-  const inProgressCount = tickets.filter((t) => t.onboarding_status === 'ONBOARDING_IN_PROGRESS').length;
-  const completedCount = tickets.filter((t) => t.onboarding_status === 'COMPLETED').length;
+  // KPI Calculations (Support status only)
+  const pendingCount = tickets.filter((t) => getTicketSupportStatus(t) === 'NEW').length;
+  const onboardingCount = tickets.filter((t) => getTicketSupportStatus(t) === 'ONBOARDING').length;
+  const inProgressCount = tickets.filter((t) => OPEN_SUPPORT_STATUSES.includes(getTicketSupportStatus(t))).length;
+  const activeCount = tickets.filter((t) => getTicketSupportStatus(t) === 'ACTIVE').length;
+  const resolvedCount = tickets.filter((t) => getTicketSupportStatus(t) === 'RESOLVED').length;
 
   const getStageBadge = (stage) => {
-    const s = LIFECYCLE_STAGES.find((x) => x.key === stage);
+    const canonical = normalizeSupportStatus(stage);
+    const s = LIFECYCLE_STAGES.find((x) => x.key === canonical);
     if (!s) return <span className="wf-badge wf-badge-pending">{stage}</span>;
     return <span className={`wf-badge ${s.badgeClass}`}>{s.label}</span>;
   };
@@ -329,16 +371,16 @@ const SupportQueuePage = () => {
         </button>
       </div>
 
-      {/* KPI Lifecycle Cards */}
+      {/* KPI Lifecycle Cards (independent Support status) */}
       <div className="workflow-kpi-grid">
         <div className="workflow-kpi-card">
           <div className="workflow-kpi-icon" style={{ backgroundColor: '#fef3c7', color: '#b45309' }}>
             <Clock size={24} />
           </div>
           <div>
-            <div className="workflow-kpi-label">Pending Onboarding</div>
+            <div className="workflow-kpi-label">New</div>
             <div className="workflow-kpi-value text-amber-600">{pendingCount}</div>
-            <div className="workflow-kpi-sub">Awaiting welcome call & setup</div>
+            <div className="workflow-kpi-sub">Awaiting first contact</div>
           </div>
         </div>
 
@@ -347,9 +389,9 @@ const SupportQueuePage = () => {
             <PhoneCall size={24} />
           </div>
           <div>
-            <div className="workflow-kpi-label">Contacted</div>
-            <div className="workflow-kpi-value text-indigo-700">{contactedCount}</div>
-            <div className="workflow-kpi-sub">Intro call / welcome email sent</div>
+            <div className="workflow-kpi-label">Onboarding</div>
+            <div className="workflow-kpi-value text-indigo-700">{onboardingCount}</div>
+            <div className="workflow-kpi-sub">Welcome call / account setup</div>
           </div>
         </div>
 
@@ -358,9 +400,20 @@ const SupportQueuePage = () => {
             <Play size={24} />
           </div>
           <div>
-            <div className="workflow-kpi-label">In Progress</div>
+            <div className="workflow-kpi-label">Open Work</div>
             <div className="workflow-kpi-value text-sky-700">{inProgressCount}</div>
-            <div className="workflow-kpi-sub">Configuration & setup</div>
+            <div className="workflow-kpi-sub">Installation, training & issues</div>
+          </div>
+        </div>
+
+        <div className="workflow-kpi-card">
+          <div className="workflow-kpi-icon" style={{ backgroundColor: '#d1fae5', color: '#047857' }}>
+            <ShieldCheck size={24} />
+          </div>
+          <div>
+            <div className="workflow-kpi-label">Active</div>
+            <div className="workflow-kpi-value text-emerald-700">{activeCount}</div>
+            <div className="workflow-kpi-sub">Customer is live</div>
           </div>
         </div>
 
@@ -369,9 +422,9 @@ const SupportQueuePage = () => {
             <CheckCircle2 size={24} />
           </div>
           <div>
-            <div className="workflow-kpi-label">Completed</div>
-            <div className="workflow-kpi-value text-emerald-700">{completedCount}</div>
-            <div className="workflow-kpi-sub">Services fully activated</div>
+            <div className="workflow-kpi-label">Resolved</div>
+            <div className="workflow-kpi-value text-emerald-700">{resolvedCount}</div>
+            <div className="workflow-kpi-sub">Support lifecycle resolved</div>
           </div>
         </div>
       </div>
@@ -387,34 +440,16 @@ const SupportQueuePage = () => {
             >
               All Assignments ({tickets.length})
             </button>
-            <button
-              type="button"
-              className={`workflow-tab-btn ${activeTab === 'PENDING_ONBOARDING' ? 'active' : ''}`}
-              onClick={() => setActiveTab('PENDING_ONBOARDING')}
-            >
-              Pending ({pendingCount})
-            </button>
-            <button
-              type="button"
-              className={`workflow-tab-btn ${activeTab === 'CONTACTED' ? 'active' : ''}`}
-              onClick={() => setActiveTab('CONTACTED')}
-            >
-              Contacted ({contactedCount})
-            </button>
-            <button
-              type="button"
-              className={`workflow-tab-btn ${activeTab === 'ONBOARDING_IN_PROGRESS' ? 'active' : ''}`}
-              onClick={() => setActiveTab('ONBOARDING_IN_PROGRESS')}
-            >
-              In Progress ({inProgressCount})
-            </button>
-            <button
-              type="button"
-              className={`workflow-tab-btn ${activeTab === 'COMPLETED' ? 'active' : ''}`}
-              onClick={() => setActiveTab('COMPLETED')}
-            >
-              Completed ({completedCount})
-            </button>
+            {LIFECYCLE_STAGES.map((stage) => (
+              <button
+                key={stage.key}
+                type="button"
+                className={`workflow-tab-btn ${activeTab === stage.key ? 'active' : ''}`}
+                onClick={() => setActiveTab(stage.key)}
+              >
+                {stage.label} ({tickets.filter((t) => getTicketSupportStatus(t) === stage.key).length})
+              </button>
+            ))}
           </div>
 
           <form onSubmit={handleSearchSubmit} className="workflow-search-box">
@@ -437,14 +472,15 @@ const SupportQueuePage = () => {
                 <th>Deal Amount & Payment</th>
                 <th>Quotation & WON Date</th>
                 <th>Sales Rep & Support Manager</th>
-                <th>Onboarding Lifecycle</th>
+                <th>Sales Status</th>
+                <th>Support Status</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {tickets.length === 0 ? (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', padding: '48px', color: '#94a3b8' }}>
+                  <td colSpan="8" style={{ textAlign: 'center', padding: '48px', color: '#94a3b8' }}>
                     <AlertCircle size={32} style={{ margin: '0 auto 8px auto', color: '#cbd5e1' }} />
                     <p style={{ fontWeight: 600, color: '#475569', margin: 0 }}>No onboarding assignments found</p>
                     <small>When Sales marks a deal as WON and selects a Support Manager, it appears immediately here.</small>
@@ -609,9 +645,19 @@ const SupportQueuePage = () => {
                       </div>
                     </td>
 
-                    {/* 6. Onboarding Lifecycle */}
+                    {/* 6. Sales Status (read-only) */}
                     <td>
-                      {getStageBadge(t.onboarding_status)}
+                      <span className={`wf-badge ${['WON', 'CONVERTED'].includes((t.sales_status || '').toUpperCase()) ? 'wf-badge-completed' : 'wf-badge-pending'}`}>
+                        {(t.sales_status || 'N/A').replace(/_/g, ' ')}
+                      </span>
+                      <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '3px' }}>
+                        Read-only
+                      </div>
+                    </td>
+
+                    {/* 7. Support Status (independent lifecycle) */}
+                    <td>
+                      {getStageBadge(getTicketSupportStatus(t))}
                       {t.assigned_agent_name && (
                         <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '3px' }}>
                           Agent: {t.assigned_agent_name}
@@ -939,15 +985,18 @@ const SupportQueuePage = () => {
                 </div>
 
                 <div className="wf-form-group">
-                  <label>Support Lifecycle Stage</label>
+                  <label>Support Status (independent from Sales status)</label>
                   <select
-                    value={statusForm.onboarding_status}
-                    onChange={(e) => setStatusForm({ ...statusForm, onboarding_status: e.target.value })}
+                    value={statusForm.support_status}
+                    onChange={(e) =>
+                      setStatusForm({ ...statusForm, support_status: e.target.value })
+                    }
                   >
-                    <option value="PENDING_ONBOARDING">1. PENDING_ONBOARDING (Awaiting contact)</option>
-                    <option value="CONTACTED">2. CONTACTED (Welcome call / email sent)</option>
-                    <option value="ONBOARDING_IN_PROGRESS">3. ONBOARDING_IN_PROGRESS (Account & service setup)</option>
-                    <option value="COMPLETED">4. COMPLETED (Onboarding completed & activated)</option>
+                    {LIFECYCLE_STAGES.map((stage, index) => (
+                      <option key={stage.key} value={stage.key}>
+                        {index + 1}. {stage.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
 

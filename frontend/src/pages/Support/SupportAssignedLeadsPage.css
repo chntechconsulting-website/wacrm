@@ -367,7 +367,13 @@
 .status-pill.new { background: #e0f2fe; color: #0369a1; }
 .status-pill.contacted { background: #ede9fe; color: #6d28d9; }
 .status-pill.in_progress { background: #fef3c7; color: #b45309; }
-.status-pill.onboarding { background: #ffedd5; color: #c2410c; }
+.status-pill.onboarding { background: #ede9fe; color: #6d28d9; }
+.status-pill.installation_pending { background: #fef3c7; color: #b45309; }
+.status-pill.installation_completed { background: #ccfbf1; color: #0f766e; }
+.status-pill.training { background: #e0e7ff; color: #4338ca; }
+.status-pill.active { background: #dcfce7; color: #15803d; }
+.status-pill.issue_raised { background: #fee2e2; color: #b91c1c; }
+.status-pill.resolved { background: #dcfce7; color: #15803d; }
 .status-pill.completed { background: #dcfce7; color: #15803d; }
 .status-pill.won { background: #dcfce7; color: #15803d; }
 .status-pill.lost { background: #fee2e2; color: #b91c1c; }

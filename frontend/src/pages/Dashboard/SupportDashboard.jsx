@@ -50,7 +50,7 @@ const SupportDashboard = ({ data }) => {
       key: 'open',
       label: 'Open Tickets',
       value: openTickets,
-      subtext: 'Contacted or in progress',
+      subtext: 'Onboarding, installation, training or issues',
       icon: Clock,
       color: '#8b5cf6',
       bg: 'rgba(139, 92, 246, 0.12)',
@@ -60,11 +60,11 @@ const SupportDashboard = ({ data }) => {
       key: 'resolved',
       label: 'Resolved Tickets',
       value: resolvedTickets,
-      subtext: 'Completed onboarding',
+      subtext: 'Support lifecycle resolved',
       icon: CheckCircle,
       color: '#16a34a',
       bg: 'rgba(22, 163, 74, 0.12)',
-      onClick: () => navigate('/support?status=COMPLETED'),
+      onClick: () => navigate('/support?status=RESOLVED'),
     },
     {
       key: 'pending',
@@ -74,7 +74,7 @@ const SupportDashboard = ({ data }) => {
       icon: AlertCircle,
       color: '#f59e0b',
       bg: 'rgba(245, 158, 11, 0.12)',
-      onClick: () => navigate('/support?status=PENDING_ONBOARDING'),
+      onClick: () => navigate('/support?status=NEW'),
     },
     {
       key: 'followups',
@@ -98,16 +98,41 @@ const SupportDashboard = ({ data }) => {
     },
   ];
 
+  // Canonical Support statuses; legacy values are normalised only for display
+  // so historical rows remain readable without changing stored data.
   const getStatusStyle = (status) => {
-    const normalized = (status || '').toUpperCase();
-    if (normalized === 'COMPLETED') {
+    const key = String(status || 'NEW').toUpperCase().replace(/[\s-]/g, '_');
+    const normalized =
+      {
+        PENDING_ONBOARDING: 'NEW',
+        PENDING_CONTACT: 'NEW',
+        CONTACTED: 'ONBOARDING',
+        ONBOARDING_IN_PROGRESS: 'ONBOARDING',
+        IN_PROGRESS: 'ONBOARDING',
+        IN_TRAINING: 'TRAINING',
+        LIVE: 'ACTIVE',
+        COMPLETED: 'RESOLVED',
+        COMPLETE: 'RESOLVED',
+        DONE: 'RESOLVED',
+      }[key] || key;
+
+    if (normalized === 'RESOLVED' || normalized === 'ACTIVE') {
       return { backgroundColor: '#dcfce7', color: '#15803d' };
     }
-    if (normalized === 'ONBOARDING_IN_PROGRESS') {
-      return { backgroundColor: '#ede9fe', color: '#6d28d9' };
+    if (normalized === 'ISSUE_RAISED') {
+      return { backgroundColor: '#fee2e2', color: '#b91c1c' };
     }
-    if (normalized === 'CONTACTED') {
+    if (normalized === 'ONBOARDING') {
       return { backgroundColor: '#dbeafe', color: '#1d4ed8' };
+    }
+    if (normalized === 'TRAINING') {
+      return { backgroundColor: '#e0e7ff', color: '#4338ca' };
+    }
+    if (
+      normalized === 'INSTALLATION_PENDING' ||
+      normalized === 'INSTALLATION_COMPLETED'
+    ) {
+      return { backgroundColor: '#ede9fe', color: '#6d28d9' };
     }
     return { backgroundColor: '#fef3c7', color: '#b45309' };
   };
@@ -402,9 +427,12 @@ const SupportDashboard = ({ data }) => {
                           borderRadius: '10px',
                           fontSize: '0.72rem',
                           fontWeight: '700',
-                          ...getStatusStyle(ticket.onboarding_status),
+                          ...getStatusStyle(ticket.support_status || ticket.onboarding_status),
                         }}>
-                          {ticket.status_label || ticket.onboarding_status || 'Pending'}
+                          {ticket.status_label ||
+                            ticket.support_status ||
+                            ticket.onboarding_status ||
+                            'New'}
                         </span>
                       </td>
                       <td style={{ padding: '10px', color: '#475569' }}>{ticket.assigned_agent_name || 'Unassigned'}</td>

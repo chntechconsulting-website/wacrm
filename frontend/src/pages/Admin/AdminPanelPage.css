@@ -592,6 +592,12 @@
   color: #64748b;
 }
 
+.admin-pill.red {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 .admin-btn {
   display: inline-flex;
   align-items: center;

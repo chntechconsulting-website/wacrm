@@ -22,6 +22,12 @@ from routers.reports import (
 )
 from routers.sales_targets import get_employee_achievements, get_my_target
 from services.hierarchy_service import get_team_employee_ids_from_user
+from utils.support_status import (
+    SUPPORT_OPEN_STATUSES,
+    SUPPORT_STATUS_NEW,
+    SUPPORT_STATUS_RESOLVED,
+    normalize_support_status,
+)
 
 
 class TestDashboardRoleAccess(unittest.TestCase):
@@ -141,13 +147,19 @@ class TestDashboardRoleAccess(unittest.TestCase):
         )
 
     def _status_counts(self, query):
+        """Support status counts keyed by canonical status.
+
+        Legacy rows (PENDING_ONBOARDING/CONTACTED/ONBOARDING_IN_PROGRESS/
+        COMPLETED) are normalised exactly like the dashboard endpoint does.
+        """
         counts = {}
         for status, count in (
             query.with_entities(SupportHandoff.onboarding_status, func.count(SupportHandoff.id))
             .group_by(SupportHandoff.onboarding_status)
             .all()
         ):
-            counts[(status or "PENDING_ONBOARDING").upper()] = int(count or 0)
+            canonical = normalize_support_status(status) or SUPPORT_STATUS_NEW
+            counts[canonical] = counts.get(canonical, 0) + int(count or 0)
         return counts
 
     def test_support_executive_gets_support_dashboard_only(self):
@@ -163,12 +175,15 @@ class TestDashboardRoleAccess(unittest.TestCase):
         counts = self._status_counts(self._support_exec_query())
         support = payload["support"]
         self.assertEqual(support["total_tickets"], sum(counts.values()))
-        self.assertEqual(support["pending_tickets"], counts.get("PENDING_ONBOARDING", 0))
+        self.assertEqual(support["pending_tickets"], counts.get(SUPPORT_STATUS_NEW, 0))
         self.assertEqual(
             support["open_tickets"],
-            counts.get("CONTACTED", 0) + counts.get("ONBOARDING_IN_PROGRESS", 0),
+            sum(counts.get(status, 0) for status in SUPPORT_OPEN_STATUSES),
         )
-        self.assertEqual(support["resolved_tickets"], counts.get("COMPLETED", 0))
+        self.assertEqual(
+            support["resolved_tickets"],
+            counts.get(SUPPORT_STATUS_RESOLVED, 0),
+        )
 
     def test_support_manager_gets_team_scoped_support_dashboard(self):
         payload = dashboard_stats(db=self.db, current_user=self.support_mgr_user)
@@ -176,7 +191,10 @@ class TestDashboardRoleAccess(unittest.TestCase):
         self.assertEqual(payload["dashboard_type"], "support")
         counts = self._status_counts(self._support_mgr_team_query())
         self.assertEqual(payload["support"]["total_tickets"], sum(counts.values()))
-        self.assertEqual(payload["support"]["resolved_tickets"], counts.get("COMPLETED", 0))
+        self.assertEqual(
+            payload["support"]["resolved_tickets"],
+            counts.get(SUPPORT_STATUS_RESOLVED, 0),
+        )
         self.assertNotIn("total_leads", payload)
 
     def test_admin_gets_both_dashboards(self):

@@ -14,6 +14,13 @@ from models.notification import Notification
 from models.activity import LeadActivity
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.audit_log import AuditLog
+from utils.support_status import (
+    SUPPORT_STATUS_NEW,
+    SUPPORT_STATUS_RESOLVED,
+    normalize_support_status,
+    require_support_status,
+    support_status_label,
+)
 
 
 logger = logging.getLogger("workflow_service")
@@ -23,7 +30,8 @@ class WorkflowService:
     Automates the cross-team Sales -> Finance -> Support lifecycle in WaCRM.
     1. Deal WON -> Automatically creates Finance Handoff (status: PAYMENT_PENDING) & notifies Finance.
     2. Finance PAID -> Confirms payment, syncs to Deal & Customer, creates Support Handoff & notifies Sales + Support.
-    3. Support Onboarding -> PENDING_ONBOARDING -> CONTACTED -> ONBOARDING_IN_PROGRESS -> COMPLETED.
+    3. Support status is independent: NEW -> ONBOARDING -> INSTALLATION_PENDING
+       -> INSTALLATION_COMPLETED -> TRAINING -> ACTIVE -> ISSUE_RAISED -> RESOLVED.
     """
 
     @staticmethod
@@ -416,7 +424,7 @@ class WorkflowService:
                 sales_employee_id=handoff.sales_employee_id,
                 sales_employee_name=handoff.sales_employee_name,
                 customer_requirements=handoff.customer_requirements,
-                onboarding_status="PENDING_ONBOARDING",
+                onboarding_status=SUPPORT_STATUS_NEW,
                 created_at=datetime.utcnow()
             )
             db.add(support_handoff)
@@ -430,7 +438,7 @@ class WorkflowService:
                 employee_id=performed_emp_id,
                 performed_by=performed_emp_id,
                 activity_type="SUPPORT_HANDOFF_CREATED",
-                description=f"Created Support Onboarding record with status PENDING_ONBOARDING for {handoff.customer_name}."
+                description=f"Created Support Onboarding record with status {support_status_label(SUPPORT_STATUS_NEW)} for {handoff.customer_name}."
             )
             db.add(support_activity)
 
@@ -439,12 +447,12 @@ class WorkflowService:
                 customer_id=handoff.customer_id,
                 stage="SUPPORT",
                 previous_status=None,
-                new_status="PENDING_ONBOARDING",
+                new_status=SUPPORT_STATUS_NEW,
                 performed_by_id=current_user.id,
                 performed_by_name=current_user.username,
                 role="FINANCE",
                 title="Support Onboarding Handoff Created",
-                description=f"Customer handed off to Support team. Initial stage: PENDING_ONBOARDING."
+                description=f"Customer handed off to Support team. Initial stage: {support_status_label(SUPPORT_STATUS_NEW)}."
             )
             db.add(support_timeline)
 
@@ -453,7 +461,7 @@ class WorkflowService:
                 db=db,
                 roles=["SUPPORT", "ADMIN"],
                 title=f"New Customer Ready for Onboarding: {handoff.customer_name}",
-                message=f"Payment verified for {handoff.customer_name} (Invoice #{invoice_number}). Ticket created with status PENDING_ONBOARDING.",
+                message=f"Payment verified for {handoff.customer_name} (Invoice #{invoice_number}). Ticket created with Support status {support_status_label(SUPPORT_STATUS_NEW)}.",
                 notification_type="SUPPORT_ONBOARDING",
                 link_url=f"/support?onboarding_id={support_handoff.id}"
             )
@@ -476,20 +484,37 @@ class WorkflowService:
         current_user: User
     ) -> SupportHandoff:
         """
-        Support updates onboarding lifecycle:
-        PENDING_ONBOARDING -> CONTACTED -> ONBOARDING_IN_PROGRESS -> COMPLETED.
-        Records every step in the auditable timeline.
+        Update the independent Support lifecycle status.
+
+        The ``support_handoffs.onboarding_status`` column is retained as the
+        backing field for compatibility, but only the Support workflow writes
+        it. ``Lead.status`` (Sales status) is never read or modified here.
+
+        Canonical statuses: NEW, ONBOARDING, INSTALLATION_PENDING,
+        INSTALLATION_COMPLETED, TRAINING, ACTIVE, ISSUE_RAISED, RESOLVED.
+        Legacy/mobile values are normalised on input.
         """
         support = db.query(SupportHandoff).filter(SupportHandoff.id == support_id).first()
         if not support:
             raise ValueError("Support onboarding record not found")
 
-        old_status = support.onboarding_status
-        new_status = update_data.get("onboarding_status") or old_status
+        old_status = normalize_support_status(support.onboarding_status) or SUPPORT_STATUS_NEW
+        requested_status = (
+            update_data.get("support_status")
+            or update_data.get("onboarding_status")
+            or update_data.get("status")
+        )
+        if requested_status:
+            new_status = require_support_status(requested_status)
+            support.onboarding_status = new_status
+        else:
+            # Notes/assignment-only updates must not rewrite a legacy stored
+            # value; expose the canonical status without mutating history.
+            new_status = old_status
+
         assigned_agent_id = update_data.get("assigned_agent_id")
         support_notes = update_data.get("support_notes")
 
-        support.onboarding_status = new_status
         if support_notes is not None:
             support.support_notes = support_notes
 
@@ -498,15 +523,19 @@ class WorkflowService:
             support.assigned_agent_id = assigned_agent_id
             support.assigned_agent_name = agent.name if agent else "Support Agent"
 
-        if new_status == "CONTACTED" and not support.contacted_at:
-            support.contacted_at = datetime.utcnow()
+        now = datetime.utcnow()
+        if new_status != SUPPORT_STATUS_NEW and not support.contacted_at:
+            support.contacted_at = now
 
-        if new_status == "COMPLETED" and not support.completed_at:
-            support.completed_at = datetime.utcnow()
+        if new_status == SUPPORT_STATUS_RESOLVED and not support.completed_at:
+            support.completed_at = now
 
-        # Log timeline
+        # Log timeline. These records are Support-only; LeadStatusHistory and
+        # Lead.status remain untouched.
         cur_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
         performed_emp_id = cur_emp.id if cur_emp else None
+        old_label = support_status_label(old_status)
+        new_label = support_status_label(new_status)
 
         activity = LeadActivity(
             lead_id=support.lead_id,
@@ -514,7 +543,10 @@ class WorkflowService:
             employee_id=performed_emp_id,
             performed_by=performed_emp_id,
             activity_type="SUPPORT_STATUS_CHANGED",
-            description=f"Support onboarding status changed: {old_status} -> {new_status} by {current_user.username}. Notes: {support_notes or 'Updated'}."
+            description=(
+                f"Support status changed: {old_label} -> {new_label} by "
+                f"{current_user.username}. Notes: {support_notes or 'Updated'}."
+            )
         )
         db.add(activity)
 
@@ -527,31 +559,34 @@ class WorkflowService:
             performed_by_id=current_user.id,
             performed_by_name=current_user.username,
             role=current_user.role,
-            title=f"Support Onboarding: {new_status}",
-            description=f"Status transitioned from {old_status} to {new_status}. Assigned Agent: {support.assigned_agent_name or 'Unassigned'}."
+            title=f"Support Status: {new_label}",
+            description=(
+                f"Support status transitioned from {old_label} to {new_label}. "
+                f"Assigned Agent: {support.assigned_agent_name or 'Unassigned'}."
+            )
         )
         db.add(timeline_event)
 
-        # If completed, notify Sales employee & Admin
-        if new_status == "COMPLETED" and old_status != "COMPLETED":
+        # Notify Sales employee & Admin when the Support lifecycle resolves.
+        if new_status == SUPPORT_STATUS_RESOLVED and old_status != SUPPORT_STATUS_RESOLVED:
             if support.sales_employee_id:
                 sales_emp = db.query(Employee).filter(Employee.id == support.sales_employee_id).first()
                 if sales_emp and sales_emp.user_id:
                     WorkflowService.notify_user(
                         db=db,
                         user_id=sales_emp.user_id,
-                        title=f"Onboarding Completed: {support.customer_name}",
-                        message=f"Customer {support.customer_name} has successfully completed support onboarding & service activation!",
-                        notification_type="ONBOARDING_COMPLETED",
+                        title=f"Support Resolved: {support.customer_name}",
+                        message=f"Customer {support.customer_name} has completed support onboarding and the Support status is now Resolved.",
+                        notification_type="SUPPORT_RESOLVED",
                         link_url=f"/leads/{support.lead_id}"
                     )
 
             WorkflowService.notify_roles(
                 db=db,
                 roles=["ADMIN"],
-                title=f"Customer Onboarding Completed: {support.customer_name}",
-                message=f"Onboarding ticket #{support.id} for {support.customer_name} ({support.company_name}) marked COMPLETED.",
-                notification_type="ONBOARDING_COMPLETED",
+                title=f"Support Resolved: {support.customer_name}",
+                message=f"Support ticket #{support.id} for {support.customer_name} ({support.company_name}) was marked RESOLVED.",
+                notification_type="SUPPORT_RESOLVED",
                 link_url=f"/support?onboarding_id={support.id}"
             )
 
@@ -1102,7 +1137,7 @@ class WorkflowService:
                 support_manager_id=manager_emp_id,
                 support_manager_name=manager_name,
                 won_at=now_utc,
-                onboarding_status="PENDING_ONBOARDING",
+                onboarding_status=SUPPORT_STATUS_NEW,
                 created_at=now_utc
             )
             db.add(support_handoff)

@@ -94,6 +94,9 @@ class SupportHandoffOut(BaseModel):
     won_at: Optional[datetime] = None
     
     onboarding_status: str
+    # Independent status pair: Sales status is read-only here.
+    sales_status: Optional[str] = None
+    support_status: Optional[str] = None
     assigned_agent_id: Optional[int] = None
     assigned_agent_name: Optional[str] = None
     support_notes: Optional[str] = None
@@ -134,7 +137,11 @@ class FinancePaymentConfirmRequest(BaseModel):
     payment_credentials: Optional[str] = None
 
 class SupportStatusUpdateRequest(BaseModel):
+    # `support_status` is the canonical field. The two legacy input names are
+    # accepted so existing web/mobile clients keep working during rollout.
+    support_status: Optional[str] = None
     onboarding_status: Optional[str] = None
+    status: Optional[str] = None
     assigned_agent_id: Optional[int] = None
     support_notes: Optional[str] = None
 

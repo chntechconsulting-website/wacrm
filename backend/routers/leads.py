@@ -3,7 +3,7 @@ import math
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, status
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc, asc
+from sqlalchemy import or_, desc, asc, func
 from typing import List, Optional
 from datetime import datetime
 
@@ -34,7 +34,7 @@ from schemas.lead import (
     AutoAssignConfigUpdate,
     QuoteTaskQuotationCreateRequest
 )
-from schemas.workflow import DealWonRequest
+from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
 from services.permission_service import (
     user_has_permission, 
@@ -61,8 +61,24 @@ from services.excel_service import (
     parse_and_validate_excel_leads,
     generate_error_rows_excel
 )
+from utils.support_status import (
+    InvalidSupportStatusError,
+    require_support_status,
+    support_status_storage_values,
+)
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
+
+SUPPORT_ROLES = {ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE}
+
+
+def _is_support_actor(user: User) -> bool:
+    """True for Support employees/managers, including legacy SUPPORT labels."""
+    if not user:
+        return False
+    if normalize_role(user.role) in SUPPORT_ROLES:
+        return True
+    return (user.department or "").strip().upper() == "SUPPORT"
 
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
@@ -796,18 +812,22 @@ def get_support_assigned_leads(
             )
         )
 
-    # Status filter
-    if status and status.upper() != "ALL":
-        st_clean = status.strip().upper()
+    # Status filter applies to the independent Support status only. Sales
+    # status (Lead.status) must never be used to filter the Support queue.
+    if status and status.strip().upper() != "ALL":
+        try:
+            canonical_status = require_support_status(status)
+        except InvalidSupportStatusError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        storage_values = support_status_storage_values(canonical_status)
         handoffs_with_st = [
-            h[0] for h in db.query(SupportHandoff.lead_id).filter(SupportHandoff.onboarding_status.ilike(f"%{st_clean}%")).all() if h[0]
+            h[0]
+            for h in db.query(SupportHandoff.lead_id)
+            .filter(func.upper(SupportHandoff.onboarding_status).in_(storage_values))
+            .all()
+            if h[0]
         ]
-        query = query.filter(
-            or_(
-                Lead.status.ilike(f"%{st_clean}%"),
-                Lead.id.in_(handoffs_with_st)
-            )
-        )
+        query = query.filter(Lead.id.in_(handoffs_with_st))
 
     # Priority filter
     if priority and priority.upper() != "ALL":
@@ -901,6 +921,9 @@ def get_support_assigned_leads(
             "id": l.id,
             "lead_id": l.id,
             "support_handoff_id": h.id if h else None,
+            "customer_id": h.customer_id if h else None,
+            "sales_employee_name": h.sales_employee_name if h else None,
+            "won_at": h.won_at.isoformat() if h and h.won_at else None,
             "name": l.name,
             "first_name": l.first_name,
             "last_name": l.last_name,
@@ -913,7 +936,11 @@ def get_support_assigned_leads(
             "state": l.state,
             "location": l.location or (f"{l.city or ''}, {l.state or ''}".strip(', ') if (l.city or l.state) else (h.address if (h and hasattr(h, 'address')) else None)),
             "source": l.source,
+            # `status` is retained for existing clients and is always the
+            # read-only Sales status. Support UIs must use `support_status`.
             "status": l.status,
+            "sales_status": l.status,
+            "support_status": h.support_status if h else "NEW",
             "onboarding_status": h.onboarding_status if h else "PENDING_ONBOARDING",
             "priority": l.priority or "MEDIUM",
             "product_service": product_service,
@@ -1045,6 +1072,75 @@ def assign_support_lead(
     return {"success": True, "lead_id": lead.id, "assigned_to": agent.id, "assigned_to_name": agent.name}
 
 
+@router.put("/{lead_id}/support-status", response_model=SupportHandoffOut)
+def update_support_lead_status(
+    lead_id: int,
+    payload: SupportStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update the independent Support status for a handed-over customer.
+
+    This is the only status endpoint Support roles may use. It never writes to
+    ``Lead.status`` (Sales status) or ``LeadStatusHistory``; all Support
+    changes are recorded on the workflow timeline.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE] and not _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Only Support team and Admin can update the Support status.",
+        )
+
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    from models.workflow import SupportHandoff
+
+    handoff = (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id == lead.id)
+        .order_by(desc(SupportHandoff.id))
+        .first()
+    )
+    if not handoff:
+        raise HTTPException(
+            status_code=404,
+            detail="No Support handover exists for this lead.",
+        )
+
+    if norm_role != ROLE_ADMIN and not is_support_lead_authorized(lead, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You can only update Support status for customers assigned to you.",
+        )
+
+    requested_status = (
+        payload.support_status or payload.onboarding_status or payload.status
+    )
+    if requested_status is not None:
+        try:
+            require_support_status(requested_status)
+        except InvalidSupportStatusError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        from services.workflow_service import WorkflowService
+
+        return WorkflowService.update_support_status(
+            db=db,
+            support_id=handoff.id,
+            update_data=payload.dict(exclude_unset=True),
+            current_user=current_user,
+        )
+    except InvalidSupportStatusError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @router.get("/{lead_id}", response_model=LeadOut)
 def get_lead(
     lead_id: int,
@@ -1108,6 +1204,15 @@ def update_lead(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access forbidden: Support team cannot access this Sales lead."
             )
+
+    if lead_in.status is not None and _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Support team cannot modify the Sales lead status. "
+                "Use the Support status endpoint instead."
+            ),
+        )
 
     current_emp = get_employee_for_user(current_user, db)
     emp_id = current_emp.id if current_emp else None
@@ -1296,14 +1401,17 @@ def change_lead_status(
     emp_id = current_emp.id if current_emp else None
     emp_name = current_emp.name if current_emp else current_user.username
 
+    if _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Support team cannot modify the Sales lead status. "
+                "Use the Support status endpoint instead."
+            ),
+        )
+
     norm_role = normalize_role(current_user.role)
-    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
-        if not is_support_lead_authorized(lead, current_user, db):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied. You can only update status for leads assigned to you."
-            )
-    elif current_user.role == "EMPLOYEE" or norm_role == ROLE_SALES_EXECUTIVE:
+    if current_user.role == "EMPLOYEE" or norm_role == ROLE_SALES_EXECUTIVE:
         if not current_emp or lead.assigned_to != current_emp.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1390,6 +1498,12 @@ def mark_deal_won_with_support_manager(
     Sales closes a Deal as WON with required Support Manager assignment.
     Validates permissions and enforces mandatory Support Manager selection.
     """
+    if _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Support team cannot modify the Sales lead status.",
+        )
+
     can_edit = user_has_permission(current_user, "leads", "edit", db) or current_user.role in ["ADMIN", "MANAGER", "SALES"]
     if not can_edit:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to mark this deal as WON.")

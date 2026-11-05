@@ -35,17 +35,19 @@ from services.permission_service import (
     get_authorized_call_employee_ids
 )
 from services.followup_visibility_service import apply_followup_visibility_filter
+from utils.support_status import (
+    SUPPORT_STATUS_META,
+    SUPPORT_STATUS_NEW,
+    SUPPORT_STATUS_ORDER,
+    SUPPORT_STATUS_RESOLVED,
+    SUPPORT_OPEN_STATUSES,
+    normalize_support_status,
+    support_status_storage_values,
+)
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 ADMIN_ROLE_NAMES = {"ADMIN", "SUPERADMIN"}
-
-SUPPORT_STATUS_META = {
-    "PENDING_ONBOARDING": {"label": "Pending Onboarding", "color": "#f59e0b", "bucket": "pending"},
-    "CONTACTED": {"label": "Contacted", "color": "#3b82f6", "bucket": "open"},
-    "ONBOARDING_IN_PROGRESS": {"label": "In Progress", "color": "#8b5cf6", "bucket": "open"},
-    "COMPLETED": {"label": "Completed", "color": "#10b981", "bucket": "resolved"},
-}
 
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
@@ -218,19 +220,23 @@ def build_support_dashboard_payload(
         .group_by(SupportHandoff.onboarding_status)
         .all()
     )
-    counts: Dict[str, int] = {}
+    canonical_counts: Dict[str, int] = {}
     for status, count in raw_status_counts:
-        key = (status or "PENDING_ONBOARDING").strip().upper()
-        counts[key] = counts.get(key, 0) + int(count or 0)
+        canonical = normalize_support_status(status) or SUPPORT_STATUS_NEW
+        canonical_counts[canonical] = canonical_counts.get(canonical, 0) + int(count or 0)
 
-    total_tickets = sum(counts.values())
-    pending_tickets = counts.get("PENDING_ONBOARDING", 0)
-    open_tickets = counts.get("CONTACTED", 0) + counts.get("ONBOARDING_IN_PROGRESS", 0)
-    resolved_tickets = counts.get("COMPLETED", 0)
+    total_tickets = sum(canonical_counts.values())
+    pending_tickets = canonical_counts.get(SUPPORT_STATUS_NEW, 0)
+    open_tickets = sum(
+        canonical_counts.get(status, 0) for status in SUPPORT_OPEN_STATUSES
+    )
+    resolved_tickets = canonical_counts.get(SUPPORT_STATUS_RESOLVED, 0)
 
-    # Average first resolution time for completed onboarding tickets.
+    # Average first resolution time for resolved Support tickets.
     completed_records = ticket_query.filter(
-        SupportHandoff.onboarding_status == "COMPLETED",
+        func.upper(SupportHandoff.onboarding_status).in_(
+            support_status_storage_values(SUPPORT_STATUS_RESOLVED)
+        ),
         SupportHandoff.completed_at.isnot(None),
         SupportHandoff.created_at.isnot(None),
     ).all()
@@ -246,27 +252,17 @@ def build_support_dashboard_payload(
     )
 
     status_breakdown = []
-    ordered_statuses = ["PENDING_ONBOARDING", "CONTACTED", "ONBOARDING_IN_PROGRESS", "COMPLETED"]
-    for status in ordered_statuses:
+    for status in SUPPORT_STATUS_ORDER:
         meta = SUPPORT_STATUS_META[status]
+        count = canonical_counts.get(status, 0)
         status_breakdown.append({
             "status": status,
             "label": meta["label"],
-            "count": counts.get(status, 0),
-            "percentage": round((counts.get(status, 0) / total_tickets) * 100, 1) if total_tickets else 0.0,
+            "count": count,
+            "percentage": round((count / total_tickets) * 100, 1) if total_tickets else 0.0,
             "color": meta["color"],
             "bucket": meta["bucket"],
         })
-    for status, count in counts.items():
-        if status not in ordered_statuses:
-            status_breakdown.append({
-                "status": status,
-                "label": status.replace("_", " ").title(),
-                "count": count,
-                "percentage": round((count / total_tickets) * 100, 1) if total_tickets else 0.0,
-                "color": "#94a3b8",
-                "bucket": "open",
-            })
 
     agent_rows = (
         ticket_query.with_entities(SupportHandoff.assigned_agent_name, func.count(SupportHandoff.id))
@@ -289,18 +285,18 @@ def build_support_dashboard_payload(
     )
     recent_tickets = []
     for record in recent_records:
-        status = (record.onboarding_status or "PENDING_ONBOARDING").strip().upper()
-        meta = SUPPORT_STATUS_META.get(status, {
-            "label": status.replace("_", " ").title(),
-            "color": "#94a3b8",
-        })
+        raw_status = (record.onboarding_status or "PENDING_ONBOARDING").strip().upper()
+        support_status = normalize_support_status(raw_status) or SUPPORT_STATUS_NEW
+        meta = SUPPORT_STATUS_META[support_status]
         recent_tickets.append({
             "id": record.id,
             "customer_name": record.customer_name,
             "company_name": record.company_name,
             "phone": record.phone,
             "product_service": record.product_service,
-            "onboarding_status": status,
+            "support_status": support_status,
+            # Legacy key retained for existing clients.
+            "onboarding_status": raw_status,
             "status_label": meta["label"],
             "status_color": meta["color"],
             "assigned_agent_name": record.assigned_agent_name,

@@ -48,13 +48,45 @@ const DEPARTMENT_ROLE_OPTIONS = {
   ],
 };
 
+// Canonical Support statuses. These are independent from the Sales status on
+// the same handover row; the Admin table shows both.
 const HANDOVER_STATUSES = [
-  { value: 'all', label: 'All Statuses' },
-  { value: 'PENDING_ONBOARDING', label: 'Pending Onboarding' },
-  { value: 'CONTACTED', label: 'Contacted' },
-  { value: 'ONBOARDING_IN_PROGRESS', label: 'Onboarding In Progress' },
-  { value: 'COMPLETED', label: 'Completed' },
+  { value: 'all', label: 'All Support Statuses' },
+  { value: 'NEW', label: 'New' },
+  { value: 'ONBOARDING', label: 'Onboarding' },
+  { value: 'INSTALLATION_PENDING', label: 'Installation Pending' },
+  { value: 'INSTALLATION_COMPLETED', label: 'Installation Completed' },
+  { value: 'TRAINING', label: 'Training' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'ISSUE_RAISED', label: 'Issue Raised' },
+  { value: 'RESOLVED', label: 'Resolved' },
 ];
+
+const LEGACY_HANDOVER_STATUS_MAP = {
+  PENDING_ONBOARDING: 'NEW',
+  PENDING_CONTACT: 'NEW',
+  CONTACTED: 'ONBOARDING',
+  ONBOARDING_IN_PROGRESS: 'ONBOARDING',
+  IN_PROGRESS: 'ONBOARDING',
+  IN_TRAINING: 'TRAINING',
+  LIVE: 'ACTIVE',
+  COMPLETED: 'RESOLVED',
+  COMPLETE: 'RESOLVED',
+  DONE: 'RESOLVED',
+};
+
+const normalizeHandoverSupportStatus = (status) => {
+  const key = String(status || 'NEW').trim().toUpperCase().replace(/[\s-]/g, '_');
+  return LEGACY_HANDOVER_STATUS_MAP[key] || key;
+};
+
+const handoverSupportStatusLabel = (status) => {
+  const canonical = normalizeHandoverSupportStatus(status);
+  return (
+    HANDOVER_STATUSES.find((item) => item.value === canonical)?.label ||
+    canonical.replace(/_/g, ' ')
+  );
+};
 
 const ROLE_LABELS = {
   ADMIN: 'Administrator',
@@ -103,10 +135,22 @@ const formatCurrency = (value) => {
 };
 
 const handoverStatusClass = (status) => {
-  const value = (status || '').toUpperCase();
-  if (value === 'COMPLETED') return 'admin-pill green';
-  if (value === 'CONTACTED') return 'admin-pill blue';
-  if (value === 'ONBOARDING_IN_PROGRESS') return 'admin-pill amber';
+  const value = normalizeHandoverSupportStatus(status);
+  if (value === 'RESOLVED' || value === 'ACTIVE') return 'admin-pill green';
+  if (value === 'TRAINING') return 'admin-pill purple';
+  if (value === 'ISSUE_RAISED') return 'admin-pill red';
+  if (value === 'ONBOARDING') return 'admin-pill blue';
+  if (value === 'INSTALLATION_PENDING' || value === 'INSTALLATION_COMPLETED') {
+    return 'admin-pill amber';
+  }
+  return 'admin-pill slate';
+};
+
+const salesStatusClass = (status) => {
+  const value = String(status || '').trim().toUpperCase();
+  if (value === 'WON' || value === 'CONVERTED') return 'admin-pill green';
+  if (value === 'LOST') return 'admin-pill red';
+  if (value === 'PROPOSAL SENT' || value === 'PROPOSAL_SENT') return 'admin-pill blue';
   return 'admin-pill slate';
 };
 
@@ -1500,13 +1544,14 @@ const AdminPanelPage = () => {
               <th>Product / Service</th>
               <th>Handover Date</th>
               <th>Deal Value</th>
-              <th>Status</th>
+              <th>Sales Status</th>
+              <th>Support Status</th>
             </tr>
           </thead>
           <tbody>
             {handoversLoading ? (
               <tr>
-                <td colSpan={7}>
+                <td colSpan={8}>
                   <div className="admin-loading small">
                     <RefreshCw size={16} className="spin" /> Loading handovers...
                   </div>
@@ -1514,7 +1559,7 @@ const AdminPanelPage = () => {
               </tr>
             ) : handovers.length === 0 ? (
               <tr>
-                <td colSpan={7}>
+                <td colSpan={8}>
                   <EmptyState
                     title="No handovers found"
                     subtitle="No Sales → Support handover matches the current filter."
@@ -1564,9 +1609,21 @@ const AdminPanelPage = () => {
                   <td>{formatDateTime(handover.handover_date)}</td>
                   <td>{formatCurrency(handover.total_deal_amount)}</td>
                   <td>
-                    <span className={handoverStatusClass(handover.onboarding_status)}>
-                      {(handover.onboarding_status || 'UNKNOWN').replaceAll('_', ' ')}
+                    <span className={salesStatusClass(handover.sales_status ?? handover.lead_status)}>
+                      {String(handover.sales_status ?? handover.lead_status ?? 'N/A').replaceAll('_', ' ')}
                     </span>
+                  </td>
+                  <td>
+                    <span
+                      className={handoverStatusClass(
+                        handover.support_status || handover.onboarding_status
+                      )}
+                    >
+                      {handoverSupportStatusLabel(
+                        handover.support_status || handover.onboarding_status
+                      )}
+                    </span>
+                    <small className="admin-block-sub">Support lifecycle only</small>
                   </td>
                 </tr>
               ))

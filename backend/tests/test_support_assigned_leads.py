@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath('backend'))
 from database import SessionLocal
 from models.user import User
 from models.employee import Employee
-from models.lead import Lead, LeadAssignment
+from models.lead import Lead, LeadAssignment, LeadStatusHistory
 from models.workflow import SupportHandoff
 from routers.leads import (
     get_support_assigned_leads,
@@ -16,9 +16,11 @@ from routers.leads import (
     assign_support_lead,
     get_lead,
     update_lead,
-    change_lead_status
+    change_lead_status,
+    update_support_lead_status
 )
 from schemas.lead import LeadUpdate, LeadStatusRequest
+from schemas.workflow import SupportStatusUpdateRequest
 from fastapi import HTTPException
 
 class TestSupportAssignedLeads(unittest.TestCase):
@@ -251,22 +253,48 @@ class TestSupportAssignedLeads(unittest.TestCase):
             get_lead(lead_id=self.sales_only_lead.id, db=self.db, current_user=self.sup_exec_a_user)
         self.assertEqual(ctx.exception.status_code, 403)
 
-    def test_08_support_exec_can_update_own_lead_status(self):
-        """Support Executive can change status on authorized lead."""
-        req = LeadStatusRequest(status="ONBOARDING_IN_PROGRESS")
-        out = change_lead_status(
+    def test_08_support_exec_updates_support_status_not_sales_status(self):
+        """Support updates only the Support status; Sales status/history stay intact."""
+        sales_status_before = self.lead_a.status
+        history_before = (
+            self.db.query(LeadStatusHistory)
+            .filter(LeadStatusHistory.lead_id == self.lead_a.id)
+            .count()
+        )
+
+        out = update_support_lead_status(
             lead_id=self.lead_a.id,
-            status_req=req,
+            payload=SupportStatusUpdateRequest(support_status="ONBOARDING"),
             db=self.db,
             current_user=self.sup_exec_a_user
         )
-        self.assertEqual(out.status, "ONBOARDING_IN_PROGRESS")
+        self.assertEqual(out.support_status, "ONBOARDING")
+        self.assertEqual(
+            self.db.query(LeadStatusHistory)
+            .filter(LeadStatusHistory.lead_id == self.lead_a.id)
+            .count(),
+            history_before,
+            "Support status updates must not write Sales status history",
+        )
+        self.db.refresh(self.lead_a)
+        self.assertEqual(self.lead_a.status, sales_status_before)
 
-        # Attempting to update another exec's lead status returns 403
+        # Support roles are forbidden from the Sales status endpoint.
         with self.assertRaises(HTTPException) as ctx:
             change_lead_status(
+                lead_id=self.lead_a.id,
+                status_req=LeadStatusRequest(status="WON"),
+                db=self.db,
+                current_user=self.sup_exec_a_user
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("cannot modify the Sales lead status", ctx.exception.detail)
+
+        # Attempting to update another exec's Support status returns 403.
+        with self.assertRaises(HTTPException) as ctx:
+            update_support_lead_status(
                 lead_id=self.lead_b.id,
-                status_req=req,
+                payload=SupportStatusUpdateRequest(support_status="ACTIVE"),
                 db=self.db,
                 current_user=self.sup_exec_a_user
             )

@@ -32,17 +32,49 @@ import {
   MessageSquare
 } from 'lucide-react';
 
-const STATUS_OPTIONS = [
-  'ALL',
-  'PENDING_ONBOARDING',
-  'CONTACTED',
-  'ONBOARDING_IN_PROGRESS',
-  'COMPLETED',
-  'WON',
-  'NEW',
-  'IN_PROGRESS',
-  'FOLLOW-UP',
-  'LOST'
+// Support status is independent from the Sales lead status. The backend
+// normalises these values, while the labels below are display-only.
+const SUPPORT_STATUS_OPTIONS = [
+  { value: 'NEW', label: 'New' },
+  { value: 'ONBOARDING', label: 'Onboarding' },
+  { value: 'INSTALLATION_PENDING', label: 'Installation Pending' },
+  { value: 'INSTALLATION_COMPLETED', label: 'Installation Completed' },
+  { value: 'TRAINING', label: 'Training' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'ISSUE_RAISED', label: 'Issue Raised' },
+  { value: 'RESOLVED', label: 'Resolved' },
+];
+
+const LEGACY_SUPPORT_STATUS_MAP = {
+  PENDING_ONBOARDING: 'NEW',
+  PENDING_CONTACT: 'NEW',
+  CONTACTED: 'ONBOARDING',
+  ONBOARDING_IN_PROGRESS: 'ONBOARDING',
+  IN_PROGRESS: 'ONBOARDING',
+  IN_TRAINING: 'TRAINING',
+  LIVE: 'ACTIVE',
+  COMPLETED: 'RESOLVED',
+  COMPLETE: 'RESOLVED',
+  DONE: 'RESOLVED',
+};
+
+const normalizeSupportStatus = (value) => {
+  const key = String(value || 'NEW').trim().toUpperCase().replace(/[\s-]/g, '_');
+  return LEGACY_SUPPORT_STATUS_MAP[key] || key;
+};
+
+const supportStatusLabel = (value) => {
+  const canonical = normalizeSupportStatus(value);
+  const option = SUPPORT_STATUS_OPTIONS.find((item) => item.value === canonical);
+  return option?.label || canonical.replace(/_/g, ' ');
+};
+
+const OPEN_SUPPORT_STATUSES = [
+  'ONBOARDING',
+  'INSTALLATION_PENDING',
+  'INSTALLATION_COMPLETED',
+  'TRAINING',
+  'ISSUE_RAISED',
 ];
 
 const PRIORITY_OPTIONS = ['ALL', 'HIGH', 'MEDIUM', 'LOW'];
@@ -171,19 +203,28 @@ export default function SupportAssignedLeadsPage() {
     fetchLeadActivities(lead.id);
   };
 
-  // Quick Status Change
+  // Support status change. This deliberately uses the Support-only endpoint
+  // and never touches the Sales lead status.
   const handleStatusChange = async (leadId, newStatus) => {
     try {
-      await API.put(`/leads/${leadId}/status`, { status: newStatus });
-      showToast(`Lead #${leadId} status updated to ${newStatus}`);
+      const canonicalStatus = normalizeSupportStatus(newStatus);
+      await API.put(`/leads/${leadId}/support-status`, {
+        support_status: canonicalStatus,
+      });
+      showToast(
+        `Customer #${leadId} Support status updated to ${supportStatusLabel(canonicalStatus)}`
+      );
       fetchAssignedLeads(true);
-      window.dispatchEvent(new Event('leadStatsUpdated'));
       if (selectedLead && selectedLead.id === leadId) {
-        setSelectedLead(prev => ({ ...prev, status: newStatus }));
+        setSelectedLead(prev => ({
+          ...prev,
+          support_status: canonicalStatus,
+          onboarding_status: canonicalStatus,
+        }));
       }
     } catch (err) {
-      console.error('Failed to update status:', err);
-      showToast(err.response?.data?.detail || 'Failed to update status.');
+      console.error('Failed to update Support status:', err);
+      showToast(err.response?.data?.detail || 'Failed to update Support status.');
     }
   };
 
@@ -269,9 +310,13 @@ export default function SupportAssignedLeadsPage() {
     setPage(1);
   };
 
-  // KPI Calculations
-  const kpiPendingCount = leads.filter(l => ['PENDING_ONBOARDING', 'NEW', 'ASSIGNED'].includes(l.status) || l.onboarding_status === 'PENDING_ONBOARDING').length;
-  const kpiInProgressCount = leads.filter(l => ['CONTACTED', 'IN_PROGRESS', 'ONBOARDING_IN_PROGRESS'].includes(l.status) || l.onboarding_status === 'ONBOARDING_IN_PROGRESS').length;
+  // KPI Calculations (Support status only; Sales status is read-only)
+  const kpiPendingCount = leads.filter(
+    l => normalizeSupportStatus(l.support_status || l.onboarding_status) === 'NEW'
+  ).length;
+  const kpiInProgressCount = leads.filter(
+    l => OPEN_SUPPORT_STATUSES.includes(normalizeSupportStatus(l.support_status || l.onboarding_status))
+  ).length;
   const kpiHighPriorityCount = leads.filter(l => (l.priority || '').toUpperCase() === 'HIGH').length;
 
   return (
@@ -370,9 +415,9 @@ export default function SupportAssignedLeadsPage() {
                 setPage(1);
               }}
             >
-              <option value="ALL">All Statuses</option>
-              {STATUS_OPTIONS.filter(s => s !== 'ALL').map(s => (
-                <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+              <option value="ALL">All Support Statuses</option>
+              {SUPPORT_STATUS_OPTIONS.map(status => (
+                <option key={status.value} value={status.value}>{status.label}</option>
               ))}
             </select>
           </div>
@@ -472,7 +517,8 @@ export default function SupportAssignedLeadsPage() {
                   <th>Product / Service</th>
                   <th>Support Requirements</th>
                   <th>Assigned Agent</th>
-                  <th>Status</th>
+                  <th>Sales Status</th>
+                  <th>Support Status</th>
                   <th>Priority</th>
                   <th>Next Follow-up</th>
                   <th>Actions</th>
@@ -480,7 +526,12 @@ export default function SupportAssignedLeadsPage() {
               </thead>
               <tbody>
                 {leads.map((lead) => {
-                  const statusClean = (lead.status || '').toLowerCase().replace(/[\s-]/g, '_');
+                  const supportStatus = normalizeSupportStatus(
+                    lead.support_status || lead.onboarding_status
+                  );
+                  const supportStatusClean = supportStatus.toLowerCase().replace(/[\s-]/g, '_');
+                  const salesStatus = lead.sales_status || lead.status || 'NEW';
+                  const salesStatusClean = salesStatus.toLowerCase().replace(/[\s-]/g, '_');
                   const priorityClean = (lead.priority || 'medium').toLowerCase();
 
                   return (
@@ -565,27 +616,38 @@ export default function SupportAssignedLeadsPage() {
                         </div>
                       </td>
 
-                      {/* 8. Status */}
+                      {/* 8. Sales Status (read-only) */}
+                      <td>
+                        <span
+                          className={`status-pill ${salesStatusClean}`}
+                          title="Sales status is managed by the Sales team"
+                        >
+                          {salesStatus.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+
+                      {/* 9. Support Status (editable by Support only) */}
                       <td>
                         <select
-                          className={`status-pill ${statusClean}`}
-                          value={lead.status}
+                          className={`status-pill ${supportStatusClean}`}
+                          value={supportStatus}
                           onChange={(e) => handleStatusChange(lead.id, e.target.value)}
+                          title="Support status is independent from Sales status"
                         >
-                          {STATUS_OPTIONS.filter(s => s !== 'ALL').map(st => (
-                            <option key={st} value={st}>{st.replace(/_/g, ' ')}</option>
+                          {SUPPORT_STATUS_OPTIONS.map(st => (
+                            <option key={st.value} value={st.value}>{st.label}</option>
                           ))}
                         </select>
                       </td>
 
-                      {/* 9. Priority */}
+                      {/* 10. Priority */}
                       <td>
                         <span className={`priority-pill ${priorityClean}`}>
                           {lead.priority || 'MEDIUM'}
                         </span>
                       </td>
 
-                      {/* 10. Next Follow-up Date */}
+                      {/* 11. Next Follow-up Date */}
                       <td>
                         {lead.next_followup_date ? (
                           <div style={{ display: 'flex', flexDirection: 'column', fontSize: '12px', color: '#0f172a' }}>
@@ -611,7 +673,7 @@ export default function SupportAssignedLeadsPage() {
                         )}
                       </td>
 
-                      {/* 11. Actions */}
+                      {/* 12. Actions */}
                       <td>
                         <div className="support-row-actions">
                           <button
@@ -773,9 +835,32 @@ export default function SupportAssignedLeadsPage() {
                   </div>
 
                   <div className="detail-item">
-                    <span className="detail-label">Lead Status</span>
+                    <span className="detail-label">Sales Status (read-only)</span>
                     <span className="detail-value" style={{ textTransform: 'capitalize' }}>
-                      {selectedLead.status?.replace(/_/g, ' ') || 'NEW'}
+                      {(selectedLead.sales_status || selectedLead.status)?.replace(/_/g, ' ') || 'NEW'}
+                    </span>
+                  </div>
+
+                  <div className="detail-item">
+                    <span className="detail-label">Support Status</span>
+                    <span className="detail-value">
+                      {supportStatusLabel(selectedLead.support_status || selectedLead.onboarding_status)}
+                    </span>
+                  </div>
+
+                  <div className="detail-item">
+                    <span className="detail-label">Customer / Handover Reference</span>
+                    <span className="detail-value">
+                      {selectedLead.customer_id ? `Customer #${selectedLead.customer_id}` : 'Customer N/A'}
+                      {selectedLead.support_handoff_id ? ` · Handover #${selectedLead.support_handoff_id}` : ''}
+                    </span>
+                  </div>
+
+                  <div className="detail-item">
+                    <span className="detail-label">Original Sales Handover</span>
+                    <span className="detail-value">
+                      {selectedLead.sales_employee_name || 'Sales N/A'}
+                      {selectedLead.won_at ? ` · WON ${formatDateDDMMYYYY(selectedLead.won_at)}` : ''}
                     </span>
                   </div>
 
@@ -829,8 +914,10 @@ export default function SupportAssignedLeadsPage() {
                   </div>
 
                   <div className="detail-item full-width">
-                    <span className="detail-label">Onboarding Lifecycle Status</span>
-                    <span className="detail-value">{selectedLead.onboarding_status || 'PENDING_ONBOARDING'}</span>
+                    <span className="detail-label">Support Status</span>
+                    <span className="detail-value">
+                      {supportStatusLabel(selectedLead.support_status || selectedLead.onboarding_status)}
+                    </span>
                   </div>
                 </div>
               )}

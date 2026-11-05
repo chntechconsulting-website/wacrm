@@ -35,6 +35,11 @@ from services.hierarchy_service import (
     normalize_department,
     normalize_role,
 )
+from utils.support_status import (
+    SUPPORT_STATUS_RESOLVED,
+    normalize_support_status,
+    support_status_storage_values,
+)
 
 ADMIN_DEPARTMENTS: Sequence[str] = (DEPT_SALES, DEPT_SUPPORT)
 ADMIN_MANAGER_ROLES = {"SALES_MANAGER", "MANAGER", "SUPPORT_MANAGER"}
@@ -651,7 +656,9 @@ def _handover_stats(
         query = query.filter(SupportHandoff.created_at < end)
     total = query.count()
     completed = query.filter(
-        func.upper(SupportHandoff.onboarding_status) == "COMPLETED"
+        func.upper(SupportHandoff.onboarding_status).in_(
+            support_status_storage_values(SUPPORT_STATUS_RESOLVED)
+        )
     ).count()
     unassigned = query.filter(SupportHandoff.assigned_agent_id.is_(None)).count()
     return {
@@ -909,6 +916,10 @@ def _serialize_handover(db: Session, handoff: SupportHandoff) -> Dict[str, Any]:
         "invoice_number": handoff.invoice_number,
         "quotation_number": handoff.quotation_number,
         "payment_status": handoff.payment_status,
+        # Independent status pair for the Admin handover table. The legacy
+        # keys remain for backwards compatibility with existing clients.
+        "sales_status": lead.status if lead else None,
+        "support_status": handoff.support_status,
         "onboarding_status": handoff.onboarding_status,
         "handover_date": handoff.created_at.isoformat() if handoff.created_at else None,
         "won_at": handoff.won_at.isoformat() if handoff.won_at else None,
@@ -988,16 +999,33 @@ def list_support_handovers(
         .group_by(SupportHandoff.onboarding_status)
         .all()
     )
-    status_counts = {
-        (status_name or "UNKNOWN").upper(): int(count)
-        for status_name, count in status_rows
-    }
+    status_counts = {}
+    canonical_status_counts = {}
+    for status_name, count in status_rows:
+        raw_status = (status_name or "UNKNOWN").strip().upper()
+        status_counts[raw_status] = status_counts.get(raw_status, 0) + int(count or 0)
+        canonical_status = normalize_support_status(raw_status)
+        if canonical_status:
+            canonical_status_counts[canonical_status] = (
+                canonical_status_counts.get(canonical_status, 0) + int(count or 0)
+            )
+    # Keep legacy keys for existing clients while exposing canonical keys for
+    # the separated Sales/Support status UI.
+    status_counts.update(canonical_status_counts)
 
     status_clean = (status or "").strip()
     if status_clean and status_clean.upper() != "ALL":
-        base_query = base_query.filter(
-            func.upper(SupportHandoff.onboarding_status) == status_clean.upper()
-        )
+        canonical_filter = normalize_support_status(status_clean)
+        if canonical_filter:
+            base_query = base_query.filter(
+                func.upper(SupportHandoff.onboarding_status).in_(
+                    support_status_storage_values(canonical_filter)
+                )
+            )
+        else:
+            base_query = base_query.filter(
+                func.upper(SupportHandoff.onboarding_status) == status_clean.upper()
+            )
 
     total = base_query.count()
 

@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKe
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+from utils.support_status import normalize_support_status, SUPPORT_STATUS_NEW
 
 class FinanceHandoff(Base):
     __tablename__ = "finance_handoffs"
@@ -112,8 +113,11 @@ class SupportHandoff(Base):
     support_manager_name = Column(String(100), nullable=True)
     won_at = Column(DateTime, nullable=True)
 
-    # Support Lifecycle: PENDING_ONBOARDING -> CONTACTED -> ONBOARDING_IN_PROGRESS -> COMPLETED
-    onboarding_status = Column(String(50), default="PENDING_ONBOARDING", nullable=False)
+    # Independent Support lifecycle status. This is deliberately separate from
+    # Lead.status (Sales status). The column keeps its historical name so that
+    # no data migration or duplicate field is required; new Support updates
+    # store canonical values from utils.support_status.
+    onboarding_status = Column(String(50), default=SUPPORT_STATUS_NEW, nullable=False)
     assigned_agent_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
     assigned_agent_name = Column(String(100), nullable=True)
     support_notes = Column(Text, nullable=True)
@@ -130,6 +134,24 @@ class SupportHandoff(Base):
     customer = relationship("Customer", foreign_keys=[customer_id])
     support_manager = relationship("Employee", foreign_keys=[support_manager_id])
     assigned_agent = relationship("Employee", foreign_keys=[assigned_agent_id])
+
+    @property
+    def support_status(self) -> str:
+        """Canonical Support status exposed to the API.
+
+        Existing rows may still contain legacy values (for example
+        ``PENDING_ONBOARDING``); they are normalised on read without changing
+        the stored row.
+        """
+        return (
+            normalize_support_status(self.onboarding_status)
+            or SUPPORT_STATUS_NEW
+        )
+
+    @property
+    def sales_status(self):
+        """Read-only Sales status for the same customer (never written here)."""
+        return self.lead.status if self.lead else None
 
 
 class WorkflowTimelineEvent(Base):

@@ -3,7 +3,7 @@ from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, func, or_
 
 from database import get_db
 from models.user import User
@@ -31,6 +31,11 @@ from services.hierarchy_service import (
     ROLE_SALES_EXECUTIVE,
     ROLE_SUPPORT_MANAGER,
     ROLE_SUPPORT_EXECUTIVE
+)
+from utils.support_status import (
+    InvalidSupportStatusError,
+    require_support_status,
+    support_status_storage_values,
 )
 
 logger = logging.getLogger("workflow_router")
@@ -388,8 +393,13 @@ def list_support_handoffs(
         elif scope == "none":
             return []
 
-    if status_filter and status_filter != "all":
-        q = q.filter(SupportHandoff.onboarding_status == status_filter)
+    if status_filter and status_filter.strip().lower() != "all":
+        try:
+            canonical_status = require_support_status(status_filter)
+        except InvalidSupportStatusError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        storage_values = support_status_storage_values(canonical_status)
+        q = q.filter(func.upper(SupportHandoff.onboarding_status).in_(storage_values))
 
     if search and search.strip():
         term = f"%{search.strip()}%"
@@ -468,11 +478,41 @@ def update_support_onboarding_status(
     if not record:
         raise HTTPException(status_code=404, detail="Support onboarding record not found.")
 
-    norm_role = (current_user.role or "").strip().upper()
+    requested_status = (
+        payload.support_status or payload.onboarding_status or payload.status
+    )
+    if requested_status is not None:
+        try:
+            require_support_status(requested_status)
+        except InvalidSupportStatusError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    norm_role = normalize_role(current_user.role)
     current_emp = get_employee_for_user(current_user, db)
-    if norm_role in ["SUPPORT_MANAGER", "SUPPORT"]:
-        if not current_emp or (record.support_manager_id != current_emp.id and record.assigned_agent_id != current_emp.id):
+    if norm_role == ROLE_SUPPORT_EXECUTIVE:
+        if not current_emp or record.assigned_agent_id != current_emp.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only manage assignments given to you.")
+    elif norm_role == ROLE_SUPPORT_MANAGER:
+        team_ids = get_team_employee_ids_from_user(current_user, db)
+        if not current_emp or (
+            record.support_manager_id != current_emp.id
+            and record.assigned_agent_id not in team_ids
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only manage assignments for your support team.")
+    elif norm_role != ROLE_ADMIN:
+        scope = get_user_view_scope(current_user, "support_tickets", db)
+        if scope == "own":
+            if not current_emp or record.assigned_agent_id != current_emp.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+        elif scope == "team":
+            team_ids = get_team_employee_ids_from_user(current_user, db)
+            if not current_emp or (
+                record.support_manager_id not in team_ids
+                and record.assigned_agent_id not in team_ids
+            ):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+        elif scope == "none":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
 
     try:
         updated = WorkflowService.update_support_status(
@@ -482,6 +522,8 @@ def update_support_onboarding_status(
             current_user=current_user
         )
         return updated
+    except InvalidSupportStatusError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
@@ -547,6 +589,16 @@ def mark_deal_won_workflow(
     Requires edit permission on leads module.
     Enforces mandatory Support Manager assignment.
     """
+    if (
+        normalize_role(current_user.role)
+        in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]
+        or (current_user.department or "").strip().upper() == "SUPPORT"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Support team cannot modify the Sales lead status.",
+        )
+
     can_edit = user_has_permission(current_user, "leads", "edit", db) or current_user.role in ["ADMIN", "MANAGER", "SALES"]
     if not can_edit:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to close deals as WON.")
