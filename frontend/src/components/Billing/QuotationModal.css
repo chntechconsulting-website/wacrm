@@ -475,9 +475,9 @@
 }
 
 .bundle-detail-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .bundle-detail-field {
@@ -488,6 +488,10 @@
   font-weight: 700;
   color: #475569;
   letter-spacing: 0.01em;
+}
+
+.bundle-detail-field span {
+  white-space: nowrap;
 }
 
 .bundle-detail-field input {
@@ -537,10 +541,6 @@
 @media (max-width: 860px) {
   .bundle-detail-editor {
     min-width: 240px;
-  }
-
-  .bundle-detail-fields {
-    grid-template-columns: 1fr;
   }
 }
 
