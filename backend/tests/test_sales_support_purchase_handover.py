@@ -901,6 +901,57 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         self.assertEqual(len(support_followups_after), 1)
         self.assertEqual(support_followups_after[0].notes, "Support onboarding welcome call")
 
+    def test_08_support_can_download_handed_over_purchase_documents(self):
+        """Support can view/download Proforma, Quotation and Invoice for handed-over deal,
+        via both singular and plural endpoint routes."""
+        from services.permission_service import is_user_authorized_for_billing_doc
+
+        # Before handover: Support cannot view Sales billing docs
+        self.assertFalse(
+            is_user_authorized_for_billing_doc(
+                self.support_manager_user, self.proforma, self.db, "view"
+            )
+        )
+
+        # Sales marks deal WON and hands over to Support
+        self._run_won(assigned_agent_id=self.support_exec_emp.id)
+
+        # After handover: Support Manager and assigned Support Executive CAN view
+        can_manager_view = is_user_authorized_for_billing_doc(
+            self.support_manager_user, self.proforma, self.db, "view"
+        )
+        self.assertTrue(can_manager_view)
+
+        can_exec_view = is_user_authorized_for_billing_doc(
+            self.support_exec_user, self.proforma, self.db, "view"
+        )
+        self.assertTrue(can_exec_view)
+
+        # Support CANNOT edit or delete billing documents
+        can_exec_edit = is_user_authorized_for_billing_doc(
+            self.support_exec_user, self.proforma, self.db, "edit"
+        )
+        self.assertFalse(can_exec_edit)
+
+        # Download via waquote endpoints
+        from integrations.waquote.router import download_proforma_pdf, download_quotation_pdf
+
+        proforma_resp = download_proforma_pdf(
+            doc_id=str(self.proforma.id),
+            db=self.db,
+            current_user=self.support_exec_user,
+        )
+        self.assertEqual(proforma_resp.media_type, "application/pdf")
+        self.assertTrue(len(proforma_resp.body) > 0)
+
+        quotation_resp = download_quotation_pdf(
+            doc_id=str(self.quotation.id),
+            db=self.db,
+            current_user=self.support_exec_user,
+        )
+        self.assertEqual(quotation_resp.media_type, "application/pdf")
+        self.assertTrue(len(quotation_resp.body) > 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

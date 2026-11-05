@@ -452,11 +452,25 @@ def _get_proforma(db: Session, handoff: SupportHandoff) -> Optional[Quotation]:
             return doc
 
     if handoff.lead_id:
-        return (
+        doc = (
             db.query(Quotation)
             .filter(
                 Quotation.lead_id == handoff.lead_id,
                 Quotation.doc_type == "proforma",
+                Quotation.status != "cancelled",
+            )
+            .order_by(Quotation.created_at.desc())
+            .first()
+        )
+        if doc:
+            return doc
+
+    if handoff.customer_id:
+        return (
+            db.query(Quotation)
+            .filter(
+                Quotation.customer_id == handoff.customer_id,
+                Quotation.doc_type.in_(["proforma", "quotation", "po"]),
                 Quotation.status != "cancelled",
             )
             .order_by(Quotation.created_at.desc())
@@ -502,16 +516,19 @@ def _doc_url(doc: Optional[Quotation], kind: str) -> Optional[str]:
 
 
 def _normalize_doc_url(url: Optional[str]) -> Optional[str]:
-    """Keep stored document links on the mounted ``/api`` route.
+    """Keep stored document links on the mounted ``/api`` route and normalized plural paths.
 
     Some legacy quotation rows were saved with an obsolete ``/api/v1``
-    prefix. The application mounts the integration router at ``/api``.
+    prefix or singular `/proforma/` path.
     """
     if not url:
         return None
     cleaned = str(url).strip()
     if cleaned.startswith("/api/v1/"):
-        return "/api/" + cleaned[len("/api/v1/"):]
+        cleaned = "/api/" + cleaned[len("/api/v1/"):]
+    cleaned = cleaned.replace("/waquote/proforma/", "/waquote/proformas/")
+    cleaned = cleaned.replace("/waquote/quotation/", "/waquote/quotations/")
+    cleaned = cleaned.replace("/waquote/invoice/", "/waquote/invoices/")
     return cleaned
 
 

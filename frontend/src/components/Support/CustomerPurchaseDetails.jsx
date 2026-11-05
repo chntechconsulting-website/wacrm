@@ -125,7 +125,7 @@ export default function CustomerPurchaseDetails({
     setDownloadError(null);
 
     // External document links are opened directly. Internal PDF routes need
-    // the CRM bearer token, so they are fetched as a blob and saved.
+    // the CRM bearer token, so they are fetched as an authorized blob.
     if (!doc.url.startsWith('/')) {
       window.open(doc.url, '_blank', 'noopener,noreferrer');
       return;
@@ -133,20 +133,37 @@ export default function CustomerPurchaseDetails({
 
     setDownloadingUrl(doc.url);
     try {
-      const response = await API.get(doc.url, { responseType: 'blob' });
-      const blobUrl = URL.createObjectURL(response.data);
+      // In Axios, baseURL is configured as '/api'. Strip the redundant '/api'
+      // prefix from doc.url so Axios does not construct '/api/api/...'.
+      const requestPath = doc.url.startsWith('/api/')
+        ? doc.url.slice(4)
+        : doc.url;
+
+      const response = await API.get(requestPath, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = blobUrl;
       const safeNumber = String(doc.number || doc.label || 'document').replace(/[\\/:*?"<>|]/g, '-');
       link.download = `${safeNumber}.pdf`;
+      link.target = '_blank';
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(blobUrl);
+      // Revoke after a brief delay so browser download managers have started
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
     } catch (err) {
-      setDownloadError(
-        err.response?.data?.detail || 'Unable to download this purchase document.'
-      );
+      let message = 'Unable to download this purchase document.';
+      if (err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const json = JSON.parse(text);
+          if (json.detail) message = json.detail;
+        } catch (_) {}
+      } else if (err.response?.data?.detail) {
+        message = err.response.data.detail;
+      }
+      setDownloadError(message);
     } finally {
       setDownloadingUrl(null);
     }

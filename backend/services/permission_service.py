@@ -904,10 +904,38 @@ def is_user_authorized_for_billing_doc(user: User, doc, db: Session, action: str
     if canonical_role == ROLE_ADMIN:
         return True
 
-    # Support roles cannot access Sales billing documents
+    # Support roles can view handed-over purchase documentation for onboarding/support
     if canonical_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
-        if not user_has_permission(user, "quotations", "view", db) and not user_has_permission(user, "invoices", "view", db):
+        if action != "view":
             return False
+
+        emp = db.query(Employee).filter(Employee.user_id == user.id).first()
+        emp_id = emp.id if emp else None
+
+        from models.workflow import SupportHandoff
+        handoff = None
+        if getattr(doc, "lead_id", None):
+            handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == doc.lead_id).first()
+        if not handoff and getattr(doc, "customer_id", None):
+            handoff = db.query(SupportHandoff).filter(SupportHandoff.customer_id == doc.customer_id).first()
+
+        if handoff:
+            if canonical_role == ROLE_SUPPORT_MANAGER:
+                return True
+            # Support Executive: can view if assigned, unassigned queue, or in team
+            if not handoff.assigned_agent_id:
+                return True
+            if emp_id and handoff.assigned_agent_id == emp_id:
+                return True
+            team_emp_ids = get_team_employee_ids_from_user(user, db)
+            if handoff.assigned_agent_id in team_emp_ids:
+                return True
+
+        # Support users with explicit quotation/invoice view permission
+        if user_has_permission(user, "quotations", "view", db) or user_has_permission(user, "invoices", "view", db):
+            return True
+
+        return False
 
     emp = db.query(Employee).filter(Employee.user_id == user.id).first()
     if not emp:

@@ -1545,6 +1545,7 @@ def sync_proforma_destination_manual(
 
 
 @router.get("/quotations/{doc_id}/download")
+@router.get("/quotation/{doc_id}/download")
 def download_quotation_pdf(
     doc_id: str,
     db: Session = Depends(get_db),
@@ -1559,6 +1560,8 @@ def download_quotation_pdf(
         r = db.query(Quotation).filter(Quotation.id == int(clean_id)).first()
     if not r:
         r = db.query(Quotation).filter(Quotation.doc_number == doc_id.strip()).first()
+    if not r:
+        r = db.query(Quotation).filter(Quotation.doc_number == doc_id.replace("-", "/").strip()).first()
     if not r:
         raise HTTPException(status_code=404, detail="Quotation document not found.")
 
@@ -1584,6 +1587,7 @@ def download_quotation_pdf(
 
 
 @router.get("/proformas/{doc_id}/download")
+@router.get("/proforma/{doc_id}/download")
 def download_proforma_pdf(
     doc_id: str,
     db: Session = Depends(get_db),
@@ -1598,6 +1602,8 @@ def download_proforma_pdf(
         r = db.query(Quotation).filter(Quotation.id == int(clean_id)).first()
     if not r:
         r = db.query(Quotation).filter(Quotation.doc_number == doc_id.strip()).first()
+    if not r:
+        r = db.query(Quotation).filter(Quotation.doc_number == doc_id.replace("-", "/").strip()).first()
     if not r:
         raise HTTPException(status_code=404, detail="Proforma Invoice document not found.")
 
@@ -1623,6 +1629,7 @@ def download_proforma_pdf(
 
 
 @router.get("/invoices/{doc_id:path}/download")
+@router.get("/invoice/{doc_id:path}/download")
 def download_tax_invoice_pdf(
     doc_id: str,
     db: Session = Depends(get_db),
@@ -1638,6 +1645,8 @@ def download_tax_invoice_pdf(
         r = db.query(Quotation).filter(Quotation.id == int(clean_id)).first()
     if not r:
         r = db.query(Quotation).filter(Quotation.doc_number == doc_id.strip()).first()
+    if not r:
+        r = db.query(Quotation).filter(Quotation.doc_number == doc_id.replace("-", "/").strip()).first()
     if not r:
         from models.workflow import FinanceHandoff
         handoff = db.query(FinanceHandoff).filter(
