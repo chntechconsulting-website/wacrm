@@ -18,6 +18,21 @@ jobs:
     name: Deploy to Bluehost VPS
     runs-on: ubuntu-latest
     steps:
+      - name: Install backend dependencies
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -eu
+            curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "https://raw.githubusercontent.com/chntechconsulting-website/wacrm/${{ github.sha }}/backend/requirements.txt" -o /tmp/wacrm-requirements.txt
+            /opt/wacrm/backend/venv/bin/pip install --no-input -r /tmp/wacrm-requirements.txt
+            /opt/wacrm/backend/venv/bin/python -c "import reportlab, PIL; print('PDF dependencies ready')"
+            rm -f /tmp/wacrm-requirements.txt
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:

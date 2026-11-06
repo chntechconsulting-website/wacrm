@@ -66,8 +66,8 @@ export default function CustomerPurchaseDetails({
   const [details, setDetails] = useState(purchaseDetails || null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [downloadingUrl, setDownloadingUrl] = useState(null);
-  const [downloadError, setDownloadError] = useState(null);
+  const [openingUrl, setOpeningUrl] = useState(null);
+  const [viewError, setViewError] = useState(null);
   const fetchedForRef = useRef(null);
 
   useEffect(() => {
@@ -120,9 +120,9 @@ export default function CustomerPurchaseDetails({
     };
   }, [purchaseDetails, leadId, customerId]);
 
-  const handleDownload = async (doc) => {
+  const handleView = async (doc) => {
     if (!doc?.url) return;
-    setDownloadError(null);
+    setViewError(null);
 
     // External document links are opened directly. Internal PDF routes need
     // the CRM bearer token, so they are fetched as an authorized blob.
@@ -131,7 +131,22 @@ export default function CustomerPurchaseDetails({
       return;
     }
 
-    setDownloadingUrl(doc.url);
+    // Open the tab synchronously from the click so popup blockers allow it,
+    // then point it at the authorized PDF blob once it has been generated.
+    const viewer = window.open('', '_blank');
+    if (viewer) {
+      try {
+        viewer.document.write(
+          '<!doctype html><title>Loading PDF...</title>' +
+          '<body style="font-family: sans-serif; padding: 24px;">Generating PDF...</body>'
+        );
+        viewer.document.close();
+      } catch (_) {
+        // The tab can still be navigated even if writing the placeholder fails.
+      }
+    }
+
+    setOpeningUrl(doc.url);
     try {
       // In Axios, baseURL is configured as '/api'. Strip the redundant '/api'
       // prefix from doc.url so Axios does not construct '/api/api/...'.
@@ -142,18 +157,25 @@ export default function CustomerPurchaseDetails({
       const response = await API.get(requestPath, { responseType: 'blob' });
       const blob = new Blob([response.data], { type: 'application/pdf' });
       const blobUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      const safeNumber = String(doc.number || doc.label || 'document').replace(/[\\/:*?"<>|]/g, '-');
-      link.download = `${safeNumber}.pdf`;
-      link.target = '_blank';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      // Revoke after a brief delay so browser download managers have started
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+
+      if (viewer && !viewer.closed) {
+        viewer.opener = null;
+        viewer.location.href = blobUrl;
+      } else {
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+      // Keep the blob alive long enough for the browser PDF viewer to load it.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     } catch (err) {
-      let message = 'Unable to download this purchase document.';
+      if (viewer && !viewer.closed) viewer.close();
+
+      let message = 'Unable to open this purchase document.';
 
       if (err.code === 'ECONNABORTED') {
         message = 'The server took too long to generate this PDF. Please try again.';
@@ -171,23 +193,23 @@ export default function CustomerPurchaseDetails({
             const status = err.response.status;
             const preview = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
             if (preview) {
-              message = `Unable to download this purchase document (HTTP ${status}): ${preview.slice(0, 200)}`;
+              message = `Unable to open this purchase document (HTTP ${status}): ${preview.slice(0, 200)}`;
             } else {
-              message = `Unable to download this purchase document (HTTP ${status}).`;
+              message = `Unable to open this purchase document (HTTP ${status}).`;
             }
           }
         } catch (_) {
-          message = `Unable to download this purchase document (HTTP ${err.response.status}).`;
+          message = `Unable to open this purchase document (HTTP ${err.response.status}).`;
         }
       } else if (err.response.data?.detail) {
         message = err.response.data.detail;
       } else if (err.response.status) {
-        message = `Unable to download this purchase document (HTTP ${err.response.status}).`;
+        message = `Unable to open this purchase document (HTTP ${err.response.status}).`;
       }
 
-      setDownloadError(message);
+      setViewError(message);
     } finally {
-      setDownloadingUrl(null);
+      setOpeningUrl(null);
     }
   };
 
@@ -338,15 +360,15 @@ export default function CustomerPurchaseDetails({
                   <button
                     type="button"
                     className="cpd-doc-link"
-                    onClick={() => handleDownload(doc)}
-                    disabled={downloadingUrl === doc.url}
+                    onClick={() => handleView(doc)}
+                    disabled={openingUrl === doc.url}
                   >
-                    {downloadingUrl === doc.url ? (
+                    {openingUrl === doc.url ? (
                       <RefreshCw size={14} className="cpd-spin" />
                     ) : (
                       <ExternalLink size={14} />
                     )}
-                    <span>{downloadingUrl === doc.url ? 'Opening...' : 'View PDF'}</span>
+                    <span>{openingUrl === doc.url ? 'Opening...' : 'View PDF'}</span>
                   </button>
                 ) : (
                   <span className="cpd-doc-unavailable">PDF not available</span>
@@ -356,9 +378,9 @@ export default function CustomerPurchaseDetails({
           </div>
         )}
 
-        {downloadError && (
+        {viewError && (
           <p className="cpd-download-error">
-            <AlertCircle size={14} /> {downloadError}
+            <AlertCircle size={14} /> {viewError}
           </p>
         )}
       </section>
