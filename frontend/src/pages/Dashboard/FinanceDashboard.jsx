@@ -74,6 +74,8 @@ const FinanceDashboard = ({ data, onRefresh }) => {
   const currentMonthRevenue = fin.current_month_revenue ?? 0;
   const pendingAmount = fin.pending_payments_amount ?? 0;
   const pendingCount = fin.pending_payments_count ?? 0;
+  const pendingHandoffsCount = fin.pending_handoffs_count ?? 0;
+  const pendingHandoffsAmount = fin.pending_handoffs_amount ?? 0;
   const paidCount = fin.paid_invoices_count ?? 0;
   const paidAmount = fin.paid_invoices_amount ?? 0;
   const overdueAmount = fin.overdue_payments_amount ?? 0;
@@ -116,11 +118,11 @@ const FinanceDashboard = ({ data, onRefresh }) => {
       key: 'pending_payments',
       label: 'Pending Payments',
       value: formatINR(pendingAmount),
-      subtext: `${pendingCount} unpaid / partial invoice${pendingCount === 1 ? '' : 's'}`,
+      subtext: `${pendingCount} payment${pendingCount === 1 ? '' : 's'} awaiting verification`,
       icon: Clock,
       color: '#d97706',
       bg: 'rgba(217, 119, 6, 0.1)',
-      onClick: () => navigate('/finance/invoices?status=unpaid')
+      onClick: () => navigate('/finance/queue')
     },
     {
       key: 'paid_invoices',
@@ -195,6 +197,30 @@ const FinanceDashboard = ({ data, onRefresh }) => {
 
         {/* Action Buttons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => navigate('/finance/queue')}
+            style={{
+              padding: '9px 16px',
+              borderRadius: '9px',
+              backgroundColor: pendingCount > 0 ? '#d97706' : '#0f766e',
+              color: '#ffffff',
+              border: 'none',
+              fontWeight: '700',
+              fontSize: '0.85rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: pendingCount > 0 ? '0 2px 8px rgba(217, 119, 6, 0.28)' : 'none'
+            }}
+          >
+            <ShieldCheck size={16} />
+            <span>
+              Verify Payments{pendingCount > 0 ? ` (${pendingCount})` : ''}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={() => navigate('/finance/invoices')}
@@ -283,6 +309,68 @@ const FinanceDashboard = ({ data, onRefresh }) => {
           </button>
         </div>
       </div>
+
+      {pendingCount > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '14px',
+          backgroundColor: '#fffbeb',
+          border: '1px solid #fcd34d',
+          borderRadius: '14px',
+          padding: '16px 20px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '10px',
+              backgroundColor: 'rgba(217, 119, 6, 0.14)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#d97706',
+              flexShrink: 0
+            }}>
+              <ShieldCheck size={21} />
+            </div>
+            <div>
+              <div style={{ fontSize: '0.92rem', fontWeight: '800', color: '#92400e' }}>
+                {pendingCount} payment{pendingCount === 1 ? '' : 's'} awaiting Finance verification
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#a16207', marginTop: '2px', fontWeight: '600' }}>
+                {formatINR(pendingAmount)} pending
+                {pendingHandoffsCount > 0
+                  ? ` • ${pendingHandoffsCount} sales handoff${pendingHandoffsCount === 1 ? '' : 's'} worth ${formatINR(pendingHandoffsAmount)}`
+                  : ''}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/finance/queue')}
+            style={{
+              padding: '9px 16px',
+              borderRadius: '9px',
+              backgroundColor: '#d97706',
+              color: '#ffffff',
+              border: 'none',
+              fontWeight: '800',
+              fontSize: '0.83rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <span>Open Payment Queue</span>
+            <ChevronRight size={15} />
+          </button>
+        </div>
+      )}
 
       {/* 2. 6 KPI CARDS GRID */}
       <div style={{

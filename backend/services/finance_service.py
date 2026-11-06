@@ -14,6 +14,13 @@ from models.employee import Employee
 from models.user import User
 from models.workflow import FinanceHandoff
 from services.tax_invoice_builder import build_tax_invoice_model_pdf, CHN_COMPANY_INFO
+from utils.payment_status import (
+    FINANCE_STATUS_PAID,
+    FINANCE_STATUS_PENDING,
+    PAYMENT_STATUS_PAID,
+    normalize_finance_status,
+    normalize_payment_status,
+)
 
 logger = logging.getLogger("finance_service")
 
@@ -23,9 +30,9 @@ class FinanceService:
     def get_dashboard_kpis(db: Session, period: str = "month") -> Dict[str, Any]:
         """
         Calculates production financial KPIs from actual database records:
-        - Total Revenue (actual collected PAID payments minus processed refunds)
+        - Total Revenue (PAID ledger payments + workflow-confirmed invoices/handoffs)
         - Current Month Revenue
-        - Pending Payments (unpaid/partial invoices)
+        - Pending Payments (unpaid/partial invoices + pending Finance handoffs)
         - Paid Invoices
         - Overdue Payments
         - Total Refunds
@@ -34,30 +41,52 @@ class FinanceService:
         current_year = now.year
         current_month = now.month
         first_day_current_month = datetime(current_year, current_month, 1)
-        
-        # 1. Total Collected Revenue from completed payments
-        # Excludes FAILED, PENDING, and REFUNDED payments
-        total_paid_payments = db.query(
-            func.coalesce(func.sum(Payment.amount), 0.0)
-        ).filter(Payment.status == "PAID").scalar() or 0.0
-
-        # Current Month Revenue
-        current_month_revenue = db.query(
-            func.coalesce(func.sum(Payment.amount), 0.0)
-        ).filter(
-            Payment.status == "PAID",
-            Payment.payment_date >= first_day_current_month
-        ).scalar() or 0.0
-
-        # Previous Month Revenue for trend calculation
         first_day_prev_month = (first_day_current_month - timedelta(days=1)).replace(day=1)
-        prev_month_revenue = db.query(
-            func.coalesce(func.sum(Payment.amount), 0.0)
-        ).filter(
-            Payment.status == "PAID",
-            Payment.payment_date >= first_day_prev_month,
-            Payment.payment_date < first_day_current_month
-        ).scalar() or 0.0
+
+        def _naive(value):
+            """SQLite/MySQL return naive datetimes; normalise any aware value."""
+            if value is None:
+                return None
+            return value.replace(tzinfo=None) if getattr(value, "tzinfo", None) else value
+
+        def _canonical_payment_method(value):
+            label = str(value or "").strip().upper().replace("-", "_")
+            if "RAZORPAY" in label:
+                return "RAZORPAY"
+            if "UPI" in label:
+                return "UPI"
+            if "CHEQUE" in label or "CHECK" in label:
+                return "CHEQUE"
+            if "CASH" in label:
+                return "CASH"
+            if "CARD" in label:
+                return "CARD"
+            if "BANK" in label or "NEFT" in label or "RTGS" in label or "IMPS" in label:
+                return "BANK_TRANSFER"
+            return label or "OTHER"
+
+        # 1. Revenue explicitly recorded in the Finance payments ledger.
+        # Excludes FAILED, PENDING, and REFUNDED payments.
+        paid_payments = db.query(Payment).filter(Payment.status == "PAID").all()
+        total_paid_payments = sum(float(p.amount or 0.0) for p in paid_payments)
+        current_month_revenue = sum(
+            float(p.amount or 0.0)
+            for p in paid_payments
+            if _naive(p.payment_date) and _naive(p.payment_date) >= first_day_current_month
+        )
+        prev_month_revenue = sum(
+            float(p.amount or 0.0)
+            for p in paid_payments
+            if _naive(p.payment_date)
+            and first_day_prev_month <= _naive(p.payment_date) < first_day_current_month
+        )
+
+        paid_payment_invoice_ids = {
+            p.invoice_id for p in paid_payments if p.invoice_id
+        }
+        paid_payment_handoff_ids = {
+            p.finance_handoff_id for p in paid_payments if p.finance_handoff_id
+        }
 
         # 2. Total Refunds (PROCESSED)
         total_refunds_amount = db.query(
@@ -72,37 +101,164 @@ class FinanceService:
             RefundRequest.status.in_(["REQUESTED", "UNDER_REVIEW", "APPROVED"])
         ).count()
 
-        # Net Revenue (Total Collected Revenue - Processed Refunds)
-        net_revenue = max(0.0, total_paid_payments - total_refunds_amount)
-
         # 3. Invoice Metrics
-        invoices_query = db.query(Quotation).filter(
+        invoices = db.query(Quotation).filter(
             Quotation.doc_type == "invoice",
             Quotation.status != "cancelled"
-        )
-        
-        total_invoices_count = invoices_query.count()
+        ).all()
+        total_invoices_count = len(invoices)
+
+        invoice_numbers = {
+            str(inv.doc_number).strip() for inv in invoices if inv.doc_number
+        }
+        lead_ids_with_invoice = {inv.lead_id for inv in invoices if inv.lead_id}
+
+        finance_handoffs = db.query(FinanceHandoff).all()
+        handoff_by_invoice_number = {}
+        for handoff in finance_handoffs:
+            number = str(handoff.invoice_number or "").strip()
+            if number:
+                handoff_by_invoice_number.setdefault(number, handoff)
+
+        invoiced_handoff_ids = {
+            handoff.id
+            for number, handoff in handoff_by_invoice_number.items()
+            if number in invoice_numbers
+        }
+
+        def _invoice_is_paid(inv):
+            if normalize_payment_status(inv.payment_status) == PAYMENT_STATUS_PAID:
+                return True
+            grand_total = float(inv.grand_total or 0.0)
+            return grand_total > 0 and float(inv.amount_paid or 0.0) >= grand_total
 
         # Paid Invoices
-        paid_invoices = invoices_query.filter(
-            or_(
-                Quotation.payment_status == "paid",
-                Quotation.amount_paid >= Quotation.grand_total
-            )
-        ).all()
+        paid_invoices = [inv for inv in invoices if _invoice_is_paid(inv)]
         paid_invoices_count = len(paid_invoices)
         paid_invoices_amount = sum(float(inv.grand_total or 0.0) for inv in paid_invoices)
 
+        # Workflow-confirmed payments do not create Payment ledger rows; the
+        # Finance handoff/invoice is the source of truth. Include them in
+        # revenue without double-counting invoices that already have a payment.
+        workflow_revenue = []
+
+        def _add_workflow_revenue(
+            amount, revenue_date, method, customer_name, reference, payment_number, source_id
+        ):
+            amount = float(amount or 0.0)
+            if amount <= 0:
+                return
+            workflow_revenue.append({
+                "amount": amount,
+                "date": _naive(revenue_date),
+                "method": _canonical_payment_method(method),
+                "customer_name": customer_name or "Direct Client",
+                "reference": reference,
+                "payment_number": payment_number,
+                "source_id": source_id,
+            })
+
+        for inv in paid_invoices:
+            if inv.id in paid_payment_invoice_ids:
+                continue
+            handoff = handoff_by_invoice_number.get(str(inv.doc_number or "").strip())
+            if handoff and handoff.id in paid_payment_handoff_ids:
+                continue
+            amount_paid = float(inv.amount_paid or 0.0)
+            _add_workflow_revenue(
+                amount=amount_paid if amount_paid > 0 else float(inv.grand_total or 0.0),
+                revenue_date=(
+                    (handoff.payment_date or handoff.confirmed_at) if handoff else None
+                ) or inv.issue_date or inv.created_at,
+                method=(handoff.payment_mode if handoff else None) or "OTHER",
+                customer_name=inv.customer_name or (handoff.customer_name if handoff else None),
+                reference=(handoff.bank_reference if handoff else None) or inv.doc_number,
+                payment_number=inv.doc_number,
+                source_id=inv.id,
+            )
+
+        # Paid handoffs that never produced an invoice row (legacy records).
+        for handoff in finance_handoffs:
+            if handoff.id in paid_payment_handoff_ids:
+                continue
+            if normalize_finance_status(handoff.status) != FINANCE_STATUS_PAID:
+                continue
+            if handoff.id in invoiced_handoff_ids:
+                continue
+            if handoff.invoice_number and str(handoff.invoice_number).strip() in invoice_numbers:
+                continue
+            if not handoff.invoice_number and handoff.lead_id in lead_ids_with_invoice:
+                # A paid invoice already represents this deal.
+                continue
+            _add_workflow_revenue(
+                amount=float(handoff.paid_amount or 0.0) or float(handoff.final_amount or 0.0),
+                revenue_date=handoff.payment_date or handoff.confirmed_at or handoff.created_at,
+                method=handoff.payment_mode or "OTHER",
+                customer_name=handoff.customer_name,
+                reference=handoff.bank_reference or handoff.invoice_number,
+                payment_number=handoff.invoice_number or f"FH-{handoff.id:04d}",
+                source_id=handoff.id,
+            )
+
+        workflow_revenue_total = sum(item["amount"] for item in workflow_revenue)
+        total_revenue = total_paid_payments + workflow_revenue_total
+        current_month_revenue += sum(
+            item["amount"]
+            for item in workflow_revenue
+            if item["date"] and item["date"] >= first_day_current_month
+        )
+        prev_month_revenue += sum(
+            item["amount"]
+            for item in workflow_revenue
+            if item["date"]
+            and first_day_prev_month <= item["date"] < first_day_current_month
+        )
+
         # Pending Invoices
-        pending_invoices = invoices_query.filter(
-            Quotation.payment_status.in_(["unpaid", "partial", "draft"]),
-            Quotation.amount_paid < Quotation.grand_total
-        ).all()
-        
+        pending_invoices = []
+        for inv in invoices:
+            if _invoice_is_paid(inv):
+                continue
+            remaining = max(
+                0.0,
+                float(inv.grand_total or 0.0) - float(inv.amount_paid or 0.0)
+            )
+            if remaining > 0:
+                pending_invoices.append(inv)
+
         pending_payments_count = len(pending_invoices)
         pending_payments_amount = sum(
             max(0.0, float(inv.grand_total or 0.0) - float(inv.amount_paid or 0.0))
             for inv in pending_invoices
+        )
+
+        # Pending Finance handoffs (deals waiting for payment verification).
+        # Skip any handoff already represented by an invoice so the same deal
+        # is never counted twice.
+        pending_handoffs = []
+        for handoff in finance_handoffs:
+            if normalize_finance_status(handoff.status) != FINANCE_STATUS_PENDING:
+                continue
+            if handoff.id in invoiced_handoff_ids:
+                continue
+            if handoff.invoice_number and str(handoff.invoice_number).strip() in invoice_numbers:
+                continue
+            if handoff.lead_id in lead_ids_with_invoice:
+                continue
+            remaining = max(
+                0.0,
+                float(handoff.final_amount or 0.0) - float(handoff.paid_amount or 0.0)
+            )
+            if remaining > 0:
+                pending_handoffs.append(handoff)
+
+        pending_payments_count += len(pending_handoffs)
+        pending_payments_amount += sum(
+            max(
+                0.0,
+                float(handoff.final_amount or 0.0) - float(handoff.paid_amount or 0.0)
+            )
+            for handoff in pending_handoffs
         )
 
         # Overdue Payments (due_date past now and unpaid)
@@ -114,7 +270,7 @@ class FinanceService:
             elif not due and inv.created_at:
                 due = inv.created_at + timedelta(days=15)
             
-            if due and due < now:
+            if due and _naive(due) < now:
                 overdue_invoices.append(inv)
         
         overdue_payments_count = len(overdue_invoices)
@@ -122,6 +278,9 @@ class FinanceService:
             max(0.0, float(inv.grand_total or 0.0) - float(inv.amount_paid or 0.0))
             for inv in overdue_invoices
         )
+
+        # Net Revenue (Total Collected Revenue - Processed Refunds)
+        net_revenue = max(0.0, total_revenue - total_refunds_amount)
 
         # 4. Subscription Overview
         active_subs_count = db.query(CustomerSubscription).filter(
@@ -147,17 +306,23 @@ class FinanceService:
             m_date = (now - timedelta(days=i * 30)).replace(day=1)
             next_m_date = (m_date + timedelta(days=32)).replace(day=1)
             
-            m_rev = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).filter(
-                Payment.status == "PAID",
-                Payment.payment_date >= m_date,
-                Payment.payment_date < next_m_date
-            ).scalar() or 0.0
+            m_rev = sum(
+                float(p.amount or 0.0)
+                for p in paid_payments
+                if _naive(p.payment_date)
+                and m_date <= _naive(p.payment_date) < next_m_date
+            )
+            m_rev += sum(
+                item["amount"]
+                for item in workflow_revenue
+                if item["date"] and m_date <= item["date"] < next_m_date
+            )
             
-            m_inv_cnt = db.query(Quotation).filter(
-                Quotation.doc_type == "invoice",
-                Quotation.created_at >= m_date,
-                Quotation.created_at < next_m_date
-            ).count()
+            m_inv_cnt = sum(
+                1 for inv in invoices
+                if inv.created_at
+                and m_date <= _naive(inv.created_at) < next_m_date
+            )
 
             monthly_trend.append({
                 "month": m_date.strftime("%b %Y"),
@@ -167,41 +332,69 @@ class FinanceService:
             })
 
         # 6. Payment Modes Breakdown
-        payment_modes = db.query(
-            Payment.payment_method,
-            func.count(Payment.id).label("count"),
-            func.coalesce(func.sum(Payment.amount), 0.0).label("total")
-        ).filter(Payment.status == "PAID").group_by(Payment.payment_method).all()
+        method_totals = {}
+        for payment in paid_payments:
+            method = payment.payment_method or "OTHER"
+            bucket = method_totals.setdefault(method, {"count": 0, "amount": 0.0})
+            bucket["count"] += 1
+            bucket["amount"] += float(payment.amount or 0.0)
+        for item in workflow_revenue:
+            method = item["method"]
+            bucket = method_totals.setdefault(method, {"count": 0, "amount": 0.0})
+            bucket["count"] += 1
+            bucket["amount"] += item["amount"]
 
         payment_methods_data = [
             {
-                "method": row.payment_method or "OTHER",
-                "label": (row.payment_method or "Other").replace("_", " ").title(),
-                "count": row.count,
-                "amount": round(float(row.total), 2)
+                "method": method,
+                "label": method.replace("_", " ").title(),
+                "count": values["count"],
+                "amount": round(float(values["amount"]), 2)
             }
-            for row in payment_modes
+            for method, values in sorted(
+                method_totals.items(), key=lambda pair: pair[1]["amount"], reverse=True
+            )
         ]
 
         # 7. Recent Transactions & Invoices
-        recent_payments = db.query(Payment).order_by(desc(Payment.payment_date)).limit(5).all()
         recent_payments_data = []
-        for p in recent_payments:
-            cust_name = p.customer.company_name if p.customer else "Direct Client"
+        for payment in paid_payments:
             recent_payments_data.append({
-                "id": p.id,
-                "payment_number": p.payment_number,
-                "customer_name": cust_name,
-                "amount": float(p.amount),
-                "payment_method": p.payment_method,
-                "payment_type": p.payment_type,
-                "status": p.status,
-                "transaction_reference": p.transaction_reference,
-                "payment_date": p.payment_date.isoformat() if p.payment_date else None
+                "id": payment.id,
+                "payment_number": payment.payment_number,
+                "customer_name": (
+                    payment.customer.company_name if payment.customer else "Direct Client"
+                ),
+                "amount": float(payment.amount or 0.0),
+                "payment_method": payment.payment_method,
+                "payment_type": payment.payment_type,
+                "status": payment.status,
+                "transaction_reference": payment.transaction_reference,
+                "payment_date": (
+                    payment.payment_date.isoformat() if payment.payment_date else None
+                )
             })
 
+        for item in workflow_revenue:
+            recent_payments_data.append({
+                "id": f"workflow-{item['source_id']}",
+                "payment_number": item["payment_number"],
+                "customer_name": item["customer_name"],
+                "amount": round(float(item["amount"]), 2),
+                "payment_method": item["method"],
+                "payment_type": "WORKFLOW",
+                "status": "PAID",
+                "transaction_reference": item["reference"],
+                "payment_date": item["date"].isoformat() if item["date"] else None
+            })
+
+        recent_payments_data.sort(
+            key=lambda entry: entry["payment_date"] or "", reverse=True
+        )
+        recent_payments_data = recent_payments_data[:5]
+
         return {
-            "total_revenue": round(float(total_paid_payments), 2),
+            "total_revenue": round(float(total_revenue), 2),
             "net_revenue": round(float(net_revenue), 2),
             "current_month_revenue": round(float(current_month_revenue), 2),
             "prev_month_revenue": round(float(prev_month_revenue), 2),
@@ -211,6 +404,17 @@ class FinanceService:
             ),
             "pending_payments_count": pending_payments_count,
             "pending_payments_amount": round(float(pending_payments_amount), 2),
+            "pending_handoffs_count": len(pending_handoffs),
+            "pending_handoffs_amount": round(
+                sum(
+                    max(
+                        0.0,
+                        float(handoff.final_amount or 0.0) - float(handoff.paid_amount or 0.0)
+                    )
+                    for handoff in pending_handoffs
+                ),
+                2
+            ),
             "paid_invoices_count": paid_invoices_count,
             "paid_invoices_amount": round(float(paid_invoices_amount), 2),
             "total_invoices_count": total_invoices_count,

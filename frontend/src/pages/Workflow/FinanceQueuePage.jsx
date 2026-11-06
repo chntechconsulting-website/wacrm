@@ -38,6 +38,7 @@ const FinanceQueuePage = () => {
   const { user } = useAuth();
   const [handoffs, setHandoffs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [activeTab, setActiveTab] = useState('all'); // all, PAYMENT_PENDING, PAID
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -57,6 +58,7 @@ const FinanceQueuePage = () => {
   const fetchHandoffs = async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const params = {};
       if (activeTab !== 'all') params.status = activeTab;
       if (searchTerm.trim()) params.search = searchTerm.trim();
@@ -71,6 +73,12 @@ const FinanceQueuePage = () => {
       );
     } catch (err) {
       console.error('Failed to load finance handoffs', err);
+      setHandoffs([]);
+      setLoadError(
+        err.response?.data?.detail ||
+        err.message ||
+        'Unable to load Finance records.'
+      );
     } finally {
       setLoading(false);
     }
@@ -173,7 +181,30 @@ const FinanceQueuePage = () => {
   const paidCount = handoffs.filter((h) => h.status === 'PAID').length;
   const paidAmount = handoffs.filter((h) => h.status === 'PAID').reduce((acc, h) => acc + (h.paid_amount || h.final_amount || 0), 0);
 
-  const isFinanceOrAdmin = user?.role === 'ADMIN' || user?.role === 'FINANCE' || user?.role === 'MANAGER';
+  const isFinanceOrAdmin = (() => {
+    const role = String(user?.role || '').trim().toUpperCase();
+    const department = String(user?.department || '').trim().toUpperCase();
+    return (
+      role === 'ADMIN' ||
+      role === 'MANAGER' ||
+      ['FINANCE', 'FINANCE_EXECUTIVE', 'FINANCE_MANAGER', 'ACCOUNTS'].includes(role) ||
+      department === 'FINANCE'
+    );
+  })();
+
+  const canConfirmPayment = (() => {
+    const role = String(user?.role || '').trim().toUpperCase();
+    const department = String(user?.department || '').trim().toUpperCase();
+    const canApprove =
+      user?.permissions?.payments?.can_approve === true ||
+      user?.permissions?.invoices?.can_approve === true;
+    return (
+      canApprove ||
+      role === 'ADMIN' ||
+      ['FINANCE', 'FINANCE_EXECUTIVE', 'FINANCE_MANAGER', 'ACCOUNTS'].includes(role) ||
+      department === 'FINANCE'
+    );
+  })();
 
   return (
     <div className="workflow-page">
@@ -220,6 +251,24 @@ const FinanceQueuePage = () => {
           Refresh
         </button>
       </div>
+
+      {loadError && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          backgroundColor: '#fef2f2',
+          border: '1px solid #fecaca',
+          color: '#b91c1c',
+          borderRadius: '10px',
+          padding: '12px 16px',
+          fontSize: '0.86rem',
+          fontWeight: '600'
+        }}>
+          <AlertCircle size={18} />
+          <span>{loadError}</span>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="workflow-kpi-grid">
@@ -314,8 +363,14 @@ const FinanceQueuePage = () => {
                 <tr>
                   <td colSpan={isFinanceOrAdmin ? 8 : 7} style={{ textAlign: 'center', padding: '48px', color: '#94a3b8' }}>
                     <AlertCircle size={32} style={{ margin: '0 auto 8px auto', color: '#cbd5e1' }} />
-                    <p style={{ fontWeight: 600, color: '#475569', margin: 0 }}>No Finance records found</p>
-                    <small>When Sales marks deals as WON, they will appear here automatically.</small>
+                    <p style={{ fontWeight: 600, color: '#475569', margin: 0 }}>
+                      {loadError ? 'Unable to load Finance records' : 'No Finance records found'}
+                    </p>
+                    <small>
+                      {loadError
+                        ? loadError
+                        : 'When Sales marks deals as WON, they will appear here automatically.'}
+                    </small>
                   </td>
                 </tr>
               ) : (
@@ -367,7 +422,7 @@ const FinanceQueuePage = () => {
                       </td>
                     )}
                       <td style={{ textAlign: 'right' }}>
-                        {item.status === 'PAYMENT_PENDING' && isFinanceOrAdmin ? (
+                        {item.status === 'PAYMENT_PENDING' && canConfirmPayment ? (
                           <button
                             type="button"
                             onClick={() => handleOpenConfirmModal(item)}

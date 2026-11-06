@@ -307,7 +307,7 @@ class WorkflowService:
             title=f"New Finance Handoff: Deal WON for {customer.company_name or lead.name}",
             message=f"Sales rep {sales_emp_name} closed Deal #{lead.id}. Amount: Rs. {final_amount:,.2f}. Pending payment processing.",
             notification_type="FINANCE_HANDOFF",
-            link_url=f"/finance?handoff_id={handoff.id}"
+            link_url=f"/finance/queue?handoff_id={handoff.id}"
         )
 
         return handoff

@@ -426,7 +426,7 @@ const Sidebar = ({
 
   const userDept = (currentUser?.department || '').toUpperCase();
   const isAdmin = userRole === 'ADMIN' || userDept === 'ADMINISTRATION';
-  const isFinance = userRole === 'FINANCE' || userDept === 'FINANCE';
+  const isFinance = ['FINANCE', 'FINANCE_EXECUTIVE', 'FINANCE_MANAGER', 'ACCOUNTS'].includes(userRole) || userDept === 'FINANCE';
   const isSalesManager = (userRole === 'SALES_MANAGER' || userRole === 'MANAGER') && !isFinance;
   const isSalesExec = (userRole === 'SALES_EXECUTIVE' || userRole === 'SALES' || (userRole === 'EMPLOYEE' && !isFinance && userDept !== 'SUPPORT'));
   const isSupportManager = userRole === 'SUPPORT_MANAGER' && !isFinance;
@@ -716,6 +716,14 @@ const Sidebar = ({
               onToggle={() => toggleSection('finance')}
               isCollapsed={isCollapsed}
             >
+              <SidebarItem
+                to="/finance/queue"
+                exactMatch={true}
+                icon={ShieldCheck}
+                label="Payment Verification"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
               <SidebarItem
                 to="/finance/invoices"
                 exactMatch={true}
