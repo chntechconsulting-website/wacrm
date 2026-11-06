@@ -100,7 +100,7 @@ const FinanceDashboard = ({ data, onRefresh }) => {
       icon: DollarSign,
       color: '#059669',
       bg: 'rgba(5, 150, 105, 0.1)',
-      onClick: () => navigate('/finance/payments?status=PAID')
+      onClick: () => navigate('/finance/invoices?status=paid')
     },
     {
       key: 'current_month_revenue',
@@ -534,7 +534,7 @@ const FinanceDashboard = ({ data, onRefresh }) => {
             </div>
             <button
               type="button"
-              onClick={() => navigate('/finance/payments')}
+              onClick={() => navigate('/finance/invoices?status=paid')}
               style={{
                 border: 'none',
                 background: 'none',
@@ -634,7 +634,7 @@ const FinanceDashboard = ({ data, onRefresh }) => {
           </div>
           <button
             type="button"
-            onClick={() => navigate('/finance/payments')}
+            onClick={() => navigate('/finance/invoices?status=paid')}
             style={{
               padding: '6px 12px',
               borderRadius: '8px',
@@ -649,7 +649,7 @@ const FinanceDashboard = ({ data, onRefresh }) => {
               gap: '4px'
             }}
           >
-            <span>View All Payments</span>
+            <span>View Paid Invoices</span>
             <ChevronRight size={14} />
           </button>
         </div>
