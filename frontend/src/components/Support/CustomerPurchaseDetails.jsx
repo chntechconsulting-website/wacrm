@@ -154,15 +154,37 @@ export default function CustomerPurchaseDetails({
       setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
     } catch (err) {
       let message = 'Unable to download this purchase document.';
-      if (err.response?.data instanceof Blob) {
+
+      if (err.code === 'ECONNABORTED') {
+        message = 'The server took too long to generate this PDF. Please try again.';
+      } else if (!err.response) {
+        message = 'Unable to reach the server. Please check your connection and try again.';
+      } else if (err.response.data instanceof Blob) {
         try {
           const text = await err.response.data.text();
-          const json = JSON.parse(text);
-          if (json.detail) message = json.detail;
-        } catch (_) {}
-      } else if (err.response?.data?.detail) {
+          try {
+            const json = JSON.parse(text);
+            if (json.detail) message = json.detail;
+          } catch (_) {
+            // Reports a plain-text/HTML server error (for example a PDF
+            // generation failure) instead of an unhelpful generic message.
+            const status = err.response.status;
+            const preview = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (preview) {
+              message = `Unable to download this purchase document (HTTP ${status}): ${preview.slice(0, 200)}`;
+            } else {
+              message = `Unable to download this purchase document (HTTP ${status}).`;
+            }
+          }
+        } catch (_) {
+          message = `Unable to download this purchase document (HTTP ${err.response.status}).`;
+        }
+      } else if (err.response.data?.detail) {
         message = err.response.data.detail;
+      } else if (err.response.status) {
+        message = `Unable to download this purchase document (HTTP ${err.response.status}).`;
       }
+
       setDownloadError(message);
     } finally {
       setDownloadingUrl(null);

@@ -869,6 +869,103 @@ def apply_billing_scope_filter(query, user: User, db: Session):
         return query.filter(or_(*conditions))
 
 
+def _support_handoffs_for_billing_doc(doc: Any, db: Session) -> List[Any]:
+    """Return every Support handover that owns/contains a billing document.
+
+    A billing document is not always linked back to a lead or customer. A
+    quotation converted into a proforma, for example, can keep ``lead_id`` and
+    ``customer_id`` NULL while the Support handover only stores the proforma
+    id/number. Looking solely at ``doc.lead_id``/``doc.customer_id`` therefore
+    denied Support access to a document surfaced in its own purchase view.
+
+    The lookup below walks every explicit link we keep between a document and
+    a handover: direct lead/customer, proforma id/number, quotation number,
+    source quotation of the handover's proforma, and invoice number.
+    """
+    from sqlalchemy import or_
+
+    from models.quotation import Quotation
+    from models.workflow import FinanceHandoff, SupportHandoff
+
+    handoffs: List[Any] = []
+    seen = set()
+
+    def add(candidate):
+        if candidate and candidate.id not in seen:
+            seen.add(candidate.id)
+            handoffs.append(candidate)
+
+    lead_id = getattr(doc, "lead_id", None)
+    customer_id = getattr(doc, "customer_id", None)
+    doc_id = getattr(doc, "id", None)
+    doc_number = getattr(doc, "doc_number", None)
+    doc_type = (getattr(doc, "doc_type", "") or "").lower()
+
+    if lead_id:
+        for handoff in db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead_id).all():
+            add(handoff)
+
+    if customer_id:
+        for handoff in db.query(SupportHandoff).filter(SupportHandoff.customer_id == customer_id).all():
+            add(handoff)
+
+    direct_conditions = []
+    if doc_id:
+        direct_conditions.append(SupportHandoff.proforma_id == doc_id)
+    if doc_number:
+        direct_conditions.extend(
+            [
+                SupportHandoff.proforma_number == doc_number,
+                SupportHandoff.quotation_number == doc_number,
+                SupportHandoff.invoice_number == doc_number,
+            ]
+        )
+    if direct_conditions:
+        for handoff in db.query(SupportHandoff).filter(or_(*direct_conditions)).all():
+            add(handoff)
+
+    # A quotation is normally converted into a proforma before the Sales ->
+    # Support handover. The quotation itself may carry no lead/customer, so
+    # resolve it through the proforma it was converted into.
+    if doc_type == "quotation" and (doc_id or doc_number):
+        proforma_conditions = []
+        if doc_id:
+            proforma_conditions.append(Quotation.source_quotation_id == doc_id)
+        if doc_number:
+            proforma_conditions.append(Quotation.source_quotation_number == doc_number)
+        converted_proformas = (
+            db.query(Quotation)
+            .filter(Quotation.doc_type == "proforma", or_(*proforma_conditions))
+            .all()
+        )
+        for proforma in converted_proformas:
+            conditions = []
+            if proforma.id:
+                conditions.append(SupportHandoff.proforma_id == proforma.id)
+            if proforma.doc_number:
+                conditions.append(SupportHandoff.proforma_number == proforma.doc_number)
+            if conditions:
+                for handoff in db.query(SupportHandoff).filter(or_(*conditions)).all():
+                    add(handoff)
+
+    # Finance can record an invoice number on its own handoff before/without a
+    # matching Quotation row, so also resolve the Support handover through it.
+    if doc_number:
+        finance_handoffs = (
+            db.query(FinanceHandoff)
+            .filter(FinanceHandoff.invoice_number == doc_number)
+            .all()
+        )
+        for finance in finance_handoffs:
+            conditions = [SupportHandoff.finance_handoff_id == finance.id]
+            if finance.lead_id:
+                conditions.append(SupportHandoff.lead_id == finance.lead_id)
+            for handoff in db.query(SupportHandoff).filter(or_(*conditions)).all():
+                add(handoff)
+
+    return handoffs
+
+
 def is_user_authorized_for_billing_doc(user: User, doc, db: Session, action: str = "view") -> bool:
     """
     Verifies if the authenticated user has permission to access (view, edit, download) a specific Quotation.
@@ -912,23 +1009,17 @@ def is_user_authorized_for_billing_doc(user: User, doc, db: Session, action: str
         emp = db.query(Employee).filter(Employee.user_id == user.id).first()
         emp_id = emp.id if emp else None
 
-        from models.workflow import SupportHandoff
-        handoff = None
-        if getattr(doc, "lead_id", None):
-            handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == doc.lead_id).first()
-        if not handoff and getattr(doc, "customer_id", None):
-            handoff = db.query(SupportHandoff).filter(SupportHandoff.customer_id == doc.customer_id).first()
-
-        if handoff:
+        handoffs = _support_handoffs_for_billing_doc(doc, db)
+        if handoffs:
             if canonical_role == ROLE_SUPPORT_MANAGER:
                 return True
             # Support Executive: can view if assigned, unassigned queue, or in team
-            if not handoff.assigned_agent_id:
+            if any(not handoff.assigned_agent_id for handoff in handoffs):
                 return True
-            if emp_id and handoff.assigned_agent_id == emp_id:
+            if emp_id and any(handoff.assigned_agent_id == emp_id for handoff in handoffs):
                 return True
             team_emp_ids = get_team_employee_ids_from_user(user, db)
-            if handoff.assigned_agent_id in team_emp_ids:
+            if any(handoff.assigned_agent_id in team_emp_ids for handoff in handoffs):
                 return True
 
         # Support users with explicit quotation/invoice view permission

@@ -952,6 +952,100 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         self.assertEqual(quotation_resp.media_type, "application/pdf")
         self.assertTrue(len(quotation_resp.body) > 0)
 
+    def test_09_support_can_view_quotation_linked_through_handover(self):
+        """Quotation/invoice rows that carry no lead/customer are still covered
+        when the Support handover references them through the proforma."""
+        from services.permission_service import is_user_authorized_for_billing_doc
+
+        self._run_won(assigned_agent_id=self.support_exec_emp.id)
+
+        # The source quotation is often unlinked while the proforma keeps the
+        # conversion reference. This matches the live Support purchase view.
+        self.quotation.lead_id = None
+        self.quotation.customer_id = None
+        self.db.commit()
+
+        self.assertTrue(
+            is_user_authorized_for_billing_doc(
+                self.support_exec_user, self.quotation, self.db, "view"
+            )
+        )
+
+        # An unrelated quotation must remain inaccessible.
+        unrelated = Quotation(
+            doc_type="quotation",
+            doc_number="QT-UNRELATED-0001",
+            status="issued",
+            payment_status="unpaid",
+            customer_name="Unrelated Customer",
+            issue_date=datetime(2026, 1, 7, 10, 0, 0),
+            line_items=[],
+        )
+        self.db.add(unrelated)
+        self.db.commit()
+        self.assertFalse(
+            is_user_authorized_for_billing_doc(
+                self.support_exec_user, unrelated, self.db, "view"
+            )
+        )
+
+        # Invoice referenced only by number on the Support handover.
+        from integrations.waquote.router import (
+            download_quotation_pdf,
+            download_tax_invoice_pdf,
+        )
+
+        handoff = self._handoff()
+        handoff.invoice_number = "CHN/INV/26/0002"
+        self.db.commit()
+
+        invoice = Quotation(
+            doc_type="invoice",
+            doc_number="CHN/INV/26/0002",
+            status="issued",
+            payment_status="paid",
+            customer_name="Purchase Handover Customer",
+            issue_date=datetime(2026, 1, 8, 10, 0, 0),
+            line_items=[
+                {
+                    "description": "WA! HRMS Subscription",
+                    "hsn": "998314",
+                    "qty": 18,
+                    "rate": 5000.0,
+                    "gstRate": 0.18,
+                }
+            ],
+            subtotal=90000.0,
+            cgst=8100.0,
+            sgst=8100.0,
+            tax_total=16200.0,
+            grand_total=106200.0,
+        )
+        self.db.add(invoice)
+        self.db.commit()
+
+        self.assertTrue(
+            is_user_authorized_for_billing_doc(
+                self.support_exec_user, invoice, self.db, "view"
+            )
+        )
+
+        quotation_resp = download_quotation_pdf(
+            doc_id=str(self.quotation.id),
+            db=self.db,
+            current_user=self.support_exec_user,
+        )
+        self.assertEqual(quotation_resp.media_type, "application/pdf")
+        self.assertTrue(len(quotation_resp.body) > 0)
+
+        invoice_resp = download_tax_invoice_pdf(
+            doc_id=str(invoice.id),
+            db=self.db,
+            current_user=self.support_exec_user,
+        )
+        self.assertEqual(invoice_resp.media_type, "application/pdf")
+        self.assertTrue(len(invoice_resp.body) > 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
