@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
+import { normalizeFinanceHandoffStatus, normalizePaymentStatus } from '../../utils/paymentStatus';
 import PingoPopupService from '../../services/pingoPopupService';
 import './Workflow.css';
 import {
@@ -61,7 +62,13 @@ const FinanceQueuePage = () => {
       if (searchTerm.trim()) params.search = searchTerm.trim();
 
       const res = await API.get('/workflow/finance/handoffs', { params });
-      setHandoffs(res.data || []);
+      setHandoffs(
+        (res.data || []).map((handoff) => ({
+          ...handoff,
+          status: normalizeFinanceHandoffStatus(handoff.status),
+          payment_status: normalizePaymentStatus(handoff.payment_status)
+        }))
+      );
     } catch (err) {
       console.error('Failed to load finance handoffs', err);
     } finally {

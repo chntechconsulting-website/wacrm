@@ -33,6 +33,12 @@ from services.hierarchy_service import (
     ROLE_SUPPORT_MANAGER,
     ROLE_SUPPORT_EXECUTIVE
 )
+from utils.payment_status import (
+    FINANCE_STATUS_PAID,
+    finance_status_filter_values,
+    normalize_finance_status,
+    normalize_payment_status,
+)
 from utils.support_status import (
     InvalidSupportStatusError,
     require_support_status,
@@ -111,7 +117,12 @@ def list_finance_handoffs(
         return []
 
     if status_filter and status_filter != "all":
-        q = q.filter(FinanceHandoff.status == status_filter)
+        # Older handoffs may store lower-case proforma values such as
+        # "unpaid". Match every alias of the requested canonical status.
+        status_expr = func.upper(
+            func.replace(func.replace(FinanceHandoff.status, " ", "_"), "-", "_")
+        )
+        q = q.filter(status_expr.in_(finance_status_filter_values(status_filter)))
 
     if search and search.strip():
         term = f"%{search.strip()}%"
@@ -138,6 +149,8 @@ def list_finance_handoffs(
     output = []
     for r in records:
         out_dict = FinanceHandoffOut.from_orm(r)
+        out_dict.status = normalize_finance_status(out_dict.status)
+        out_dict.payment_status = normalize_payment_status(out_dict.payment_status)
         if not can_manage_finance:
             out_dict.bank_reference = None
             out_dict.bank_name = None
@@ -191,6 +204,8 @@ def get_finance_handoff_detail(
     )
 
     out = FinanceHandoffOut.from_orm(handoff)
+    out.status = normalize_finance_status(out.status)
+    out.payment_status = normalize_payment_status(out.payment_status)
     if not can_manage_finance:
         out.bank_reference = None
         out.bank_name = None
@@ -273,11 +288,13 @@ def download_finance_handoff_invoice(
             }
         ]
 
+        handoff_is_paid = normalize_finance_status(handoff.status) == FINANCE_STATUS_PAID
+
         doc = Quotation(
             doc_type="invoice",
             doc_number=invoice_num,
             status="issued",
-            payment_status="paid" if handoff.status == "PAID" else "unpaid",
+            payment_status="paid" if handoff_is_paid else "unpaid",
             lead_id=handoff.lead_id,
             customer_id=handoff.customer_id,
             customer_name=handoff.customer_name or "Valued Client",
@@ -294,7 +311,7 @@ def download_finance_handoff_invoice(
             igst=0.0,
             tax_total=tax_val,
             grand_total=paid_amt,
-            amount_paid=paid_amt if handoff.status == "PAID" else 0.0,
+            amount_paid=paid_amt if handoff_is_paid else 0.0,
             line_items=line_items_data,
             terms_and_conditions="1. Payment received and verified by Finance.\n2. Goods/Services supplied as per Purchase Order.\n3. Subject to Chennai jurisdiction.",
             prepared_by=getattr(current_user, 'full_name', None) or getattr(current_user, 'name', None) or current_user.username or "Finance Department",

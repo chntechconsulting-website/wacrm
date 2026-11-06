@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../../services/api';
+import { normalizePaymentStatus } from '../../utils/paymentStatus';
 import PingoPopupService from '../../services/pingoPopupService';
 import PingoMascot from '../../components/Common/PingoMascot';
 import {
@@ -93,8 +94,9 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
         setHasExplicitUsersCount(false);
       }
 
-      // Payment status & amount
-      setPaymentStatus(selectedProforma.payment_status || 'PAYMENT_PENDING');
+      // Payment status & amount. Proformas may store lower-case values such
+      // as "unpaid", so always map them to the Finance vocabulary.
+      setPaymentStatus(normalizePaymentStatus(selectedProforma.payment_status));
       setPaymentAmount(selectedProforma.amount_paid ? String(selectedProforma.amount_paid) : '0');
     }
   }, [selectedProforma]);

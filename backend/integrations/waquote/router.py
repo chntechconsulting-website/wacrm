@@ -41,6 +41,7 @@ from services.billing_catalog import (
     WAHRMS_PACKAGE_CODES
 )
 from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
+from utils.payment_status import FINANCE_STATUS_PAID, normalize_finance_status
 
 logger = logging.getLogger("waquote_router")
 
@@ -1673,11 +1674,13 @@ def download_tax_invoice_pdf(
                 }
             ]
 
+            handoff_is_paid = normalize_finance_status(handoff.status) == FINANCE_STATUS_PAID
+
             r = Quotation(
                 doc_type="invoice",
                 doc_number=invoice_num,
                 status="issued",
-                payment_status="paid" if handoff.status == "PAID" else "unpaid",
+                payment_status="paid" if handoff_is_paid else "unpaid",
                 lead_id=handoff.lead_id,
                 customer_id=handoff.customer_id,
                 customer_name=handoff.customer_name or "Valued Client",
@@ -1694,7 +1697,7 @@ def download_tax_invoice_pdf(
                 igst=0.0,
                 tax_total=tax_val,
                 grand_total=paid_amt,
-                amount_paid=paid_amt if handoff.status == "PAID" else 0.0,
+                amount_paid=paid_amt if handoff_is_paid else 0.0,
                 line_items=line_items_data,
                 terms_and_conditions="1. Payment received and verified by Finance.\n2. Goods/Services supplied as per Purchase Order.\n3. Subject to Chennai jurisdiction.",
                 prepared_by=getattr(current_user, 'full_name', None) or getattr(current_user, 'name', None) or current_user.username or "Finance Department",

@@ -16,6 +16,13 @@ from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEven
 from models.audit_log import AuditLog
 from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
 from services.purchase_details_service import build_purchase_snapshot
+from utils.payment_status import (
+    FINANCE_STATUS_PAID,
+    FINANCE_STATUS_PENDING,
+    PAYMENT_STATUS_PAID,
+    normalize_finance_status,
+    normalize_payment_status,
+)
 from utils.support_status import (
     SUPPORT_STATUS_NEW,
     SUPPORT_STATUS_RESOLVED,
@@ -938,7 +945,7 @@ class WorkflowService:
                 "phone": p.phone or lead.phone or "",
                 "email": p.email or lead.email or "",
                 "status": p.status,
-                "payment_status": p.payment_status or "PAYMENT_PENDING",
+                "payment_status": normalize_payment_status(p.payment_status),
                 "amount_paid": float(p.amount_paid or 0.0),
                 "subtotal": float(p.subtotal or 0.0),
                 "tax_total": float(p.tax_total or 0.0),
@@ -1062,7 +1069,7 @@ class WorkflowService:
                 doc_type="proforma",
                 doc_number=f"PI-{datetime.utcnow().strftime('%y%m')}-{lead.id:04d}",
                 status="issued",
-                payment_status=won_data.get("payment_status") or "PAYMENT_PENDING",
+                payment_status=normalize_payment_status(won_data.get("payment_status")),
                 grand_total=deal_amt,
                 total_amount=deal_amt,
                 product_summary=prod_summary,
@@ -1102,10 +1109,13 @@ class WorkflowService:
         if abs(total_deal_amount - proforma_amount) > 0.01 and not deal_adjustment_reason:
             deal_adjustment_reason = f"Adjusted from proforma total of Rs. {proforma_amount:,.2f}"
 
-        # Payment status preservation
-        payment_status = won_data.get("payment_status") or proforma.payment_status or "PAYMENT_PENDING"
+        # Payment status preservation. Proformas store lower-case values such
+        # as "unpaid", so normalise before it reaches the Finance workflow.
+        payment_status = normalize_payment_status(
+            won_data.get("payment_status") or proforma.payment_status
+        )
         payment_amount = won_data.get("payment_amount")
-        paid_amount = float(payment_amount if payment_amount is not None else (proforma.amount_paid if proforma.amount_paid is not None else (total_deal_amount if payment_status == "PAID" else 0.0)))
+        paid_amount = float(payment_amount if payment_amount is not None else (proforma.amount_paid if proforma.amount_paid is not None else (total_deal_amount if payment_status == PAYMENT_STATUS_PAID else 0.0)))
 
         # Employee user licence count
         customer_users_count = int(won_data.get("customer_users_count") or parsed_proforma.get("licence_count") or 1)
@@ -1170,7 +1180,7 @@ class WorkflowService:
                 products_services=purchased_products,
                 final_amount=total_deal_amount,
                 paid_amount=paid_amount,
-                status=payment_status,
+                status=FINANCE_STATUS_PAID if payment_status == PAYMENT_STATUS_PAID else FINANCE_STATUS_PENDING,
                 payment_status=payment_status,
                 customer_requirements=won_data.get("customer_requirements") or lead.requirement_notes,
                 created_at=now_utc
@@ -1190,10 +1200,16 @@ class WorkflowService:
             finance_handoff.deal_adjustment_reason = deal_adjustment_reason
             finance_handoff.products_services = purchased_products
             finance_handoff.final_amount = total_deal_amount
-            if payment_status == "PAID" and finance_handoff.status != "PAID":
-                finance_handoff.status = "PAID"
-                finance_handoff.payment_status = "PAID"
+            if normalize_finance_status(finance_handoff.status) == FINANCE_STATUS_PAID:
+                finance_handoff.status = FINANCE_STATUS_PAID
+                finance_handoff.payment_status = PAYMENT_STATUS_PAID
+            elif payment_status == PAYMENT_STATUS_PAID:
+                finance_handoff.status = FINANCE_STATUS_PAID
+                finance_handoff.payment_status = PAYMENT_STATUS_PAID
                 finance_handoff.paid_amount = paid_amount
+            else:
+                finance_handoff.status = FINANCE_STATUS_PENDING
+                finance_handoff.payment_status = payment_status
         db.commit()
         db.refresh(finance_handoff)
 

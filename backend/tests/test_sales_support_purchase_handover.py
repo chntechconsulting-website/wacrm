@@ -53,7 +53,11 @@ from routers.leads import (
     update_support_lead_status,
 )
 from routers.reports import dashboard_stats
-from routers.workflow import get_support_handoff_detail, list_support_handoffs
+from routers.workflow import (
+    get_support_handoff_detail,
+    list_finance_handoffs,
+    list_support_handoffs,
+)
 from schemas.workflow import SupportStatusUpdateRequest
 from services.purchase_details_service import build_support_purchase_details
 from services.workflow_service import WorkflowService
@@ -1045,6 +1049,41 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         )
         self.assertEqual(invoice_resp.media_type, "application/pdf")
         self.assertTrue(len(invoice_resp.body) > 0)
+
+    def test_finance_handoff_normalizes_lowercase_proforma_payment_status(self):
+        self._run_won(payment_status="unpaid")
+
+        handoff = (
+            self.db.query(FinanceHandoff)
+            .filter(FinanceHandoff.lead_id == self.lead.id)
+            .one()
+        )
+        self.assertEqual(handoff.status, "PAYMENT_PENDING")
+        self.assertEqual(handoff.payment_status, "PAYMENT_PENDING")
+
+    def test_finance_queue_normalizes_and_filters_legacy_status(self):
+        self._run_won()
+        handoff = (
+            self.db.query(FinanceHandoff)
+            .filter(FinanceHandoff.lead_id == self.lead.id)
+            .one()
+        )
+        # Simulate a record created before payment statuses were canonicalised.
+        handoff.status = "unpaid"
+        handoff.payment_status = "unpaid"
+        self.db.commit()
+
+        records = list_finance_handoffs(
+            status_filter="PAYMENT_PENDING",
+            search=None,
+            limit=50,
+            page=1,
+            db=self.db,
+            current_user=self.admin_user,
+        )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].status, "PAYMENT_PENDING")
+        self.assertEqual(records[0].payment_status, "PAYMENT_PENDING")
 
 
 if __name__ == "__main__":

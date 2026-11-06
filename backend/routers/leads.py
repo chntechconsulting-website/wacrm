@@ -37,6 +37,7 @@ from schemas.lead import (
 from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
 from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
+from utils.payment_status import FINANCE_STATUS_PAID, normalize_finance_status
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
@@ -2092,7 +2093,8 @@ def download_lead_tax_invoice(
         if handoff:
             if handoff.invoice_number:
                 doc = db.query(Quotation).filter(Quotation.doc_number == handoff.invoice_number.strip()).first()
-            if not doc and (handoff.status == "PAID" or handoff.invoice_number):
+            handoff_is_paid = normalize_finance_status(handoff.status) == FINANCE_STATUS_PAID
+            if not doc and (handoff_is_paid or handoff.invoice_number):
                 invoice_num = handoff.invoice_number or f"CHN/INV/26/{handoff.id:04d}"
                 paid_amt = float(handoff.paid_amount or handoff.final_amount or 0.0)
                 sub_val = round(paid_amt / 1.18, 2)
@@ -2113,7 +2115,7 @@ def download_lead_tax_invoice(
                     doc_type="invoice",
                     doc_number=invoice_num,
                     status="issued",
-                    payment_status="paid" if handoff.status == "PAID" else "unpaid",
+                    payment_status="paid" if handoff_is_paid else "unpaid",
                     lead_id=lead.id,
                     customer_id=handoff.customer_id,
                     customer_name=handoff.customer_name or lead.name or "Valued Client",
@@ -2130,7 +2132,7 @@ def download_lead_tax_invoice(
                     igst=0.0,
                     tax_total=tax_val,
                     grand_total=paid_amt,
-                    amount_paid=paid_amt if handoff.status == "PAID" else 0.0,
+                    amount_paid=paid_amt if handoff_is_paid else 0.0,
                     line_items=line_items_data,
                     terms_and_conditions="1. Payment received and verified by Finance.\n2. Goods/Services supplied as per Purchase Order.\n3. Subject to Chennai jurisdiction.",
                     prepared_by=getattr(current_user, 'full_name', None) or getattr(current_user, 'name', None) or current_user.username or "Finance Department",
