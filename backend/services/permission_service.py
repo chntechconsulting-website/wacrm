@@ -141,7 +141,7 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
 
     # 6. FINANCE
     if norm == "FINANCE":
-        fin_mods = {"dashboard", "payments", "invoices", "customers", "reports"}
+        fin_mods = {"dashboard", "payments", "invoices", "customers", "subscriptions", "refunds", "reports"}
         res = {}
         for mod in SYSTEM_MODULES:
             k = mod["key"]
@@ -149,11 +149,11 @@ def get_default_role_permissions(role_name: str) -> Dict[str, Dict[str, Any]]:
             res[k] = {
                 "has_access": has_acc,
                 "can_view": has_acc,
-                "can_create": k in ["payments"],
-                "can_edit": k in ["payments"],
+                "can_create": k in ["payments", "invoices", "subscriptions", "refunds"],
+                "can_edit": k in ["payments", "invoices", "subscriptions", "refunds"],
                 "can_delete": False,
                 "can_export": has_acc,
-                "can_approve": k in ["payments"],
+                "can_approve": k in ["payments", "refunds", "invoices"],
                 "can_assign": False,
                 "can_call": False,
                 "can_whatsapp": False,

@@ -70,6 +70,14 @@ import FinanceQueuePage from './pages/Workflow/FinanceQueuePage';
 import SupportQueuePage from './pages/Workflow/SupportQueuePage';
 import SupportAssignedLeadsPage from './pages/Support/SupportAssignedLeadsPage';
 
+// FINANCE DEPARTMENT Pages
+import InvoicesPage from './pages/Finance/InvoicesPage';
+import PaymentsPage from './pages/Finance/PaymentsPage';
+import CustomerPurchasesPage from './pages/Finance/CustomerPurchasesPage';
+import SubscriptionsPage from './pages/Finance/SubscriptionsPage';
+import RefundsPage from './pages/Finance/RefundsPage';
+import FinancialReportsPage from './pages/Finance/FinancialReportsPage';
+
 // 404 Not Found Page
 import NotFoundPage from './pages/NotFound/NotFoundPage';
 
@@ -135,7 +143,15 @@ function App() {
               <Route path="/waquotes" element={<ErrorBoundary><WAQuotesPage /></ErrorBoundary>} />
 
               {/* WORKFLOW (Sales -> Finance -> Support) Section Routes */}
-              <Route path="/finance" element={<ErrorBoundary><FinanceQueuePage /></ErrorBoundary>} />
+              {/* FINANCE DEPARTMENT Section Routes */}
+              <Route path="/finance" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/finance/invoices" element={<ErrorBoundary><InvoicesPage /></ErrorBoundary>} />
+              <Route path="/finance/payments" element={<ErrorBoundary><PaymentsPage /></ErrorBoundary>} />
+              <Route path="/finance/customer-purchases" element={<ErrorBoundary><CustomerPurchasesPage /></ErrorBoundary>} />
+              <Route path="/finance/subscriptions" element={<ErrorBoundary><SubscriptionsPage /></ErrorBoundary>} />
+              <Route path="/finance/refunds" element={<ErrorBoundary><RefundsPage /></ErrorBoundary>} />
+              <Route path="/finance/reports" element={<ErrorBoundary><FinancialReportsPage /></ErrorBoundary>} />
+              <Route path="/finance/queue" element={<ErrorBoundary><FinanceQueuePage /></ErrorBoundary>} />
               <Route path="/support" element={<ErrorBoundary><SupportQueuePage /></ErrorBoundary>} />
               <Route path="/support/assigned-leads" element={<ErrorBoundary><SupportAssignedLeadsPage /></ErrorBoundary>} />
               <Route path="/support/leads" element={<ErrorBoundary><SupportAssignedLeadsPage /></ErrorBoundary>} />

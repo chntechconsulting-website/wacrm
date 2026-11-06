@@ -27,6 +27,7 @@ import { formatDateDDMMYYYY, formatTime12Hour, formatLocalDateTime } from '../..
 import PingoMascot from '../../components/Common/PingoMascot';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import SupportDashboard from './SupportDashboard';
+import FinanceDashboard from './FinanceDashboard';
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -90,18 +91,18 @@ const Dashboard = () => {
 
       // The backend is the single source of truth for which dashboard this
       // employee may see. Frontend role labels are never used for this decision.
-      const backendType = ['sales', 'support', 'both'].includes(dashboardData.dashboard_type)
+      const backendType = ['sales', 'support', 'finance', 'both'].includes(dashboardData.dashboard_type)
         ? dashboardData.dashboard_type
         : 'sales';
       setDashboardType(backendType);
       setActiveDashboard((previous) => {
         if (backendType === 'both') {
-          return previous === 'support' ? 'support' : 'sales';
+          return previous === 'support' || previous === 'finance' ? previous : 'sales';
         }
         return backendType;
       });
 
-      // Support users must not trigger Sales-only data requests.
+      // Support and Finance users must not trigger Sales-only data requests.
       if (backendType === 'sales' || backendType === 'both') {
         const leadsRes = await API.get('/leads/?limit=5').catch(() => ({ data: { items: [] } }));
         if (leadsRes.data?.items) setRecentLeads(leadsRes.data.items);
@@ -137,6 +138,7 @@ const Dashboard = () => {
 
   const isSalesDashboard = dashboardType === 'sales' || (dashboardType === 'both' && activeDashboard === 'sales');
   const isSupportDashboard = dashboardType === 'support' || (dashboardType === 'both' && activeDashboard === 'support');
+  const isFinanceDashboard = dashboardType === 'finance' || (dashboardType === 'both' && activeDashboard === 'finance');
 
   useEffect(() => {
     if (isSalesDashboard) {
@@ -300,7 +302,9 @@ const Dashboard = () => {
               <span style={{ fontSize: '1.75rem' }}>👋</span>
             </div>
             <p style={{ color: '#475569', fontSize: '0.95rem', margin: 0, fontWeight: '500' }}>
-              {isSupportDashboard
+              {isFinanceDashboard
+                ? "Here's what's happening with your finance and revenue overview today."
+                : isSupportDashboard
                 ? "Here's what's happening with your support queue today."
                 : "Here's what's happening with your CRM today."}
             </p>
@@ -350,7 +354,7 @@ const Dashboard = () => {
           <div>
             <div style={{ fontSize: '0.86rem', fontWeight: '800', color: '#0f172a' }}>Dashboard View</div>
             <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '2px' }}>
-              Admin access: switch between the Sales and Support dashboards.
+              Admin access: switch between Sales, Support, and Finance dashboards.
             </div>
           </div>
           <div
@@ -398,6 +402,26 @@ const Dashboard = () => {
             >
               Support Dashboard
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeDashboard === 'finance'}
+              onClick={() => setActiveDashboard('finance')}
+              style={{
+                border: 'none',
+                borderRadius: '9px',
+                padding: '8px 14px',
+                fontSize: '0.8rem',
+                fontWeight: '700',
+                cursor: 'pointer',
+                backgroundColor: activeDashboard === 'finance' ? '#ffffff' : 'transparent',
+                color: activeDashboard === 'finance' ? '#059669' : '#64748b',
+                boxShadow: activeDashboard === 'finance' ? '0 1px 4px rgba(15, 23, 42, 0.12)' : 'none',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              Finance Dashboard
+            </button>
           </div>
         </div>
       )}
@@ -419,6 +443,8 @@ const Dashboard = () => {
         </div>
       ) : isSupportDashboard ? (
         <SupportDashboard data={stats?.support} />
+      ) : isFinanceDashboard ? (
+        <FinanceDashboard data={stats?.finance} onRefresh={fetchDashboardData} />
       ) : (
         <>
       {/* 1.5. EMPLOYEE SALES TARGET MANAGEMENT SECTION */}

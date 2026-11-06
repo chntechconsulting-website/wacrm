@@ -41,7 +41,12 @@ import {
   XCircle,
   Database,
   Target,
-  FileDown
+  FileDown,
+  Receipt,
+  ShoppingBag,
+  RefreshCw,
+  RotateCcw,
+  FileSpreadsheet
 } from 'lucide-react';
 
 // Lite tone color presets for testing
@@ -326,6 +331,7 @@ const Sidebar = ({
     websiteEnquiries: true,
     communication: true,
     sales: true,
+    finance: true,
     support: true,
     monitoring: true,
     reports: true,
@@ -341,8 +347,10 @@ const Sidebar = ({
       setOpenSections(prev => ({ ...prev, websiteEnquiries: true }));
     } else if (path.startsWith('/communication')) {
       setOpenSections(prev => ({ ...prev, communication: true }));
-    } else if (path.startsWith('/waquotes') || path.startsWith('/finance')) {
+    } else if (path.startsWith('/waquotes')) {
       setOpenSections(prev => ({ ...prev, sales: true }));
+    } else if (path.startsWith('/finance')) {
+      setOpenSections(prev => ({ ...prev, finance: true }));
     } else if (path.startsWith('/support')) {
       setOpenSections(prev => ({ ...prev, support: true }));
     } else if ((path.startsWith('/employee-monitoring') || path.startsWith('/team-insights'))) {
@@ -416,15 +424,16 @@ const Sidebar = ({
     }
   };
 
-  const isAdmin = userRole === 'ADMIN';
-  const isSalesManager = userRole === 'SALES_MANAGER' || userRole === 'MANAGER';
-  const isSalesExec = userRole === 'SALES_EXECUTIVE' || userRole === 'SALES' || userRole === 'EMPLOYEE';
-  const isSupportManager = userRole === 'SUPPORT_MANAGER';
-  const isSupportExec = userRole === 'SUPPORT_EXECUTIVE' || userRole === 'SUPPORT';
+  const userDept = (currentUser?.department || '').toUpperCase();
+  const isAdmin = userRole === 'ADMIN' || userDept === 'ADMINISTRATION';
+  const isFinance = userRole === 'FINANCE' || userDept === 'FINANCE';
+  const isSalesManager = (userRole === 'SALES_MANAGER' || userRole === 'MANAGER') && !isFinance;
+  const isSalesExec = (userRole === 'SALES_EXECUTIVE' || userRole === 'SALES' || (userRole === 'EMPLOYEE' && !isFinance && userDept !== 'SUPPORT'));
+  const isSupportManager = userRole === 'SUPPORT_MANAGER' && !isFinance;
+  const isSupportExec = (userRole === 'SUPPORT_EXECUTIVE' || userRole === 'SUPPORT' || (userRole === 'EMPLOYEE' && userDept === 'SUPPORT')) && !isFinance;
   const isManager = isSalesManager || isSupportManager;
   const isSalesRole = isSalesManager || isSalesExec;
   const isSupportRole = isSupportManager || isSupportExec;
-  const isFinance = userRole === 'FINANCE';
 
   // Dynamic DB Permission Helpers with resilient role fallbacks
   const hasModule = (moduleKey) => {
@@ -555,7 +564,7 @@ const Sidebar = ({
           )}
 
           {/* Section: LEADS */}
-          {(!isMetaReviewer && (hasModule('leads') || isSalesRole) && !isSupportRole) && (
+          {(!isMetaReviewer && !isFinance && (hasModule('leads') || isSalesRole) && !isSupportRole) && (
             <SidebarSection
               title="LEADS"
               isOpen={openSections.leads}
@@ -606,7 +615,7 @@ const Sidebar = ({
           )}
 
           {/* Section: WEBSITE ENQUIRIES */}
-          {hasModule('brochure_downloads') && (
+          {(!isFinance && hasModule('brochure_downloads')) && (
             <SidebarSection
               title="WEBSITE ENQUIRIES"
               isOpen={openSections.websiteEnquiries}
@@ -625,7 +634,7 @@ const Sidebar = ({
           )}
 
           {/* Section: COMMUNICATION */}
-          {(hasModule('calls') || hasModule('followups') || hasModule('activities') || hasModule('whatsapp') || isSalesRole || isSupportRole) && (
+          {(!isFinance && (hasModule('calls') || hasModule('followups') || hasModule('activities') || hasModule('whatsapp') || isSalesRole || isSupportRole)) && (
             <SidebarSection
               title="COMMUNICATION"
               isOpen={openSections.communication}
@@ -680,40 +689,86 @@ const Sidebar = ({
             </SidebarSection>
           )}
 
-          {/* Section: BILLING & OPERATIONS WORKFLOW */}
-          {(hasModule('quotations') || hasModule('invoices') || hasModule('payments') || hasModule('support_tickets') || isSalesRole || isFinance || isSupportRole) && (
+          {/* Section: BILLING & WORKFLOW (Sales) */}
+          {(!isFinance && (hasModule('quotations') || hasModule('invoices') || isSalesRole)) && (
             <SidebarSection
               title="BILLING & WORKFLOW"
               isOpen={openSections.sales}
               onToggle={() => toggleSection('sales')}
               isCollapsed={isCollapsed}
             >
-              {!isFinance && (hasModule('quotations') || hasModule('invoices')) && (
-                <SidebarItem
-                  to="/waquotes"
-                  exactMatch={true}
-                  icon={FileText}
-                  label="Quotes & Invoices"
-                  isCollapsed={isCollapsed}
-                  onClick={handleItemClick}
-                />
-              )}
-              {(hasModule('payments') || hasModule('invoices')) && (
-                <SidebarItem
-                  to="/finance"
-                  exactMatch={true}
-                  icon={CreditCard}
-                  label="Finance Queue"
-                  isCollapsed={isCollapsed}
-                  onClick={handleItemClick}
-                />
-              )}
+              <SidebarItem
+                to="/waquotes"
+                exactMatch={true}
+                icon={FileText}
+                label="Quotes & Invoices"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+            </SidebarSection>
+          )}
 
+          {/* Section: FINANCE (Finance Department & Admin) */}
+          {(isFinance || isAdmin) && (
+            <SidebarSection
+              title="FINANCE"
+              isOpen={openSections.finance}
+              onToggle={() => toggleSection('finance')}
+              isCollapsed={isCollapsed}
+            >
+              <SidebarItem
+                to="/finance/invoices"
+                exactMatch={true}
+                icon={Receipt}
+                label="Invoices"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/finance/payments"
+                exactMatch={true}
+                icon={CreditCard}
+                label="Payments"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/finance/customer-purchases"
+                exactMatch={true}
+                icon={ShoppingBag}
+                label="Customer Purchases"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/finance/subscriptions"
+                exactMatch={true}
+                icon={RefreshCw}
+                label="Subscriptions & Renewals"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/finance/refunds"
+                exactMatch={true}
+                icon={RotateCcw}
+                label="Refunds"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/finance/reports"
+                exactMatch={true}
+                icon={FileSpreadsheet}
+                label="Financial Reports"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
             </SidebarSection>
           )}
 
           {/* Section: SUPPORT */}
-          {(isSupportRole || isAdmin || hasModule('support_tickets')) && (
+          {(!isFinance && (isSupportRole || isAdmin || hasModule('support_tickets'))) && (
             <SidebarSection
               title="SUPPORT"
               isOpen={openSections.support}
@@ -742,7 +797,7 @@ const Sidebar = ({
           )}
 
           {/* Section: TEAM INSIGHTS */}
-          {(hasModule('employees') || isAdmin || isManager) && (
+          {(!isFinance && (hasModule('employees') || isAdmin || isManager)) && (
             <SidebarSection
               title="TEAM INSIGHTS"
               isOpen={openSections.monitoring}
@@ -760,8 +815,8 @@ const Sidebar = ({
             </SidebarSection>
           )}
 
-          {/* Section: REPORTS & ANALYTICS (Sales-only; Support has its own dashboard) */}
-          {((hasModule('reports') || hasModule('analytics') || isAdmin || isManager) && !isSupportRole) && (
+          {/* Section: REPORTS & ANALYTICS (Sales-only; Support has its own dashboard, Finance has Financial Reports) */}
+          {(!isFinance && (hasModule('reports') || hasModule('analytics') || isAdmin || isManager) && !isSupportRole) && (
             <SidebarSection
               title="REPORTS & ANALYTICS"
               isOpen={openSections.reports}

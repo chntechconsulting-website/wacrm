@@ -26,6 +26,7 @@ from models.whatsapp_coexistence import (
     WhatsAppCoexistenceEvent,
     WhatsAppSmbContact,
 )
+from models.finance import Payment, CustomerSubscription, SubscriptionHistory, RefundRequest
 
 __all__ = [
     "Base",
@@ -66,4 +67,8 @@ __all__ = [
     "WhatsAppCoexistenceConnection",
     "WhatsAppCoexistenceEvent",
     "WhatsAppSmbContact",
+    "Payment",
+    "CustomerSubscription",
+    "SubscriptionHistory",
+    "RefundRequest",
 ]

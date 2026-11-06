@@ -28,7 +28,9 @@ from services.hierarchy_service import (
     DEPT_ADMINISTRATION,
     DEPT_SALES,
     DEPT_SUPPORT,
+    DEPT_FINANCE,
 )
+from services.finance_service import FinanceService
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
@@ -79,11 +81,24 @@ def get_dashboard_context(user: User, employee: Optional[Employee], db: Session)
     if _user_is_admin(user, employee):
         return {
             "dashboard_type": "both",
+            "available_dashboards": ["sales", "support", "finance"],
             "role": ROLE_ADMIN,
             "department": department or DEPT_ADMINISTRATION,
         }
 
     canonical_roles = [normalize_role(role) for role in raw_roles]
+    is_finance = (
+        department == DEPT_FINANCE or
+        any(role == "FINANCE" for role in raw_roles) or
+        any(role == "FINANCE" for role in canonical_roles)
+    )
+    if is_finance:
+        return {
+            "dashboard_type": "finance",
+            "role": "FINANCE",
+            "department": department or DEPT_FINANCE,
+        }
+
     is_support = any(role in {ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE} for role in canonical_roles)
     is_sales = any(role in {ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE} for role in canonical_roles)
 
@@ -127,9 +142,9 @@ def get_dashboard_context(user: User, employee: Optional[Employee], db: Session)
     }
 
 def ensure_sales_report_access(user: User, employee: Optional[Employee], db: Session):
-    """Block support users from Sales-only report/dashboard APIs."""
+    """Block support and finance users from Sales-only report/dashboard APIs."""
     context = get_dashboard_context(user, employee, db)
-    if context["dashboard_type"] == "support":
+    if context["dashboard_type"] in ["support", "finance"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access forbidden: Sales reports are available only to the Sales team.",
@@ -358,6 +373,17 @@ def dashboard_stats(
     current_emp = get_employee_for_user(current_user, db)
     dashboard_context = get_dashboard_context(current_user, current_emp, db)
 
+    # Finance-only users must never receive Sales dashboard data from this API.
+    if dashboard_context["dashboard_type"] == "finance":
+        finance_payload = FinanceService.get_dashboard_kpis(db=db)
+        return {
+            "dashboard_type": "finance",
+            "role": dashboard_context["role"],
+            "department": dashboard_context["department"],
+            "finance": finance_payload,
+            "upcoming_followups": [],
+        }
+
     # Support-only users must never receive Sales dashboard data from this API.
     if dashboard_context["dashboard_type"] == "support":
         support_payload = build_support_dashboard_payload(
@@ -584,14 +610,16 @@ def dashboard_stats(
         "today_activities": today_activities
     }
 
-    # Admins can switch between Sales and Support dashboards without a second
+    # Admins can switch between Sales, Support, and Finance dashboards without a second
     # API call, while each non-admin response remains strictly single-purpose.
     if dashboard_context["dashboard_type"] == "both":
         support_payload = build_support_dashboard_payload(
             current_user, current_emp, db, dashboard_context["role"]
         )
+        finance_payload = FinanceService.get_dashboard_kpis(db=db)
         response["support"] = support_payload
-        response["available_dashboards"] = ["sales", "support"]
+        response["finance"] = finance_payload
+        response["available_dashboards"] = ["sales", "support", "finance"]
 
     return response
 

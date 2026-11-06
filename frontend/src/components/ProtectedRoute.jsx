@@ -143,12 +143,12 @@ const ProtectedRoute = ({ allowedRoles = [], requiredModule = null, requiredActi
     const isSalesExec = normRole === 'SALES_EXECUTIVE' || normRole === 'SALES' || normRole === 'EMPLOYEE';
     const isSalesRole = isSalesManager || isSalesExec;
     const isSupportRole = ['SUPPORT_MANAGER', 'SUPPORT_EXECUTIVE', 'SUPPORT'].includes(normRole);
-    const isFinance = normRole === 'FINANCE';
+    const isFinance = normRole === 'FINANCE' || (user?.department || '').toUpperCase() === 'FINANCE';
 
     const isCoreSalesModule = isSalesRole && ['dashboard', 'leads', 'brochure_downloads', 'customers', 'contacts', 'quotations', 'calls', 'whatsapp', 'followups', 'activities'].includes(requiredModule);
     const isSalesManagerModule = isSalesManager && ['invoices', 'reports', 'analytics', 'employees'].includes(requiredModule);
     const isCoreSupportModule = isSupportRole && ['dashboard', 'customers', 'contacts', 'support_tickets', 'calls', 'whatsapp', 'activities'].includes(requiredModule);
-    const isFinanceModule = isFinance && ['dashboard', 'payments', 'invoices', 'customers', 'reports'].includes(requiredModule);
+    const isFinanceModule = isFinance && ['dashboard', 'finance', 'payments', 'invoices', 'customers', 'subscriptions', 'refunds', 'reports'].includes(requiredModule);
 
     const modPerm = user.permissions?.[requiredModule];
     const hasAccess = modPerm?.has_access === true || isCoreSalesModule || isSalesManagerModule || isCoreSupportModule || isFinanceModule;
