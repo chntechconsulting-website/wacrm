@@ -40,6 +40,7 @@ from services.billing_catalog import (
     validate_custom_plan_items,
     WAHRMS_PACKAGE_CODES
 )
+from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
 
 logger = logging.getLogger("waquote_router")
 
@@ -958,7 +959,7 @@ def create_document(
         grand_total=payload.grand_total,
         amount_paid=payload.amount_paid,
         line_items=payload.line_items,
-        terms_and_conditions=payload.terms_and_conditions,
+        terms_and_conditions=payload.terms_and_conditions or WAHRMS_TERMS_AND_CONDITIONS,
         created_by=creator_emp_id,
         created_by_user_id=current_user.id,
         assigned_to=target_assigned_to,
@@ -1214,7 +1215,7 @@ def update_waquote_document(
         r.source_quotation_id = payload.source_quotation_id
     if payload.source_quotation_number is not None:
         r.source_quotation_number = payload.source_quotation_number
-    r.terms_and_conditions = payload.terms_and_conditions
+    r.terms_and_conditions = payload.terms_and_conditions or WAHRMS_TERMS_AND_CONDITIONS
     r.notes = payload.notes
     if payload.prepared_by is not None:
         r.prepared_by = payload.prepared_by
@@ -1378,7 +1379,7 @@ def generate_proforma_from_quotation(
         grand_total=q.grand_total,
         amount_paid=0.0,
         line_items=q.line_items or [],
-        terms_and_conditions=q.terms_and_conditions,
+        terms_and_conditions=q.terms_and_conditions or WAHRMS_TERMS_AND_CONDITIONS,
         notes=q.notes or f"Generated from Quotation #{q.doc_number}",
         prepared_by=getattr(current_user, 'full_name', None) or getattr(current_user, 'name', None) or (current_user.username if current_user else q.prepared_by),
         issue_date=now,

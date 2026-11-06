@@ -16,6 +16,7 @@ from .schemas import (
     AuthoritativeFinancialSummary
 )
 from .auth import sanitize_secret
+from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
 from services.product_validation_service import ProductValidationService
 
 logger = logging.getLogger("proforma_integration_service")
@@ -369,7 +370,7 @@ class ProformaIntegrationService:
             grand_total=calc_grand_total,
             amount_paid=0.0,
             line_items=validated_items,
-            terms_and_conditions=payload.termsAndConditions or payload.terms_and_conditions or "1. Software access activates upon payment.\n2. Prices subject to applicable GST.",
+            terms_and_conditions=payload.termsAndConditions or payload.terms_and_conditions or WAHRMS_TERMS_AND_CONDITIONS,
             notes=payload.notes or f"Received via External Proforma API (Req #{request_id})",
             pdf_url=payload.pdfUrl or payload.pdf_url,
             destination_sync_status="SYNCED",

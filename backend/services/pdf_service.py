@@ -17,6 +17,8 @@ from reportlab.platypus import (
 )
 from reportlab.pdfgen import canvas
 
+from services.billing_terms import resolve_billing_terms
+
 # Colors
 BRAND_RED_600 = colors.HexColor("#dc2626")
 BRAND_RED_700 = colors.HexColor("#b91c1c")
@@ -681,23 +683,9 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
             "2. Goods/Services supplied as per Purchase Order / Quotation specifications.\n"
             "3. Subject to Chennai jurisdiction. E. & O.E."
         )
-    elif is_proforma:
-        default_terms = (
-            "1. 100% advance payment against Proforma Invoice.\n"
-            "2. Service will be activated upon payment confirmation.\n"
-            "3. Taxes applicable as per GST guidelines."
-        )
     else:
-        default_terms = (
-            "1. Prices are subject to applicable GST as specified.\n"
-            "2. Software activation and onboarding will begin upon PO confirmation and receipt of payment.\n"
-            "3. Setup, training, and technical support will be provided as agreed.\n"
-            "4. The client is responsible for providing accurate employee and payroll data and verifying payroll calculations.\n"
-            "5. Timely subscription renewal is required to ensure uninterrupted software access.\n"
-            "6. Customization and third-party integrations may incur additional charges.\n"
-            "7. Confirmation of the purchase order constitutes acceptance of the quotation and these terms."
-        )
-    terms_txt = data["terms"] or default_terms
+        default_terms = ""
+    terms_txt = resolve_billing_terms(data["terms"], doc_type) or default_terms
     terms_flowable = [
         Paragraph("<b>TERMS & CONDITIONS</b>", style_panel_title),
         Paragraph(terms_txt.replace("\n", "<br/>"), style_notes)

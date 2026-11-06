@@ -14,6 +14,7 @@ from models.notification import Notification
 from models.activity import LeadActivity
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.audit_log import AuditLog
+from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
 from services.purchase_details_service import build_purchase_snapshot
 from utils.support_status import (
     SUPPORT_STATUS_NEW,
@@ -1075,6 +1076,7 @@ class WorkflowService:
                         "amount": deal_amt
                     }
                 ],
+                terms_and_conditions=WAHRMS_TERMS_AND_CONDITIONS,
                 created_at=datetime.utcnow()
             )
             db.add(proforma)

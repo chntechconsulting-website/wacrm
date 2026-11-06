@@ -36,6 +36,7 @@ from schemas.lead import (
 )
 from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
+from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
@@ -1979,6 +1980,7 @@ def download_lead_quotation(
                 "rate": sub,
                 "gstRate": 0.18
             }],
+            "terms_and_conditions": WAHRMS_TERMS_AND_CONDITIONS,
             "prepared_by": (current_user.employee.name if getattr(current_user, 'employee', None) else current_user.username) or "Authorized Signatory"
         }
         pdf_bytes = generate_quotation_pdf(snapshot)
@@ -2050,6 +2052,7 @@ def download_lead_proforma(
                 "rate": sub,
                 "gstRate": 0.18
             }],
+            "terms_and_conditions": WAHRMS_TERMS_AND_CONDITIONS,
             "prepared_by": (current_user.employee.name if getattr(current_user, 'employee', None) else current_user.username) or "Authorized Signatory"
         }
         pdf_bytes = generate_proforma_pdf(snapshot)
