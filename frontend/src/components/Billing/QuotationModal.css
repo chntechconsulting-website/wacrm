@@ -566,6 +566,185 @@
   color: #ffffff;
 }
 
+.bio-device-catalog {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.bio-device-catalog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.bio-device-catalog-title {
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bio-device-catalog-subtitle {
+  margin-top: 3px;
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.bio-device-count {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+.bio-device-group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.bio-device-group-tab {
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.bio-device-group-tab:hover {
+  border-color: #5eead4;
+  color: #0f766e;
+}
+
+.bio-device-group-tab.active {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+.bio-device-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bio-device-card {
+  text-align: left;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #ffffff;
+  padding: 10px 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bio-device-card:hover {
+  border-color: #5eead4;
+  background: #f0fdfa;
+  transform: translateY(-1px);
+}
+
+.bio-device-card.selected {
+  border-color: #0f766e;
+  background: #f0fdfa;
+  box-shadow: 0 2px 8px rgba(15, 118, 110, 0.14);
+}
+
+.bio-device-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 6px;
+  color: #0f766e;
+}
+
+.bio-device-name {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.bio-device-card.selected .bio-device-name {
+  color: #0f766e;
+}
+
+.bio-device-radio {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.bio-device-specs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.66rem;
+  color: #64748b;
+  line-height: 1.3;
+}
+
+.bio-device-price {
+  margin-top: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #0f766e;
+}
+
+.bio-device-price span {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.bio-device-note {
+  margin-top: 8px;
+  font-size: 0.68rem;
+  color: #64748b;
+}
+
+@media (max-width: 1024px) {
+  .bio-device-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .bio-device-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bio-device-catalog-header {
+    flex-wrap: wrap;
+  }
+}
+
 .quote-line-items-header {
   display: flex;
   justify-content: space-between;

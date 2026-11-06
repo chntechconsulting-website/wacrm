@@ -183,12 +183,264 @@ DEFAULT_WAHRMS_BUNDLES: List[Dict[str, Any]] = [
 
 WAHRMS_PACKAGE_CODES = [bundle["bundle_code"] for bundle in DEFAULT_WAHRMS_BUNDLES]
 
+
+# ---------------------------------------------------------------------------
+# Biometric hardware catalogue
+# ---------------------------------------------------------------------------
+# Dealer Price List 2026. Every device is exposed as a selectable BIOMETRIC
+# bundle so quotations can use the exact model and dealer price. GST is always
+# added separately at 18% (the price list explicitly says "18% Extra").
+
+BIOMETRIC_DEVICE_GROUPS: List[Dict[str, Any]] = [
+    {"code": "face_finger", "name": "Face + Finger"},
+    {"code": "finger", "name": "Fingerprint"},
+    {"code": "reader", "name": "Reader Devices"},
+]
+
+DEFAULT_BIOMETRIC_DEVICES: List[Dict[str, Any]] = [
+    # Face + Finger models
+    {"code": "bio_dev_ai_mercury", "name": "AI MERCURY", "group": "face_finger", "features": ["Face"], "connectivity": "Wi-Fi", "price": 10722.0},
+    {"code": "bio_dev_ai_urans", "name": "AI URANS", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID", "Password"], "connectivity": "LAN", "price": 10722.0},
+    {"code": "bio_dev_ai_neptune", "name": "AI NEPTUNE", "group": "face_finger", "features": ["Face", "RFID"], "connectivity": "LAN", "price": 13809.0},
+    {"code": "bio_dev_ai_neptune_bat", "name": "AI NEPTUNE+BAT", "group": "face_finger", "features": ["Face", "RFID"], "connectivity": "Wi-Fi + LAN + Battery", "price": 14732.0},
+    {"code": "bio_dev_ai_pluto", "name": "AI PLUTO", "group": "face_finger", "features": ["Face", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 19130.0},
+    {"code": "bio_dev_ai_mars", "name": "AI MARS", "group": "face_finger", "features": ["Face", "RFID"], "connectivity": "LAN", "price": 23038.0},
+    {"code": "bio_dev_ai_mars_wifi", "name": "AI MARS-WIFI", "group": "face_finger", "features": ["Face", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 23571.0},
+    {"code": "bio_dev_ai_mars_palm", "name": "AI MARS-PALM", "group": "face_finger", "features": ["Face", "RFID", "Password", "Palm"], "connectivity": "Wi-Fi + LAN", "price": 25539.0},
+    {"code": "bio_dev_ai_jupiter", "name": "AI JUPITER", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 33420.0},
+    {"code": "bio_dev_ai_orcus", "name": "AI ORCUS", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID", "Password"], "connectivity": "Wi-Fi + LAN", "price": 13949.0},
+    {"code": "bio_dev_ai_magnum_lite", "name": "AI MAGNUM LITE", "group": "face_finger", "features": ["Face", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 15151.0},
+    {"code": "bio_dev_ai_magnum", "name": "AI MAGNUM", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "LAN", "price": 18307.0},
+    {"code": "bio_dev_ai_magnum_wifi", "name": "AI MAGNUM-WIFI", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 20718.0},
+    {"code": "bio_dev_mb160", "name": "MB160", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "LAN", "price": 12800.0},
+    {"code": "bio_dev_mb160_bat", "name": "MB160 -BAT", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "LAN + Battery", "price": 13785.0},
+    {"code": "bio_dev_mb160_bat_wifi_lan_bat", "name": "MB160 -BAT (WIFI+LAN+BAT)", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "Wi-Fi + LAN + Battery", "price": 16151.0},
+    {"code": "bio_dev_mb20", "name": "MB20", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "LAN", "price": 10722.0},
+    {"code": "bio_dev_uface302", "name": "UFACE302", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "LAN", "price": 25804.0},
+    {"code": "bio_dev_silkbio_101tc_id_bat", "name": "SILKBIO-101TC+ID+BAT", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "LAN", "price": 18181.0},
+    {"code": "bio_dev_ai_eris", "name": "AI ERIS", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 26724.0},
+    {"code": "bio_dev_ai_arion", "name": "AI ARION", "group": "face_finger", "features": ["Face", "Fingerprint", "RFID"], "connectivity": "Wi-Fi + LAN", "price": 34315.0},
+    # Fingerprint models
+    {"code": "bio_dev_k30_bat", "name": "K30 + BAT", "group": "finger", "features": ["Fingerprint", "RFID"], "connectivity": "LAN + Battery", "price": 6841.0},
+    {"code": "bio_dev_k30_wifi_bat", "name": "K30 - WIFI+BAT", "group": "finger", "features": ["Fingerprint", "RFID"], "connectivity": "Wi-Fi + LAN + Battery", "price": 8633.0},
+    {"code": "bio_dev_k90", "name": "K90", "group": "finger", "features": ["Fingerprint", "RFID"], "connectivity": "LAN + Battery", "price": 6553.0},
+    {"code": "bio_dev_f22_wifi", "name": "F22 - WIFI", "group": "finger", "features": ["Fingerprint", "RFID"], "connectivity": "Wi-Fi / LAN", "price": 12322.0},
+    {"code": "bio_dev_x990", "name": "X990", "group": "finger", "features": ["Fingerprint", "RFID"], "connectivity": "LAN", "price": 15012.0},
+    {"code": "bio_dev_iclock_990", "name": "ICLOCK 990", "group": "finger", "features": ["Fingerprint", "RFID"], "connectivity": "LAN", "price": 23149.0},
+    # Reader models
+    {"code": "bio_dev_fr1200", "name": "FR1200", "group": "reader", "features": ["Fingerprint"], "connectivity": "LAN", "price": 6194.0},
+    {"code": "bio_dev_kr500_e", "name": "KR500-E", "group": "reader", "features": ["RFID"], "connectivity": "LAN", "price": 1651.0},
+    {"code": "bio_dev_x7", "name": "X7", "group": "reader", "features": ["Fingerprint", "RFID", "Password"], "connectivity": "LAN", "price": 4009.0},
+    {"code": "bio_dev_f_18", "name": "F-18", "group": "reader", "features": ["Fingerprint", "RFID"], "connectivity": "LAN", "price": 16927.0},
+    {"code": "bio_dev_sf_100", "name": "SF-100", "group": "reader", "features": ["Fingerprint", "RFID"], "connectivity": "LAN", "price": 10253.0},
+    {"code": "bio_dev_sc_405", "name": "SC-405", "group": "reader", "features": ["RFID"], "connectivity": "LAN", "price": 11684.0},
+]
+
+
+def _biometric_device_bundle(device: Dict[str, Any], index: int) -> Dict[str, Any]:
+    """Build a selectable BIOMETRIC bundle from one price-list device."""
+    feature_label = " + ".join(device["features"])
+    connectivity = device["connectivity"]
+    price = float(device["price"])
+    group = next(
+        (g["name"] for g in BIOMETRIC_DEVICE_GROUPS if g["code"] == device["group"]),
+        "Biometric Device",
+    )
+    slug = device["code"].replace("bio_dev_", "", 1).upper()
+    return {
+        "bundle_code": device["code"],
+        "category": "BIOMETRIC",
+        "name": device["name"],
+        "tagline": f"{feature_label} • {connectivity}",
+        "description": (
+            f"{device['name']} biometric device with {feature_label.lower()} and "
+            f"{connectivity} connectivity. Dealer price ₹{price:,.0f} + 18% GST."
+        ),
+        "badge": group,
+        "features": [
+            feature_label,
+            f"{connectivity} Connectivity",
+            "Cloud Punch Sync Ready",
+            "1-Year Manufacturer Warranty",
+            "GST 18% Extra",
+        ],
+        "items": [
+            {
+                "item_code": f"BIO_DEV_{slug}",
+                "name": f"{device['name']} Biometric Device",
+                "description": (
+                    f"{device['name']} Biometric Device "
+                    f"({feature_label}, {connectivity})"
+                ),
+                "hsn": "85437099",
+                "qty": 1,
+                "rate": price,
+                "gstRate": 0.18,
+                "discount": 0.0,
+            }
+        ],
+        "sort_order": 100 + index,
+        "is_active": 1,
+    }
+
+
+DEFAULT_BIOMETRIC_PACKAGES: List[Dict[str, Any]] = [
+    {
+        "bundle_code": "bio_standard",
+        "category": "BIOMETRIC",
+        "name": "Biometric Standard (MB160 Terminal)",
+        "tagline": "Standalone facial & fingerprint terminal with cloud punch sync",
+        "description": "Enterprise biometric terminal with face, fingerprint, and RFID recognition, bundled with 4G IoT SIM card, cloud synchronization bridge, and installation.",
+        "badge": "Popular Hardware",
+        "features": [
+            "MB160 Face + Fingerprint + RFID Terminal",
+            "1x 4G IoT SIM Card Included",
+            "Hardware Protocol Bridge & Cloud Sync",
+            "Standard Wall Mount & Power Brick",
+            "Onsite Hardware Setup & Testing",
+        ],
+        "items": [
+            {
+                "item_code": "MB160_DEVICE",
+                "name": "MB160 Biometric Device",
+                "description": "MB160 Biometric Device",
+                "hsn": "85437099",
+                "rate": 22400.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+            {
+                "item_code": "BIO_CLOUD_SYNC",
+                "name": "Hardware Cloud Sync Bridge",
+                "description": "Hardware Cloud Sync Bridge",
+                "hsn": "998314",
+                "rate": 4999.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+            {
+                "item_code": "DEVICE_INSTALL",
+                "name": "Installation & Calibration",
+                "description": "Installation & Calibration",
+                "hsn": "998315",
+                "rate": 1000.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+        ],
+        "sort_order": 1,
+        "is_active": 1,
+    },
+    {
+        "bundle_code": "bio_atm",
+        "category": "BIOMETRIC",
+        "name": "WA ATM Biometric Hardware",
+        "tagline": "Cost-effective optical attendance machine for offices & retail",
+        "description": "WA ATM biometric terminal designed for rapid shift attendance logging, cloud software integration, and effortless deployment.",
+        "badge": "Cost Effective",
+        "features": [
+            "WA ATM Machine & Biometric Hardware",
+            "Dual Face & Optical Fingerprint Sensor",
+            "TCP/IP & Cloud Sync Ready",
+            "Wall Mounting & Power Adapter Included",
+            "Setup & Device Training Included",
+        ],
+        "items": [
+            {
+                "item_code": "WA_ATM_HARDWARE",
+                "name": "WA ATM Machine Hardware",
+                "description": "WA ATM Machine Hardware",
+                "hsn": "85437099",
+                "rate": 18500.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+            {
+                "item_code": "WA_ATM_SETUP",
+                "name": "Setup & Deployment",
+                "description": "Setup & Deployment",
+                "hsn": "998315",
+                "rate": 1000.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+        ],
+        "sort_order": 2,
+        "is_active": 1,
+    },
+    {
+        "bundle_code": "bio_enterprise",
+        "category": "BIOMETRIC",
+        "name": "Biometric Multi-Location Suite",
+        "tagline": "Dual terminal package for branch & multi-door deployments",
+        "description": "Complete multi-location biometric setup with dual MB160 terminals, SIM cards, enterprise cloud integration bridge, and multi-device deployment.",
+        "badge": "Multi-Door Enterprise",
+        "features": [
+            "2x MB160 Face + Fingerprint + RFID Terminals",
+            "2x 4G IoT SIM Cards Included",
+            "Multi-Branch Central Cloud Sync Bridge",
+            "Centralized Punch Dashboard Setup",
+            "Multi-Device Installation & Operator Training",
+        ],
+        "items": [
+            {
+                "item_code": "2X_MB160_DEVICES",
+                "name": "2x MB160 Biometric Terminals",
+                "description": "2x MB160 Biometric Terminals",
+                "hsn": "85437099",
+                "rate": 44800.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+            {
+                "item_code": "MULTI_CLOUD_BRIDGE",
+                "name": "Multi-Location Cloud Bridge",
+                "description": "Multi-Location Cloud Bridge",
+                "hsn": "998314",
+                "rate": 7500.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+            {
+                "item_code": "MULTI_INSTALL",
+                "name": "Multi-Device Deployment",
+                "description": "Multi-Device Deployment",
+                "hsn": "998315",
+                "rate": 2000.0,
+                "qty": 1,
+                "discount": 0.0,
+                "gstRate": 0.18,
+            },
+        ],
+        "sort_order": 3,
+        "is_active": 1,
+    },
+]
+
+DEFAULT_BIOMETRIC_BUNDLES: List[Dict[str, Any]] = (
+    DEFAULT_BIOMETRIC_PACKAGES
+    + [
+        _biometric_device_bundle(device, index)
+        for index, device in enumerate(DEFAULT_BIOMETRIC_DEVICES)
+    ]
+)
+
+BIOMETRIC_DEVICE_BUNDLE_CODES = [device["code"] for device in DEFAULT_BIOMETRIC_DEVICES]
+BIOMETRIC_BUNDLE_CODES = [bundle["bundle_code"] for bundle in DEFAULT_BIOMETRIC_BUNDLES]
+
 _PLAN_LINE_RE = re.compile(r"(?:^|\n)\s*Plan\s*:?\s*([^\n]+)", re.IGNORECASE)
 
 
 def get_default_bundle(bundle_code: str) -> Optional[Dict[str, Any]]:
-    """Return a defensive copy of one default bundle definition."""
-    for bundle in DEFAULT_WAHRMS_BUNDLES:
+    """Return a defensive copy of one default WAHRMS or biometric bundle."""
+    for bundle in DEFAULT_WAHRMS_BUNDLES + DEFAULT_BIOMETRIC_BUNDLES:
         if bundle["bundle_code"] == bundle_code:
             return copy.deepcopy(bundle)
     return None

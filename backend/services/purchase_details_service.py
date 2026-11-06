@@ -26,7 +26,11 @@ from sqlalchemy.orm import Session
 
 from models.quotation import Quotation
 from models.workflow import FinanceHandoff, SupportHandoff
-from services.billing_catalog import extract_plan_code, get_default_bundle
+from services.billing_catalog import (
+    DEFAULT_BIOMETRIC_BUNDLES,
+    extract_plan_code,
+    get_default_bundle,
+)
 
 PACKAGE_LABELS: Dict[str, str] = {
     "hr_atm": "HR + ATM",
@@ -37,6 +41,11 @@ PACKAGE_LABELS: Dict[str, str] = {
     "bio_atm": "WA ATM Biometric Hardware",
     "bio_enterprise": "Biometric Multi-Location Suite",
 }
+
+# Device bundles use the exact model name shown in the 2026 price list.
+PACKAGE_LABELS.update(
+    {bundle["bundle_code"]: bundle["name"] for bundle in DEFAULT_BIOMETRIC_BUNDLES}
+)
 
 PLAN_LABELS: Dict[str, str] = {
     "pro": "Pro",
@@ -159,6 +168,11 @@ def _package_block(code_or_name: Any) -> Dict[str, Any]:
         "bioatm": "bio_atm",
         "bioenterprise": "bio_enterprise",
     }
+    for bundle in DEFAULT_BIOMETRIC_BUNDLES:
+        alphanumeric_to_code.setdefault(
+            re.sub(r"[^a-z0-9]", "", bundle["name"].lower()),
+            bundle["bundle_code"],
+        )
     if not PACKAGE_LABELS.get(code) and alphanumeric in alphanumeric_to_code:
         code = alphanumeric_to_code[alphanumeric]
 

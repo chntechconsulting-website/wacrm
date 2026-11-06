@@ -33,6 +33,7 @@ from services.hierarchy_service import (
     ROLE_SUPPORT_EXECUTIVE
 )
 from services.billing_catalog import (
+    DEFAULT_BIOMETRIC_BUNDLES,
     DEFAULT_WAHRMS_BUNDLES,
     enrich_bundle_items_with_plans,
     get_bundle_plans,
@@ -113,138 +114,6 @@ def test_waquote_connection(
         "error_details": None
     }
 
-DEFAULT_BIOMETRIC_BUNDLES = [
-    {
-        "bundle_code": "bio_standard",
-        "category": "BIOMETRIC",
-        "name": "Biometric Standard (MB160 Terminal)",
-        "tagline": "Standalone facial & fingerprint terminal with cloud punch sync",
-        "description": "Enterprise biometric terminal with face, fingerprint, and RFID recognition, bundled with 4G IoT SIM card, cloud synchronization bridge, and installation.",
-        "badge": "Popular Hardware",
-        "features": [
-            "MB160 Face + Fingerprint + RFID Terminal",
-            "1x 4G IoT SIM Card Included",
-            "Hardware Protocol Bridge & Cloud Sync",
-            "Standard Wall Mount & Power Brick",
-            "Onsite Hardware Setup & Testing"
-        ],
-        "items": [
-            {
-                "name": "MB160 Biometric Device",
-                "description": "MB160 Biometric Device",
-                "hsn": "85437099",
-                "rate": 22400.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            },
-            {
-                "name": "Hardware Cloud Sync Bridge",
-                "description": "Hardware Cloud Sync Bridge",
-                "hsn": "998314",
-                "rate": 4999.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            },
-            {
-                "name": "Installation & Calibration",
-                "description": "Installation & Calibration",
-                "hsn": "998315",
-                "rate": 1000.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            }
-        ],
-        "sort_order": 1,
-        "is_active": 1
-    },
-    {
-        "bundle_code": "bio_atm",
-        "category": "BIOMETRIC",
-        "name": "WA ATM Biometric Hardware",
-        "tagline": "Cost-effective optical attendance machine for offices & retail",
-        "description": "WA ATM biometric terminal designed for rapid shift attendance logging, cloud software integration, and effortless deployment.",
-        "badge": "Cost Effective",
-        "features": [
-            "WA ATM Machine & Biometric Hardware",
-            "Dual Face & Optical Fingerprint Sensor",
-            "TCP/IP & Cloud Sync Ready",
-            "Wall Mounting & Power Adapter Included",
-            "Setup & Device Training Included"
-        ],
-        "items": [
-            {
-                "name": "WA ATM Machine Hardware",
-                "description": "WA ATM Machine Hardware",
-                "hsn": "85437099",
-                "rate": 18500.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            },
-            {
-                "name": "Setup & Deployment",
-                "description": "Setup & Deployment",
-                "hsn": "998315",
-                "rate": 1000.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            }
-        ],
-        "sort_order": 2,
-        "is_active": 1
-    },
-    {
-        "bundle_code": "bio_enterprise",
-        "category": "BIOMETRIC",
-        "name": "Biometric Multi-Location Suite",
-        "tagline": "Dual terminal package for branch & multi-door deployments",
-        "description": "Complete multi-location biometric setup with dual MB160 terminals, SIM cards, enterprise cloud integration bridge, and multi-device deployment.",
-        "badge": "Multi-Door Enterprise",
-        "features": [
-            "2x MB160 Face + Fingerprint + RFID Terminals",
-            "2x 4G IoT SIM Cards Included",
-            "Multi-Branch Central Cloud Sync Bridge",
-            "Centralized Punch Dashboard Setup",
-            "Multi-Device Installation & Operator Training"
-        ],
-        "items": [
-            {
-                "name": "2x MB160 Biometric Terminals",
-                "description": "2x MB160 Biometric Terminals",
-                "hsn": "85437099",
-                "rate": 44800.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            },
-            {
-                "name": "Multi-Location Cloud Bridge",
-                "description": "Multi-Location Cloud Bridge",
-                "hsn": "998314",
-                "rate": 7500.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            },
-            {
-                "name": "Multi-Device Deployment",
-                "description": "Multi-Device Deployment",
-                "hsn": "998315",
-                "rate": 2000.0,
-                "qty": 1,
-                "discount": 0.0,
-                "gstRate": 0.18
-            }
-        ],
-        "sort_order": 3,
-        "is_active": 1
-    }
-]
-
 @router.get("/bundles")
 
 def get_wahrms_bundles(
@@ -262,12 +131,14 @@ def get_wahrms_bundles(
         is_all = not category_filter or category_filter.lower() == "all"
         include_wahrms = is_all or category_filter.upper() == "WAHRMS"
 
+        include_biometric = is_all or category_filter.upper() == "BIOMETRIC"
+        existing_codes = {
+            row.bundle_code
+            for row in db.query(WAHRMSBundle.bundle_code).all()
+        }
+
         if include_wahrms:
             # Seed any newly introduced package without disturbing existing rows.
-            existing_codes = {
-                row.bundle_code
-                for row in db.query(WAHRMSBundle.bundle_code).all()
-            }
             for code in WAHRMS_PACKAGE_CODES:
                 if code in existing_codes:
                     continue
@@ -294,6 +165,15 @@ def get_wahrms_bundles(
                     changed = True
             if changed:
                 db.commit()
+
+        if include_biometric:
+            # Seed the full 2026 biometric device price list. Existing rows
+            # (including admin-edited bundles) are never overwritten.
+            for bundle in DEFAULT_BIOMETRIC_BUNDLES:
+                if bundle["bundle_code"] in existing_codes:
+                    continue
+                db.add(WAHRMSBundle(**bundle))
+            db.commit()
 
         q = db.query(WAHRMSBundle).filter(WAHRMSBundle.is_active == 1)
         if not is_all:

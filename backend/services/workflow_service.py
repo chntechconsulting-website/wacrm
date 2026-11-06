@@ -14,6 +14,7 @@ from models.notification import Notification
 from models.activity import LeadActivity
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.audit_log import AuditLog
+from services.billing_catalog import get_default_bundle
 from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
 from services.purchase_details_service import build_purchase_snapshot
 from utils.payment_status import (
@@ -757,6 +758,12 @@ class WorkflowService:
 
         if selected_bundle in bundle_names:
             selected_bundle = bundle_names[selected_bundle]
+        elif selected_bundle:
+            # Biometric device bundles are catalogued by their stable code.
+            # Resolve them to the customer-facing model name.
+            catalog_bundle = get_default_bundle(selected_bundle)
+            if catalog_bundle:
+                selected_bundle = catalog_bundle.get("name") or selected_bundle
 
         parsed_items = []
         addons = []

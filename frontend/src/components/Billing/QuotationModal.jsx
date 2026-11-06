@@ -52,6 +52,13 @@ import {
   WAHRMS_PACKAGE_CODES
 } from '../../utils/billingPackages';
 import {
+  BIOMETRIC_DEVICE_GROUPS,
+  BIOMETRIC_DEVICES,
+  FALLBACK_BIOMETRIC_DEVICE_BUNDLES,
+  createBiometricDeviceBundle,
+  isBiometricDeviceBundle
+} from '../../utils/biometricDevices';
+import {
   ADDON_PRODUCTS,
   ADDON_PRICING_TYPES,
   ONE_TIME_ADDONS,
@@ -142,7 +149,7 @@ export const BIOMETRIC_ADD_ON_SERVICES = [
   }
 ];
 
-export const FALLBACK_BIOMETRIC_BUNDLES = [
+const FALLBACK_BIOMETRIC_PACKAGES = [
   {
     bundleCode: 'bio_standard',
     category: 'BIOMETRIC',
@@ -274,6 +281,11 @@ export const FALLBACK_BIOMETRIC_BUNDLES = [
       }
     ]
   }
+];
+
+export const FALLBACK_BIOMETRIC_BUNDLES = [
+  ...FALLBACK_BIOMETRIC_PACKAGES,
+  ...FALLBACK_BIOMETRIC_DEVICE_BUNDLES
 ];
 
 export const ALL_FALLBACK_BUNDLES = [
@@ -444,6 +456,27 @@ export default function QuotationModal({
       || getPlanCodeFromItems(initialData.lineItems || []);
     return String(savedPlan || (isEditMode ? '' : 'pro')).toLowerCase();
   });
+  const [biometricDeviceGroup, setBiometricDeviceGroup] = useState('all');
+
+  // Resolve every price-list device against the live bundle master, falling
+  // back to the verified local catalogue when the API has not seeded a device.
+  const biometricDeviceBundles = BIOMETRIC_DEVICES.map((device, index) => {
+    const serverBundle = bundles.find(
+      (bundle) => (bundle.bundleCode || bundle.bundle_code) === device.code
+    );
+    const fallbackBundle = FALLBACK_BIOMETRIC_DEVICE_BUNDLES.find(
+      (bundle) => bundle.bundleCode === device.code
+    ) || createBiometricDeviceBundle(device, index);
+    const bundle = serverBundle && Array.isArray(serverBundle.items) && serverBundle.items.length > 0
+      ? serverBundle
+      : fallbackBundle;
+    const rate = Number(bundle.items?.[0]?.rate ?? device.price ?? 0);
+    return { ...device, bundle, rate };
+  });
+
+  const visibleBiometricDevices = biometricDeviceGroup === 'all'
+    ? biometricDeviceBundles
+    : biometricDeviceBundles.filter((device) => device.group === biometricDeviceGroup);
 
 
   // Fetch bundles from backend master API with graceful fallback handling
@@ -695,9 +728,16 @@ export default function QuotationModal({
     if (docType === 'quotation') {
       setTerms(catLower === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION);
     }
-    const catBundles = bundles.filter(b => (b.category || 'WAHRMS').toLowerCase() === catLower);
-    if (catBundles.length > 0) {
-      handleSelectBundle(catBundles[0]);
+    const catBundles = bundles.filter((bundle) => {
+      const bundleCategory = (bundle.category || 'WAHRMS').toLowerCase();
+      if (bundleCategory !== catLower) return false;
+      return catLower !== 'biometric' || !isBiometricDeviceBundle(bundle);
+    });
+    const preferredBundle = catLower === 'biometric'
+      ? catBundles.find((bundle) => (bundle.bundleCode || bundle.bundle_code) === 'bio_standard') || catBundles[0]
+      : catBundles[0];
+    if (preferredBundle) {
+      handleSelectBundle(preferredBundle);
     } else {
       const fallback = catLower === 'biometric' ? FALLBACK_BIOMETRIC_BUNDLES[0] : FALLBACK_WAHRMS_BUNDLES[0];
       handleSelectBundle(fallback);
@@ -1396,7 +1436,7 @@ export default function QuotationModal({
                 </h4>
                 <p className="wahrms-bundle-subtitle">
                   {productCategory === 'biometric'
-                    ? 'Select your Biometric Hardware configuration for CHN Technologies.'
+                    ? 'Choose a ready-made package or select an individual device model from the 2026 dealer price list.'
                     : 'Select a package, then choose Pro, Business, or Custom. Subscription prices are per employee, per month.'}
                 </p>
               </div>
@@ -1424,7 +1464,7 @@ export default function QuotationModal({
                 .filter(b => {
                   const bCat = (b.category || 'WAHRMS').toLowerCase();
                   if (productCategory === 'biometric') {
-                    return bCat === 'biometric' || ['bio_standard', 'bio_atm', 'bio_enterprise'].includes(b.bundleCode || b.bundle_code);
+                    return bCat === 'biometric' && !isBiometricDeviceBundle(b);
                   }
                   return WAHRMS_PACKAGE_CODES.includes(b.bundleCode || b.bundle_code);
                 })
@@ -1543,6 +1583,81 @@ export default function QuotationModal({
                   );
                 })}
             </div>
+
+            {productCategory === 'biometric' && (
+              <div className="bio-device-catalog">
+                <div className="bio-device-catalog-header">
+                  <div>
+                    <div className="bio-device-catalog-title">Biometric Device Models</div>
+                    <div className="bio-device-catalog-subtitle">
+                      Dealer Price List 2026 • GST 18% extra. Select a model, then add installation or cloud sync below.
+                    </div>
+                  </div>
+                  <span className="bio-device-count">{BIOMETRIC_DEVICES.length} models</span>
+                </div>
+
+                <div className="bio-device-group-tabs">
+                  <button
+                    type="button"
+                    className={`bio-device-group-tab ${biometricDeviceGroup === 'all' ? 'active' : ''}`}
+                    onClick={() => setBiometricDeviceGroup('all')}
+                  >
+                    All ({BIOMETRIC_DEVICES.length})
+                  </button>
+                  {BIOMETRIC_DEVICE_GROUPS.map((group) => {
+                    const count = BIOMETRIC_DEVICES.filter((device) => device.group === group.code).length;
+                    return (
+                      <button
+                        key={group.code}
+                        type="button"
+                        className={`bio-device-group-tab ${biometricDeviceGroup === group.code ? 'active' : ''}`}
+                        onClick={() => setBiometricDeviceGroup(group.code)}
+                      >
+                        {group.name} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="bio-device-grid">
+                  {visibleBiometricDevices.map(({ bundle, rate, ...device }) => {
+                    const deviceCode = bundle.bundleCode || bundle.bundle_code;
+                    const isSelected = selectedBundle === deviceCode;
+                    return (
+                      <button
+                        key={deviceCode}
+                        type="button"
+                        className={`bio-device-card ${isSelected ? 'selected' : ''}`}
+                        onClick={() => handleSelectBundle(bundle)}
+                        aria-pressed={isSelected}
+                        title={`Select ${device.name} at ₹${Number(rate).toLocaleString('en-IN')} + 18% GST`}
+                      >
+                        <div className="bio-device-card-top">
+                          <span className="bio-device-name">{device.name}</span>
+                          {isSelected ? (
+                            <Check size={14} strokeWidth={3} />
+                          ) : (
+                            <span className="bio-device-radio" />
+                          )}
+                        </div>
+                        <div className="bio-device-specs">
+                          <span>{device.features.join(' + ')}</span>
+                          <span>{device.connectivity}</span>
+                        </div>
+                        <div className="bio-device-price">
+                          ₹{Number(rate).toLocaleString('en-IN')}
+                          <span>+18% GST</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="bio-device-note">
+                  Prices shown are dealer prices. GST is added at 18% on the quotation.
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Section 3: Line Items */}
@@ -1688,7 +1803,7 @@ export default function QuotationModal({
                         <td>
                           {item.isBundleItem && (
                             <div style={{ marginBottom: '5px' }}>
-                              <span className="bundle-item-indicator" title="Included in chosen WAHRMS bundle">
+                              <span className="bundle-item-indicator" title="Included in selected package">
                                 <CheckCircle2 size={11} /> Bundle Module
                               </span>
                             </div>

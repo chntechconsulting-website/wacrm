@@ -82,6 +82,30 @@ class TestProductCategoryValidation(unittest.TestCase):
         self.assertEqual(result.resolved_category, "BIOMETRIC")
         self.assertEqual(result.biometric_device_count, 2)
 
+    def test_new_biometric_device_bundle_is_classified_biometric(self):
+        """Every 2026 device bundle must stay out of external synchronization."""
+        doc = MagicMock()
+        doc.selected_bundle = "bio_dev_ai_mars_wifi"
+        doc.product_category = "biometric"
+        doc.line_items = [
+            {
+                "item_code": "BIO_DEV_AI_MARS_WIFI",
+                "hsn": "85437099",
+                "name": "AI MARS-WIFI Biometric Device",
+                "description": "AI MARS-WIFI Biometric Device (Face + RFID, Wi-Fi + LAN)",
+                "qty": 1,
+                "rate": 23571.0,
+                "gstRate": 0.18
+            }
+        ]
+
+        result = ProductValidationService.validate_document_products(doc)
+        self.assertTrue(result.has_biometric)
+        self.assertFalse(result.has_wahrms)
+        self.assertFalse(result.is_wahrms_only)
+        self.assertEqual(result.resolved_category, "BIOMETRIC")
+        self.assertEqual(result.biometric_device_count, 1)
+
     def test_mixed_document_blocks_synchronization(self):
         """Mixed WAHRMS software + Biometric hardware must be strictly blocked."""
         doc = MagicMock()

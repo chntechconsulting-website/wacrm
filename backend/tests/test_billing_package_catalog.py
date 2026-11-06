@@ -5,6 +5,10 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from services.billing_catalog import (
+    BIOMETRIC_BUNDLE_CODES,
+    BIOMETRIC_DEVICE_BUNDLE_CODES,
+    DEFAULT_BIOMETRIC_BUNDLES,
+    DEFAULT_BIOMETRIC_DEVICES,
     DEFAULT_WAHRMS_BUNDLES,
     WAHRMS_PACKAGE_CODES,
     enrich_bundle_items_with_plans,
@@ -58,6 +62,43 @@ EXPECTED_PACKAGES = {
             "Payslip Generation",
         ],
     },
+}
+
+
+EXPECTED_BIOMETRIC_PRICES = {
+    "bio_dev_ai_mercury": 10722,
+    "bio_dev_ai_urans": 10722,
+    "bio_dev_ai_neptune": 13809,
+    "bio_dev_ai_neptune_bat": 14732,
+    "bio_dev_ai_pluto": 19130,
+    "bio_dev_ai_mars": 23038,
+    "bio_dev_ai_mars_wifi": 23571,
+    "bio_dev_ai_mars_palm": 25539,
+    "bio_dev_ai_jupiter": 33420,
+    "bio_dev_ai_orcus": 13949,
+    "bio_dev_ai_magnum_lite": 15151,
+    "bio_dev_ai_magnum": 18307,
+    "bio_dev_ai_magnum_wifi": 20718,
+    "bio_dev_mb160": 12800,
+    "bio_dev_mb160_bat": 13785,
+    "bio_dev_mb160_bat_wifi_lan_bat": 16151,
+    "bio_dev_mb20": 10722,
+    "bio_dev_uface302": 25804,
+    "bio_dev_silkbio_101tc_id_bat": 18181,
+    "bio_dev_ai_eris": 26724,
+    "bio_dev_ai_arion": 34315,
+    "bio_dev_k30_bat": 6841,
+    "bio_dev_k30_wifi_bat": 8633,
+    "bio_dev_k90": 6553,
+    "bio_dev_f22_wifi": 12322,
+    "bio_dev_x990": 15012,
+    "bio_dev_iclock_990": 23149,
+    "bio_dev_fr1200": 6194,
+    "bio_dev_kr500_e": 1651,
+    "bio_dev_x7": 4009,
+    "bio_dev_f_18": 16927,
+    "bio_dev_sf_100": 10253,
+    "bio_dev_sc_405": 11684,
 }
 
 
@@ -189,6 +230,57 @@ class TestBillingPackageCatalog(unittest.TestCase):
             "pro",
         )
         self.assertEqual(extract_plan_code({"description": "No plan here"}), "")
+
+    def test_all_33_biometric_devices_are_in_the_catalogue(self):
+        self.assertEqual(len(DEFAULT_BIOMETRIC_DEVICES), 33)
+        self.assertEqual(
+            {device["code"] for device in DEFAULT_BIOMETRIC_DEVICES},
+            set(EXPECTED_BIOMETRIC_PRICES),
+        )
+        self.assertEqual(len(BIOMETRIC_DEVICE_BUNDLE_CODES), 33)
+        self.assertEqual(set(BIOMETRIC_DEVICE_BUNDLE_CODES), set(EXPECTED_BIOMETRIC_PRICES))
+
+    def test_biometric_device_groups_match_the_price_list(self):
+        counts = {}
+        for device in DEFAULT_BIOMETRIC_DEVICES:
+            counts[device["group"]] = counts.get(device["group"], 0) + 1
+        self.assertEqual(counts, {"face_finger": 21, "finger": 6, "reader": 6})
+
+    def test_every_biometric_device_bundle_uses_the_exact_dealer_price_and_gst(self):
+        bundles_by_code = {
+            bundle["bundle_code"]: bundle for bundle in DEFAULT_BIOMETRIC_BUNDLES
+        }
+        for code, expected_price in EXPECTED_BIOMETRIC_PRICES.items():
+            bundle = bundles_by_code[code]
+            self.assertEqual(bundle["category"], "BIOMETRIC")
+            self.assertEqual(bundle["items"][0]["hsn"], "85437099")
+            self.assertEqual(bundle["items"][0]["rate"], float(expected_price))
+            self.assertEqual(bundle["items"][0]["gstRate"], 0.18)
+            self.assertEqual(bundle["items"][0]["qty"], 1)
+            self.assertIn("GST 18% Extra", bundle["features"])
+            self.assertEqual(get_bundle_plans(code), [])
+
+    def test_existing_biometric_packages_are_preserved(self):
+        bundles_by_code = {
+            bundle["bundle_code"]: bundle for bundle in DEFAULT_BIOMETRIC_BUNDLES
+        }
+        self.assertEqual(
+            bundles_by_code["bio_standard"]["items"][0]["rate"], 22400.0
+        )
+        self.assertEqual(bundles_by_code["bio_atm"]["items"][0]["rate"], 18500.0)
+        self.assertEqual(
+            bundles_by_code["bio_enterprise"]["items"][0]["rate"], 44800.0
+        )
+        self.assertIn("bio_standard", BIOMETRIC_BUNDLE_CODES)
+        self.assertIn("bio_atm", BIOMETRIC_BUNDLE_CODES)
+        self.assertIn("bio_enterprise", BIOMETRIC_BUNDLE_CODES)
+
+    def test_get_default_bundle_resolves_a_biometric_device(self):
+        bundle = get_default_bundle("bio_dev_ai_mars_wifi")
+        self.assertIsNotNone(bundle)
+        self.assertEqual(bundle["name"], "AI MARS-WIFI")
+        self.assertEqual(bundle["items"][0]["rate"], 23571.0)
+        self.assertEqual(get_default_bundle("bio_dev_missing"), None)
 
 
 if __name__ == "__main__":

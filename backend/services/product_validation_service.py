@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from dataclasses import dataclass
 
 from models.quotation import Quotation, WAHRMSBundle
+from services.billing_catalog import BIOMETRIC_BUNDLE_CODES as CATALOG_BIOMETRIC_BUNDLE_CODES
 
 logger = logging.getLogger("product_validation_service")
 
@@ -46,12 +47,8 @@ class ProductValidationService:
     # Software & Professional services SAC prefixes
     SOFTWARE_SAC_PREFIXES = ("9983", "9984", "9987")
 
-    # Known biometric bundle codes
-    BIOMETRIC_BUNDLE_CODES = {
-        "bio_standard",
-        "bio_atm",
-        "bio_enterprise"
-    }
+    # Known biometric bundle codes, including every 2026 device model.
+    BIOMETRIC_BUNDLE_CODES = set(CATALOG_BIOMETRIC_BUNDLE_CODES)
 
     # Known WAHRMS bundle codes
     WAHRMS_BUNDLE_CODES = {
