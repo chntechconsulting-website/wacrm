@@ -1728,3 +1728,67 @@ def download_tax_invoice_pdf(
         }
     )
 
+
+# TEMPORARY production diagnostic. Remove after diagnosing the purchase PDF 500.
+@router.get("/__pdf_diag")
+def __pdf_diag(request: Request, db: Session = Depends(get_db)):
+    import os
+    import traceback
+
+    token_path = "/tmp/wacrm_pdf_diag_token"
+    try:
+        with open(token_path, "r", encoding="utf-8") as token_file:
+            expected = token_file.read().strip()
+    except OSError:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not expected or request.headers.get("x-diag-token") != expected:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    emp = db.query(Employee).filter(Employee.name.ilike("%Prasanna%")).first()
+    user = emp.user if emp and emp.user else None
+    if not user:
+        user = (
+            db.query(User)
+            .filter(User.role.in_([ROLE_SUPPORT_EXECUTIVE, ROLE_SUPPORT_MANAGER]))
+            .first()
+        )
+
+    targets = [
+        ("quotation", "CHN/QT/2627/0013", download_quotation_pdf, "quotation"),
+        ("proforma", "CHN/PI/26-27/0007", download_proforma_pdf, "proforma"),
+        ("invoice", "CHN/INV/26/0002", download_tax_invoice_pdf, "invoice"),
+    ]
+    results = []
+    for label, number, handler, doc_type in targets:
+        row = db.query(Quotation).filter(Quotation.doc_number == number).first()
+        item = {
+            "target": label,
+            "number": number,
+            "row_found": bool(row),
+            "row_id": getattr(row, "id", None),
+            "authorized": None,
+        }
+        if row:
+            try:
+                item["authorized"] = is_user_authorized_for_billing_doc(user, row, db, "view")
+            except Exception as exc:
+                item["auth_error"] = f"{type(exc).__name__}: {exc}"
+                item["auth_traceback"] = traceback.format_exc()
+        try:
+            response = handler(doc_id=number, db=db, current_user=user)
+            item["ok"] = True
+            item["media_type"] = getattr(response, "media_type", None)
+            item["bytes"] = len(getattr(response, "body", b""))
+        except Exception as exc:
+            item["ok"] = False
+            item["error"] = f"{type(exc).__name__}: {exc}"
+            item["traceback"] = traceback.format_exc()
+        results.append(item)
+
+    return {
+        "support_user_found": bool(user),
+        "support_user_role": getattr(user, "role", None),
+        "support_employee_match": bool(emp),
+        "results": results,
+    }
+

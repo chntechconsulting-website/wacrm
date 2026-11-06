@@ -8,10 +8,10 @@ permissions:
 
 jobs:
   diagnose:
-    name: Inspect production deployment
+    name: Reproduce purchase PDF generation
     runs-on: ubuntu-latest
     steps:
-      - name: Collect deployment details
+      - name: Call temporary local diagnostic endpoint
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -21,19 +21,12 @@ jobs:
           command_timeout: 10m
           script: |
             set +e
-            echo "=== whoami ==="
-            id
-            echo "=== deploy script permissions ==="
-            ls -l /usr/local/sbin/wacrm-deploy
-            echo "=== deploy script ==="
-            sed -n '1,260p' /usr/local/sbin/wacrm-deploy
-            echo "=== sudo permissions ==="
-            sudo -n -l
-            echo "=== backend service ==="
-            systemctl cat wacrm-backend
-            echo "=== backend files ==="
-            ls -la /opt/wacrm/backend | head -40
-            echo "=== env permissions ==="
-            ls -l /opt/wacrm/backend/.env
-            getfacl /opt/wacrm/backend/.env 2>/dev/null
+            TOKEN=$(openssl rand -hex 24)
+            printf '%s' "$TOKEN" > /tmp/wacrm_pdf_diag_token
+            chmod 600 /tmp/wacrm_pdf_diag_token
+            echo "=== diagnostic response ==="
+            curl -sS --max-time 120 -H "X-Diag-Token: $TOKEN" \
+              http://127.0.0.1:8000/api/integrations/waquote/__pdf_diag
+            echo
             echo "=== done ==="
+            rm -f /tmp/wacrm_pdf_diag_token
