@@ -21,6 +21,16 @@ class BillingTermsTests(unittest.TestCase):
 
     def test_legacy_proforma_terms_are_replaced(self):
         legacy_terms = (
+            "1. Payment terms: 100% advance payment against this Proforma Invoice.\n"
+            "2. Bank transfers to be credited to the Axis Bank account mentioned above.\n"
+            "3. Materials will be dispatched upon payment credit receipt.\n"
+            "4. Goods once sold will not be taken back."
+        )
+        self.assertEqual(
+            resolve_billing_terms(legacy_terms, "proforma"),
+            WAHRMS_TERMS_AND_CONDITIONS,
+        )
+        legacy_terms = (
             "1. 100% advance payment against Proforma Invoice.\n"
             "2. Service will be activated upon payment confirmation.\n"
             "3. Taxes applicable as per GST guidelines."

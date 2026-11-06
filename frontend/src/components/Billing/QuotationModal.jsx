@@ -32,7 +32,7 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS } from '../../utils/quotationPdf';
 import {
   calculateBundleQuantity,
   createBundleSubscriptionFields,
@@ -64,14 +64,7 @@ import {
 import DocumentPdfPreviewModal from './PdfPreviewModal';
 import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
-const DEFAULT_TERMS_QUOTATION = 
-`1. Prices are subject to applicable GST as specified.
-2. Software activation and onboarding will begin upon PO confirmation and receipt of payment.
-3. Setup, training, and technical support will be provided as agreed.
-4. The client is responsible for providing accurate employee and payroll data and verifying payroll calculations.
-5. Timely subscription renewal is required to ensure uninterrupted software access.
-6. Customization and third-party integrations may incur additional charges.
-7. Confirmation of the purchase order constitutes acceptance of the quotation and these terms.`;
+const DEFAULT_TERMS_QUOTATION = WAHRMS_TERMS_AND_CONDITIONS;
 
 const DEFAULT_TERMS_BIOMETRIC_QUOTATION = 
 `1. Prices are subject to applicable GST as specified.
@@ -81,11 +74,7 @@ const DEFAULT_TERMS_BIOMETRIC_QUOTATION =
 5. Setup, device registration, and administrator training will be provided upon installation.
 6. Confirmation of the purchase order constitutes acceptance of this quotation and terms.`;
 
-const DEFAULT_TERMS_PROFORMA = 
-`1. Payment terms: 100% advance payment against this Proforma Invoice.
-2. Bank transfers to be credited to the Axis Bank account mentioned above.
-3. Materials will be dispatched upon payment credit receipt.
-4. Goods once sold will not be taken back.`;
+const DEFAULT_TERMS_PROFORMA = WAHRMS_TERMS_AND_CONDITIONS;
 
 const DEFAULT_TERMS_INVOICE = 
 `1. Payment received and verified by Finance.

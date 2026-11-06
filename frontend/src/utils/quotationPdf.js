@@ -29,6 +29,51 @@ const BRAND = {
 
 const CONTENT_WIDTH = 539; // Portrait A4 width (595) minus 28pt margins on either side
 
+export const WAHRMS_TERMS_AND_CONDITIONS = [
+  '1. Prices are subject to applicable GST as specified.',
+  '2. Software activation and onboarding will begin upon PO confirmation and receipt of payment.',
+  '3. Setup, training, and technical support will be provided as agreed.',
+  '4. The client is responsible for providing accurate employee and payroll data and verifying payroll calculations.',
+  '5. Timely subscription renewal is required to ensure uninterrupted software access.',
+  '6. Customization and third-party integrations may incur additional charges.',
+  '7. Confirmation of the purchase order constitutes acceptance of the quotation and these terms.'
+].join('\n');
+
+const LEGACY_PROFORMA_TERMS = [
+  [
+    '1. Payment terms: 100% advance payment against this Proforma Invoice.',
+    '2. Bank transfers to be credited to the Axis Bank account mentioned above.',
+    '3. Materials will be dispatched upon payment credit receipt.',
+    '4. Goods once sold will not be taken back.'
+  ].join('\n'),
+  [
+    '1. 100% advance payment against Proforma Invoice.',
+    '2. Service will be activated upon payment confirmation.',
+    '3. Taxes applicable as per GST guidelines.'
+  ].join('\n'),
+  [
+    '1. Software access activates upon payment.',
+    '2. Prices subject to applicable GST.'
+  ].join('\n')
+];
+
+function normalizeTerms(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+const LEGACY_PROFORMA_TERMS_NORMALIZED = new Set(LEGACY_PROFORMA_TERMS.map(normalizeTerms));
+
+export function resolveDocumentTerms(terms, docType) {
+  const cleaned = String(terms || '').trim();
+  const type = String(docType || '').toLowerCase();
+  if (type === 'quotation' || type === 'proforma') {
+    if (!cleaned || LEGACY_PROFORMA_TERMS_NORMALIZED.has(normalizeTerms(cleaned))) {
+      return WAHRMS_TERMS_AND_CONDITIONS;
+    }
+  }
+  return cleaned;
+}
+
 function fmt(n) {
   const val = Number(n || 0);
   return new Intl.NumberFormat('en-IN', {
@@ -538,17 +583,10 @@ export function generateBillingPdf(docData, download = true) {
   };
 
   // ---------- Terms & Conditions -----------------------------------------
-  const defaultTerms = [
-    '1. Prices are subject to applicable GST as specified.',
-    '2. Software activation and onboarding will begin upon PO confirmation and receipt of payment.',
-    '3. Setup, training, and technical support will be provided as agreed.',
-    '4. The client is responsible for providing accurate employee and payroll data and verifying payroll calculations.',
-    '5. Timely subscription renewal is required to ensure uninterrupted software access.',
-    '6. Customization and third-party integrations may incur additional charges.',
-    '7. Confirmation of the purchase order constitutes acceptance of the quotation and these terms.'
-  ].join('\n');
-
-  const termsText = docData.terms || docData.termsAndConditions || (isQuotation ? defaultTerms : '');
+  const termsText = resolveDocumentTerms(
+    docData.terms || docData.termsAndConditions,
+    docType
+  );
 
   const termsBlock = termsText ? {
     stack: [

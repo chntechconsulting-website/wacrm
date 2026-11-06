@@ -14,6 +14,12 @@ WAHRMS_TERMS_AND_CONDITIONS = (
 # render the full WAHRMS terms instead of the legacy wording.
 _LEGACY_PROFORMA_TERMS = (
     (
+        "1. Payment terms: 100% advance payment against this Proforma Invoice.\n"
+        "2. Bank transfers to be credited to the Axis Bank account mentioned above.\n"
+        "3. Materials will be dispatched upon payment credit receipt.\n"
+        "4. Goods once sold will not be taken back."
+    ),
+    (
         "1. 100% advance payment against Proforma Invoice.\n"
         "2. Service will be activated upon payment confirmation.\n"
         "3. Taxes applicable as per GST guidelines."
