@@ -1085,6 +1085,46 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         self.assertEqual(records[0].status, "PAYMENT_PENDING")
         self.assertEqual(records[0].payment_status, "PAYMENT_PENDING")
 
+    def test_confirm_payment_uses_username_for_invoice_prepared_by(self):
+        self._run_won()
+        handoff = (
+            self.db.query(FinanceHandoff)
+            .filter(FinanceHandoff.lead_id == self.lead.id)
+            .one()
+        )
+
+        # An existing invoice exercises the update branch that previously read
+        # User.full_name, an attribute the User model does not define.
+        invoice = Quotation(
+            doc_type="invoice",
+            doc_number="CHN/INV/26/9999",
+            status="issued",
+            payment_status="unpaid",
+            lead_id=self.lead.id,
+            customer_id=handoff.customer_id,
+            customer_name=handoff.customer_name,
+            issue_date=datetime(2026, 1, 8, 10, 0, 0),
+            grand_total=215000,
+            line_items=[],
+        )
+        self.db.add(invoice)
+        self.db.commit()
+
+        updated = WorkflowService.confirm_finance_payment(
+            db=self.db,
+            handoff_id=handoff.id,
+            payment_data={
+                "paid_amount": 215000,
+                "invoice_number": "CHN/INV/26/9999",
+                "payment_mode": "Bank Transfer",
+            },
+            current_user=self.admin_user,
+        )
+        self.db.refresh(invoice)
+
+        self.assertEqual(updated.status, "PAID")
+        self.assertEqual(invoice.prepared_by, self.admin_emp.name)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -385,7 +385,11 @@ class WorkflowService:
             invoice_doc.payment_status = "paid"
             invoice_doc.amount_paid = paid_amount
             invoice_doc.status = "issued"
-            invoice_doc.prepared_by = current_user.full_name or current_user.username
+            invoice_doc.prepared_by = (
+                (current_user.employee.name if getattr(current_user, "employee", None) else None)
+                or current_user.username
+                or "Finance Department"
+            )
         else:
             # Create distinct official statutory Tax Invoice record
             line_items_data = source_quote.line_items if source_quote and source_quote.line_items else (handoff.products_services or [])

@@ -2189,7 +2189,7 @@ def get_my_doocti_agent_extension(
 
     emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
     emp_id = emp.id if emp else None
-    emp_name = emp.name if emp else (current_user.name or current_user.username)
+    emp_name = emp.name if emp else current_user.username
 
     # Find extension mapped to this employee strictly from database configuration
     found_ext = None

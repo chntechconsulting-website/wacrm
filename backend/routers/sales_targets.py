@@ -356,7 +356,7 @@ def get_my_target(
         return EmployeeMyTargetSummary(
             has_target=False,
             employee_id=0,
-            employee_name=current_user.full_name or current_user.username,
+            employee_name=current_user.username,
             photo_url=None,
             period_type=p_type,
             period_month=month,
