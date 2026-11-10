@@ -370,118 +370,68 @@ const SalesRevenueReport = () => {
     );
   };
 
-  // Name formatter to prevent label collisions on chart axes
-  const formatChartName = (name, shortName) => {
-    if (shortName) return shortName;
-    if (!name) return '';
-    const trimmed = name.trim();
-    if (/^system\s+administrator$/i.test(trimmed)) return 'Admin';
-    const parts = trimmed.split(/\s+/);
-    if (parts.length > 1) {
-      return `${parts[0]} ${parts[1][0]}.`;
-    }
-    if (trimmed.length > 9) {
-      return `${trimmed.slice(0, 8)}…`;
-    }
-    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-  };
-
-  // Vertical Bar Chart Helper for Salesperson
+  // Horizontal Bar Chart Helper for Salesperson
   const renderSalespersonChart = (items) => {
-    if (!items || items.length === 0) return null;
+    // The API returns every active employee, including people with no won
+    // revenue. Plotting those zero-value names makes the chart unreadable and
+    // forces the axis to an unnecessarily large scale.
+    const earningItems = (items || [])
+      .filter((item) => Number(item.revenue || 0) > 0)
+      .sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0));
 
-    const width = 520;
-    const height = 250;
-    const padding = { top: 32, right: 20, bottom: 42, left: 50 };
-    const chartW = width - padding.left - padding.right;
-    const chartH = height - padding.top - padding.bottom;
-    const maxData = Math.max(0.2, ...items.map(i => i.revenue || 0));
-    const maxVal = Math.max(1, Math.ceil(maxData * 1.25 * 10) / 10);
+    if (earningItems.length === 0) {
+      return (
+        <div className="sr-chart-empty">
+          No won revenue has been recorded for this period.
+        </div>
+      );
+    }
 
-    const barW = Math.min(38, Math.max(22, Math.floor(chartW / Math.max(1, items.length * 1.8))));
-    const getY = (val) => padding.top + chartH - (Math.max(0, val) / maxVal) * chartH;
-    const step = maxVal / 4;
-    const gridLines = [0, step, step * 2, step * 3, maxVal].map(v => Number(v.toFixed(2)));
+    const maxVisible = 8;
+    const visibleItems = earningItems.slice(0, maxVisible);
+    const hiddenCount = earningItems.length - visibleItems.length;
+    const maxRevenue = Math.max(...visibleItems.map((item) => Number(item.revenue || 0)), 0.01);
 
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="sr-chart-svg">
-        {/* Gridlines */}
-        {gridLines.map((gl) => {
-          const y = getY(gl);
-          return (
-            <g key={gl}>
-              <line
-                x1={padding.left}
-                y1={y}
-                x2={width - padding.right}
-                y2={y}
-                stroke="#f1f5f9"
-                strokeDasharray="4 4"
-                strokeWidth="1"
-              />
-              <text
-                x={padding.left - 8}
-                y={y + 4}
-                textAnchor="end"
-                fontSize="11"
-                fill="#94a3b8"
-                fontWeight="500"
-              >
-                {gl >= 1 ? `₹${gl.toFixed(1)} L` : `₹${Math.round(gl * 100)}k`}
-              </text>
-            </g>
-          );
-        })}
+      <div className="sr-salesperson-chart">
+        <div className="sr-salesperson-total">
+          <span>Ranked by won revenue</span>
+          <strong>{earningItems.length} salesperson{earningItems.length === 1 ? '' : 's'}</strong>
+        </div>
 
-        {/* Bars */}
-        {items.map((sp, idx) => {
-          const cx = padding.left + (idx + 0.5) * (chartW / items.length);
-          const x = cx - barW / 2;
-          const y = getY(sp.revenue);
-          const bH = (padding.top + chartH) - y;
-          const displayName = formatChartName(sp.name, sp.short_name);
+        <div className="sr-salesperson-list">
+          {visibleItems.map((sp, index) => {
+            const widthPercent = Math.max(
+              3,
+              (Number(sp.revenue || 0) / maxRevenue) * 100
+            );
+            return (
+              <div className="sr-salesperson-row" key={`${sp.name}-${index}`}>
+                <span className="sr-salesperson-name" title={sp.name}>
+                  {sp.name}
+                </span>
+                <div className="sr-salesperson-track">
+                  <div
+                    className="sr-salesperson-bar"
+                    style={{
+                      width: `${widthPercent}%`,
+                      backgroundColor: sp.color,
+                    }}
+                    title={`${sp.name}: ${sp.formatted}`}
+                  />
+                </div>
+                <span className="sr-salesperson-value">{sp.formatted}</span>
+              </div>
+            );
+          })}
+        </div>
 
-          return (
-            <g key={idx}>
-              <title>{sp.name}: {sp.formatted}</title>
-
-              {/* Value Label above Bar */}
-              <text
-                x={cx}
-                y={y - 8}
-                textAnchor="middle"
-                fontSize="11"
-                fontWeight="700"
-                fill="#0f172a"
-              >
-                {sp.formatted}
-              </text>
-
-              {/* Bar Rect */}
-              <rect
-                x={x}
-                y={y}
-                width={barW}
-                height={bH}
-                fill={sp.color}
-                rx="4"
-              />
-
-              {/* Salesperson Name under bar */}
-              <text
-                x={cx}
-                y={height - 12}
-                textAnchor="middle"
-                fontSize="11"
-                fontWeight="600"
-                fill="#475569"
-              >
-                {displayName}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+        {hiddenCount > 0 && (
+          <div className="sr-salesperson-note">
+            Showing the top {maxVisible} of {earningItems.length} salespeople by won revenue.
+          </div>
+        )}
+      </div>
     );
   };
 
