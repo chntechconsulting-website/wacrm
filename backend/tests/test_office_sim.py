@@ -294,7 +294,7 @@ class TestOfficeSimSyncSession(OfficeSimApiTestCase):
             "client_call_id": f"HIST_{date_ms}_{call_id}",
             "call_direction": "INBOUND",
             "call_source": "MOBILE_SIM",
-            "native_call_reference": f"native-{call_id}",
+            "native_call_reference": f"native-{date_ms}-{call_id}",
             "sim_subscription_id": subscription_id,
             "sync_origin": "HISTORY_SYNC",
             "native_call_date_ms": date_ms,
@@ -595,6 +595,43 @@ class TestMobileCallDirectionApi(OfficeSimApiTestCase):
         db = self.Session()
         try:
             self.assertEqual(db.query(CallLog).count(), 0)
+        finally:
+            db.close()
+
+    def test_live_and_history_with_different_client_ids_share_one_row(self):
+        native_ref = "MOBILE_device_11_8801"
+        common = {
+            "customer_phone": "+919111122233",
+            "call_status": "COMPLETED",
+            "duration_seconds": 20,
+            "call_direction": "OUTBOUND",
+            "call_source": "MOBILE_SIM",
+            "started_at": "2026-11-10T09:42:00.000Z",
+            "ended_at": "2026-11-10T09:42:20.000Z",
+            "native_call_reference": native_ref,
+        }
+        live = self.client.post(
+            "/api/ivr/manual-call",
+            json={**common, "client_call_id": "SIM_live_8801"},
+        )
+        history = self.client.post(
+            "/api/ivr/manual-call",
+            json={**common, "client_call_id": "MOBILE_device_11_8801"},
+        )
+
+        self.assertEqual(live.status_code, 201, live.text)
+        self.assertEqual(history.status_code, 201, history.text)
+        self.assertEqual(live.json()["id"], history.json()["id"])
+        self.assertEqual(history.json()["native_call_reference"], native_ref)
+        self.assertEqual(history.json()["call_direction"], "OUTBOUND")
+        self.assertEqual(history.json()["duration_seconds"], 20)
+
+        db = self.Session()
+        try:
+            rows = db.query(CallLog).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].native_call_reference, native_ref)
+            self.assertEqual(rows[0].employee_id, 1)
         finally:
             db.close()
 

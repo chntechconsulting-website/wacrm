@@ -2,7 +2,9 @@ import os
 import datetime
 import json
 import logging
+import contextlib
 from typing import Optional, Dict, Any, List
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from config import settings
@@ -21,6 +23,72 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def mobile_call_ingestion_lock(db: Session, employee_id: Optional[int]):
+    """
+    Serialises dedupe+insert for one employee's mobile calls on MySQL.
+
+    The unique ``native_call_reference`` index is the primary idempotency
+    guard. This lock also covers the narrow fallback case where a live result
+    was built before Android exposed its call-log row (so it has no native
+    reference) and a history sync for the same physical call arrives at the
+    same time. Without serialisation both requests can observe "no existing
+    row" and insert. The lock is deliberately scoped to the employee, so
+    unrelated calls are never merged and call volume remains low-contention.
+    """
+    if employee_id is None or db.get_bind().dialect.name != "mysql":
+        yield
+        return
+
+    bind = db.get_bind()
+    engine = getattr(bind, "engine", bind)
+    lock_name = f"wacrm:calllog:{int(employee_id)}"
+    # The session closes its pooled connection on every commit; RELEASE_LOCK
+    # would then run on a closed connection and leak the advisory lock (the
+    # physical connection keeps it while parked in the pool). Hold the lock on
+    # a dedicated connection for the whole resolve+insert operation.
+    try:
+        lock_connection = engine.connect()
+    except Exception:
+        # Fail open: the unique native-reference index still protects the
+        # normal path, and a DB outage will surface on the actual query.
+        yield
+        return
+    acquired = False
+    try:
+        try:
+            acquired = (
+                lock_connection.execute(
+                    text("SELECT GET_LOCK(:name, 10)"), {"name": lock_name}
+                ).scalar()
+                == 1
+            )
+            if not acquired:
+                logger.warning(
+                    "Mobile call ingestion lock busy for employee %s; "
+                    "continuing without it.",
+                    employee_id,
+                )
+        except Exception as ex:
+            logger.warning(
+                "Mobile call ingestion lock unavailable for employee %s: %s",
+                employee_id,
+                ex,
+            )
+            acquired = False
+        yield
+    finally:
+        if acquired:
+            try:
+                lock_connection.execute(
+                    text("SELECT RELEASE_LOCK(:name)"), {"name": lock_name}
+                )
+            except Exception:
+                pass
+        lock_connection.close()
+
 
 class IVRNotConfiguredException(Exception):
     def __init__(self, message: str = "IVR is not configured. Please configure IVR from Settings → Integrations."):
@@ -475,17 +543,22 @@ class IVRService:
 
         def find_tracked_duplicate() -> Optional[CallLog]:
             """
-            Finds the single in-app tracked SIM attempt that the same native
-            call-log row represents. Strict phone + direction + start-time
-            matching means a history row can never absorb an unrelated call.
-            The native row is authoritative for duration/status, so the tracked
-            row is updated in place instead of creating a duplicate.
+            Correlates a device call with an already tracked row when one side
+            has no native reference (an older client, or a live result built
+            before Android wrote its call-log row).
+
+            Matching stays scoped to the same employee, provider family,
+            direction and normalized customer number, and requires the start
+            timestamps to be close. When more than one row is plausible, the
+            closest one is used only when it is clearly separated from the
+            runner-up; otherwise nothing is merged. A duplicate is safer than
+            joining two unrelated calls.
             """
-            if not native_ref or not target_phone or start_arg is None:
+            if not is_mobile_sim or not target_phone or start_arg is None:
                 return None
             if direction not in ("INBOUND", "OUTBOUND"):
-                # Without a proven direction the native row could match an
-                # unrelated attempt; refuse to reconcile instead of guessing.
+                # Without a proven direction the row could match an unrelated
+                # attempt; refuse to reconcile instead of guessing.
                 return None
             if current_employee_id is None:
                 return None
@@ -497,30 +570,90 @@ class IVRService:
                     return None
                 window_start = start_arg - datetime.timedelta(seconds=60)
                 window_end = start_arg + datetime.timedelta(seconds=60)
-                candidates = (
-                    db.query(CallLog)
-                    .filter(
-                        CallLog.employee_id == current_employee_id,
-                        CallLog.provider.in_(["MOBILE_SIM", "DIRECT_DIAL"]),
-                        CallLog.provider_call_id != client_call_id,
-                        CallLog.call_direction == direction,
-                        CallLog.started_at.isnot(None),
-                        CallLog.started_at >= window_start,
-                        CallLog.started_at <= window_end,
-                    )
-                    .all()
+                query = db.query(CallLog).filter(
+                    CallLog.employee_id == current_employee_id,
+                    CallLog.provider.in_(["MOBILE_SIM", "DIRECT_DIAL"]),
+                    CallLog.call_direction == direction,
+                    CallLog.started_at.isnot(None),
+                    CallLog.started_at >= window_start,
+                    CallLog.started_at <= window_end,
                 )
-                matches = []
+                if client_call_id:
+                    query = query.filter(
+                        CallLog.provider_call_id != client_call_id
+                    )
+                candidates = query.all()
+
+                scored = []
                 for candidate in candidates:
+                    stored_ref = str(
+                        candidate.native_call_reference or ""
+                    ).strip()
+                    # Reconcile only across ingestion paths: the history sync
+                    # (native reference) and the live tracker (client id only).
+                    # Two live-tracked rows with different client ids are two
+                    # physical calls, even if their phone/time are close.
+                    if not native_ref and not stored_ref:
+                        continue
+                    # A row already bound to a different Android call-log row
+                    # is a different physical call, even if the number and
+                    # time are similar.
+                    if native_ref and stored_ref and stored_ref != native_ref:
+                        continue
                     candidate_phone = (
                         candidate.to_number
                         if direction == "OUTBOUND"
                         else candidate.from_number
                     )
-                    if normalize_phone(candidate_phone) == clean_target:
-                        matches.append(candidate)
-                if len(matches) == 1:
-                    return matches[0]
+                    if normalize_phone(candidate_phone) != clean_target:
+                        continue
+                    delta = abs(
+                        (candidate.started_at - start_arg).total_seconds()
+                    )
+                    # The live dial time and the Android call-log DATE refer
+                    # to the same call and differ by at most a few seconds.
+                    if delta > 15:
+                        continue
+                    candidate_duration = max(
+                        0, int(candidate.duration_seconds or 0)
+                    )
+                    request_duration = max(0, int(duration_seconds or 0))
+                    # An unanswered call must never absorb an answered one (or
+                    # vice versa). Answered durations can still differ by a
+                    # second or two because one side may have been estimated
+                    # before Android wrote its call-log row, so allow a small
+                    # tolerance rather than leaving a duplicate behind. A
+                    # pending attempt legitimately has duration 0 and is always
+                    # completed by the authoritative native row.
+                    candidate_is_attempt = (
+                        str(candidate.call_status or "").upper()
+                        in ATTEMPT_STATUSES
+                    )
+                    if (
+                        not candidate_is_attempt
+                        and (request_duration == 0) != (candidate_duration == 0)
+                    ):
+                        continue
+                    if (
+                        request_duration
+                        and candidate_duration
+                        and abs(candidate_duration - request_duration) > 5
+                    ):
+                        continue
+                    scored.append((delta, candidate))
+
+                scored.sort(key=lambda item: (item[0], item[1].id))
+                if not scored:
+                    return None
+                if len(scored) == 1:
+                    return scored[0][1]
+                closest_delta, closest = scored[0]
+                second_delta = scored[1][0]
+                # Two calls to the same number are only distinguishable when
+                # their start times are clearly apart. Otherwise leave them
+                # as separate rows rather than risk merging unrelated calls.
+                if closest_delta <= 5 and second_delta - closest_delta >= 10:
+                    return closest
             except Exception:
                 try:
                     db.rollback()
@@ -528,23 +661,61 @@ class IVRService:
                     pass
             return None
 
-        # Idempotency: a device retry must reuse the already-saved call record.
-        # Final results update the pending attempt in place; a late attempt event
-        # must never downgrade a completed call.
-        if client_call_id:
+        # Resolve the one CRM row that represents this physical call:
+        #   1. native Android call-log reference (authoritative stable id)
+        #   2. client call id (device retry / live attempt)
+        #   3. legacy rows that stored the native reference as provider_call_id
+        #   4. scoped phone/direction/time fallback when one side lacks a ref
+        # Final results update the pending attempt in place; a late attempt
+        # event must never downgrade a completed call.
+        existing = None
+        if native_ref:
+            existing = db.query(CallLog).filter(
+                CallLog.native_call_reference == native_ref
+            ).first()
+        if not existing and client_call_id:
             existing = db.query(CallLog).filter(
                 CallLog.provider_call_id == client_call_id
             ).first()
-            if not existing and native_ref:
-                existing = find_tracked_duplicate()
-            if existing:
-                validate_existing(existing)
+        if not existing and native_ref:
+            existing = db.query(CallLog).filter(
+                CallLog.provider_call_id == native_ref
+            ).first()
+        if (
+            not existing
+            and not is_attempt
+            and is_mobile_sim
+            and (client_call_id or native_ref)
+        ):
+            existing = find_tracked_duplicate()
+        if existing:
+            validate_existing(existing)
+            stored_native_ref = str(
+                existing.native_call_reference or ""
+            ).strip()
+            if native_ref and stored_native_ref and stored_native_ref != native_ref:
+                raise ValueError(
+                    "This call id is already used by another call record."
+                )
+            if native_ref and not stored_native_ref:
+                existing.native_call_reference = native_ref
 
-                previous_status = str(existing.call_status or "").upper()
-                existing_is_attempt = previous_status in ATTEMPT_STATUSES
-                if is_attempt and not existing_is_attempt:
-                    return existing
+            # A native-referenced request carries the exact Android call-log
+            # values. A later refless result (e.g. the live tracker finalising
+            # before the call-log row existed) must not overwrite those with
+            # estimated duration/status/timing.
+            incoming_has_native = bool(native_ref)
+            existing_has_native = bool(stored_native_ref)
+            native_is_authoritative = incoming_has_native or not existing_has_native
 
+            previous_status = str(existing.call_status or "").upper()
+            existing_is_attempt = previous_status in ATTEMPT_STATUSES
+            if is_attempt and not existing_is_attempt:
+                if native_ref and not stored_native_ref:
+                    db.commit()
+                    db.refresh(existing)
+                return existing
+            else:
                 stored_direction = str(existing.call_direction or "").strip().upper()
                 effective_direction = (
                     requested_direction or stored_direction or "OUTBOUND"
@@ -564,16 +735,24 @@ class IVRService:
                         existing.to_number = target_phone
                 if lead_id is not None:
                     existing.lead_id = lead_id
-                existing.call_status = status
-                existing.duration_seconds = duration_seconds
-                if requested_direction and effective_direction == requested_direction:
+                existing.call_status = status if native_is_authoritative else existing.call_status
+                existing.duration_seconds = (
+                    duration_seconds
+                    if native_is_authoritative
+                    else existing.duration_seconds
+                )
+                if (
+                    native_is_authoritative
+                    and requested_direction
+                    and effective_direction == requested_direction
+                ):
                     existing.call_direction = requested_direction
 
                 if is_attempt:
                     existing.started_at = start_arg or existing.started_at or now
                     existing.answered_at = None
                     existing.ended_at = None
-                else:
+                elif native_is_authoritative:
                     end_dt = end_arg or now
                     if start_arg:
                         existing.started_at = start_arg
@@ -593,6 +772,8 @@ class IVRService:
                         )
                     else:
                         existing.answered_at = None
+                elif existing.ended_at is None:
+                    existing.ended_at = end_arg or now
 
                 if recording_url is not None:
                     existing.recording_url = str(recording_url).strip() or None
@@ -605,8 +786,26 @@ class IVRService:
                 if notes is not None:
                     existing.notes = notes
 
+                existing_id = existing.id
                 try:
                     db.commit()
+                except IntegrityError:
+                    # Another request bound the same native reference to a
+                    # different row between our lookup and commit.
+                    db.rollback()
+                    winner = None
+                    if native_ref:
+                        winner = db.query(CallLog).filter(
+                            CallLog.native_call_reference == native_ref
+                        ).first()
+                    if not winner and client_call_id:
+                        winner = db.query(CallLog).filter(
+                            CallLog.provider_call_id == client_call_id
+                        ).first()
+                    if winner is not None and winner.id != existing_id:
+                        validate_existing(winner)
+                        return winner
+                    raise
                 except Exception:
                     db.rollback()
                     raise
@@ -698,21 +897,33 @@ class IVRService:
             sim_account_id=(str(sim_account_id).strip() or None) if sim_account_id else None,
             sim_label=(str(sim_label).strip() or None) if sim_label else None,
             sim_slot=sim_slot,
+            native_call_reference=native_ref or None,
             notes=notes or default_note
         )
         db.add(call_log)
         try:
             db.commit()
         except IntegrityError:
-            # Concurrent retry with the same client_call_id: reuse the winner.
+            # A concurrent request already inserted this physical call (same
+            # native reference, or same client call id). Reuse its row instead
+            # of surfacing a duplicate-key failure to the device.
             db.rollback()
-            if client_call_id:
+            existing = None
+            if native_ref:
+                existing = db.query(CallLog).filter(
+                    CallLog.native_call_reference == native_ref
+                ).first()
+            if not existing and client_call_id:
                 existing = db.query(CallLog).filter(
                     CallLog.provider_call_id == client_call_id
                 ).first()
-                if existing:
-                    validate_existing(existing)
-                    return existing
+            if not existing and native_ref:
+                existing = db.query(CallLog).filter(
+                    CallLog.provider_call_id == native_ref
+                ).first()
+            if existing:
+                validate_existing(existing)
+                return existing
             raise
         db.refresh(call_log)
 

@@ -42,7 +42,11 @@ from services.department_service import (
 from utils.timezone import get_ist_now
 from config import settings
 
-from integrations.ivr.service import IVRService, IVRNotConfiguredException
+from integrations.ivr.service import (
+    IVRService,
+    IVRNotConfiguredException,
+    mobile_call_ingestion_lock,
+)
 from integrations.ivr.schemas import (
     InitiateCallRequest,
     CallLogResponse,
@@ -483,10 +487,13 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         provider_call_id=call.provider_call_id,
         call_source=call_source,
         native_call_reference=(
-            call.provider_call_id
-            if is_device_dial
-            and str(call.provider_call_id or "").startswith("MOBILE_")
-            else None
+            (getattr(call, "native_call_reference", None) or "").strip()
+            or (
+                call.provider_call_id
+                if is_device_dial
+                and str(call.provider_call_id or "").startswith("MOBILE_")
+                else None
+            )
         ),
         from_number=call.from_number,
         to_number=call.to_number,
@@ -886,29 +893,30 @@ def log_manual_call_endpoint(
         if client_call_id and len(client_call_id) > 100:
             raise ValueError("client_call_id must be 100 characters or fewer.")
 
-        call_log = IVRService.log_manual_call(
-            db=db,
-            lead_id=body.lead_id,
-            current_employee_id=employee_id,
-            customer_phone=body.customer_phone,
-            employee_phone=employee_phone,
-            call_status=body.call_status,
-            duration_seconds=body.duration_seconds or 0,
-            notes=body.notes,
-            client_call_id=client_call_id,
-            call_direction=body.call_direction,
-            started_at=body.started_at,
-            answered_at=body.answered_at,
-            ended_at=body.ended_at,
-            recording_url=body.recording_url,
-            sim_account_id=body.sim_account_id,
-            sim_subscription_id=body.sim_subscription_id,
-            sim_label=body.sim_label,
-            sim_slot=body.sim_slot,
-            sim_phone_number=body.sim_phone_number,
-            call_source=body.call_source,
-            native_call_reference=body.native_call_reference,
-        )
+        with mobile_call_ingestion_lock(db, employee_id):
+            call_log = IVRService.log_manual_call(
+                db=db,
+                lead_id=body.lead_id,
+                current_employee_id=employee_id,
+                customer_phone=body.customer_phone,
+                employee_phone=employee_phone,
+                call_status=body.call_status,
+                duration_seconds=body.duration_seconds or 0,
+                notes=body.notes,
+                client_call_id=client_call_id,
+                call_direction=body.call_direction,
+                started_at=body.started_at,
+                answered_at=body.answered_at,
+                ended_at=body.ended_at,
+                recording_url=body.recording_url,
+                sim_account_id=body.sim_account_id,
+                sim_subscription_id=body.sim_subscription_id,
+                sim_label=body.sim_label,
+                sim_slot=body.sim_slot,
+                sim_phone_number=body.sim_phone_number,
+                call_source=body.call_source,
+                native_call_reference=body.native_call_reference,
+            )
         return build_call_log_response(call_log, db)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -341,6 +341,7 @@ async def startup_db_client():
                     "ALTER TABLE call_logs ADD COLUMN recording_checksum VARCHAR(64) NULL",
                     "ALTER TABLE call_logs ADD COLUMN recording_verified_at DATETIME NULL",
                     "ALTER TABLE call_logs ADD COLUMN recording_consent_at DATETIME NULL",
+                    "ALTER TABLE call_logs ADD COLUMN native_call_reference VARCHAR(100) NULL",
                     "ALTER TABLE call_logs ADD INDEX ix_call_logs_recording_id (recording_id)"
                 ]:
                     try:
@@ -348,6 +349,40 @@ async def startup_db_client():
                         conn.commit()
                     except Exception:
                         pass
+
+                # Native Android call-log identity. Legacy history rows stored
+                # the reference in provider_call_id; backfill only those provable
+                # rows, then add the unique index that makes concurrent live and
+                # history ingestion idempotent.
+                try:
+                    conn.execute(text(
+                        "UPDATE call_logs SET native_call_reference = provider_call_id "
+                        "WHERE native_call_reference IS NULL "
+                        "AND provider IN ('MOBILE_SIM', 'DIRECT_DIAL') "
+                        "AND provider_call_id LIKE 'MOBILE\\_%'"
+                    ))
+                    conn.commit()
+                except Exception as ex:
+                    print(f"Call logs native-reference backfill skipped: {ex}")
+                try:
+                    has_native_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'call_logs' "
+                        "AND index_name = 'ix_call_logs_native_call_reference'"
+                    )).scalar())
+                    if not has_native_index:
+                        conn.execute(text(
+                            "ALTER TABLE call_logs ADD UNIQUE INDEX "
+                            "ix_call_logs_native_call_reference "
+                            "(native_call_reference)"
+                        ))
+                        conn.commit()
+                        print("Added unique call_logs.native_call_reference index.")
+                except Exception as ex:
+                    # Loud on purpose: without this index concurrent live and
+                    # history requests lose the database-level dedupe guard.
+                    print(f"Call logs native-reference unique index NOT created: {ex}")
             except Exception as ex:
                 print(f"Call logs column sync check: {ex}")
 

@@ -66,6 +66,9 @@ class MobileSimCallManager(
         private const val KEY_ACTIVE_CALL = "active_call"
         private const val KEY_SHARED_RECORDING = "shared_recording"
         private const val FINALIZE_DELAY_MS = 1_200L
+        private const val FINALIZE_RETRY_MS = 800L
+        private const val FINALIZE_MAX_ATTEMPTS = 6
+        private const val CALL_LOG_CLOCK_SKEW_MS = 5_000L
         private const val OFFHOOK_WATCHDOG_MS = 120_000L
         private const val STALE_ACTIVE_CALL_MS = 24 * 60 * 60 * 1000L
         private const val PICK_RECORDING_REQUEST_CODE = 4918
@@ -834,9 +837,22 @@ class MobileSimCallManager(
             result.error("PERMISSION_DENIED", "Call permission has not been granted.", null)
             return
         }
-        if (activeCall != null) {
-            result.error("CALL_IN_PROGRESS", "A device call is already being tracked.", null)
-            return
+        val pendingCall = activeCall
+        if (pendingCall != null) {
+            if (!pendingCall.finalized) {
+                result.error(
+                    "CALL_IN_PROGRESS",
+                    "A device call is already being tracked.",
+                    null,
+                )
+                return
+            }
+            // The previous call already ended and is only waiting for Android
+            // to expose its call-log row. Flush it now so a quick redial is not
+            // blocked; the backend still correlates it when the reference is
+            // available and otherwise falls back to the scoped match.
+            cancelFinalize()
+            finalizeCall(pendingCall)
         }
 
         val callId = call.argument<String>("callId")?.trim().orEmpty()
@@ -1028,7 +1044,7 @@ class MobileSimCallManager(
                 current.finalized = true
                 current.endAt = System.currentTimeMillis()
                 unregisterCallStateListener()
-                finalizeCall(current)
+                scheduleFinalize(current)
             }
         }
         watchdogRunnable = runnable
@@ -1040,19 +1056,33 @@ class MobileSimCallManager(
         watchdogRunnable = null
     }
 
-    private fun scheduleFinalize(current: ActiveCall) {
-        unregisterCallStateListener()
-        cancelWatchdog()
+    private fun scheduleFinalize(current: ActiveCall, attempt: Int = 0) {
+        if (attempt == 0) {
+            unregisterCallStateListener()
+            cancelWatchdog()
+        }
         cancelFinalize()
 
         val runnable = Runnable {
             if (activeCall === current) {
-                finalizeCall(current)
+                // Android writes the call-log row asynchronously after the call
+                // ends. Without it the result has no stable native reference and
+                // a later history sync cannot prove it is the same call. Wait a
+                // few seconds for the row before emitting the result, so the
+                // live and history paths always share one idempotency key.
+                val hasDeviceRow = queryDeviceCallLog(current) != null
+                if (!hasDeviceRow && attempt + 1 < FINALIZE_MAX_ATTEMPTS) {
+                    scheduleFinalize(current, attempt + 1)
+                } else {
+                    finalizeCall(current)
+                }
             }
         }
         finalizeRunnable = runnable
-        // Android writes the device call-log row shortly after the call ends.
-        handler.postDelayed(runnable, FINALIZE_DELAY_MS)
+        handler.postDelayed(
+            runnable,
+            if (attempt == 0) FINALIZE_DELAY_MS else FINALIZE_RETRY_MS,
+        )
     }
 
     private fun cancelFinalize() {
@@ -1085,7 +1115,7 @@ class MobileSimCallManager(
     private fun queryDeviceCallLog(current: ActiveCall): DeviceCallInfo? {
         if (!hasPermission(Manifest.permission.READ_CALL_LOG)) return null
 
-        val since = current.startAt - 5_000L
+        val since = current.startAt - CALL_LOG_CLOCK_SKEW_MS
         val projection = arrayOf(
             CallLog.Calls._ID,
             CallLog.Calls.DATE,
@@ -1119,8 +1149,18 @@ class MobileSimCallManager(
                     val id = if (idIndex >= 0) cursor.getLong(idIndex) else 0L
                     val date = if (dateIndex >= 0) cursor.getLong(dateIndex) else current.startAt
                     // The device row must belong to this attempt, not an older
-                    // call to the same number. Allow a small clock skew window.
-                    if (date > 0 && date < current.startAt - 30_000L) continue
+                    // or newer call to the same number. The Android DATE is the
+                    // call start, so only a small clock-skew window is valid.
+                    val maxDate =
+                        (current.endAt ?: System.currentTimeMillis()) +
+                            CALL_LOG_CLOCK_SKEW_MS
+                    if (
+                        date > 0 &&
+                        (date < current.startAt - CALL_LOG_CLOCK_SKEW_MS ||
+                            date > maxDate)
+                    ) {
+                        continue
+                    }
                     val duration = if (durationIndex >= 0) cursor.getInt(durationIndex) else 0
                     val type = if (typeIndex >= 0) cursor.getInt(typeIndex) else 0
                     val accountId = if (accountIndex >= 0) cursor.getString(accountIndex) else null

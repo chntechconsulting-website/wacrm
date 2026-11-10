@@ -58,6 +58,16 @@ class CallLog(Base):
     sim_account_id = Column(String(100), nullable=True)
     sim_label = Column(String(100), nullable=True)
     sim_slot = Column(Integer, nullable=True)
+
+    # Stable identity of the exact Android CallLog row. The device-history sync
+    # and the live in-app result both carry this value, so whichever request
+    # arrives first wins and the other updates that same CRM row. The unique
+    # index is the database-level guard against concurrent duplicate inserts.
+    # NULL is allowed for PBX/IVR calls, legacy rows and live results that were
+    # produced before Android had written its call-log row.
+    native_call_reference = Column(
+        String(100), nullable=True, unique=True, index=True
+    )
     created_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
 
     lead = relationship("Lead", backref="call_logs")
