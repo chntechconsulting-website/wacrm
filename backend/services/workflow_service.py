@@ -381,11 +381,32 @@ class WorkflowService:
                 source_quote.payment_status = "paid"
                 source_quote.amount_paid = paid_amount
 
+        # Resolve the proforma/PO that this invoice bills so billing summaries
+        # can count the deal once instead of adding invoice and proforma twice.
+        source_proforma = None
+        if handoff.proforma_id:
+            source_proforma = db.query(Quotation).filter(
+                Quotation.id == handoff.proforma_id,
+                Quotation.doc_type == "proforma"
+            ).first()
+        if not source_proforma and handoff.proforma_number:
+            source_proforma = db.query(Quotation).filter(
+                Quotation.doc_number == handoff.proforma_number,
+                Quotation.doc_type == "proforma"
+            ).first()
+        if not source_proforma and source_quote and source_quote.doc_type == "proforma":
+            source_proforma = source_quote
+
         if invoice_doc:
             invoice_doc.doc_number = invoice_number
             invoice_doc.payment_status = "paid"
             invoice_doc.amount_paid = paid_amount
             invoice_doc.status = "issued"
+            if source_proforma:
+                if not invoice_doc.source_quotation_id:
+                    invoice_doc.source_quotation_id = source_proforma.id
+                if not invoice_doc.source_quotation_number:
+                    invoice_doc.source_quotation_number = source_proforma.doc_number
             invoice_doc.prepared_by = (
                 (current_user.employee.name if getattr(current_user, "employee", None) else None)
                 or current_user.username
@@ -404,6 +425,8 @@ class WorkflowService:
                 doc_number=invoice_number,
                 status="issued",
                 payment_status="paid",
+                source_quotation_id=source_proforma.id if source_proforma else None,
+                source_quotation_number=source_proforma.doc_number if source_proforma else None,
                 lead_id=handoff.lead_id,
                 customer_id=handoff.customer_id,
                 customer_name=handoff.customer_name or (lead_obj.name if lead_obj else "Valued Client"),

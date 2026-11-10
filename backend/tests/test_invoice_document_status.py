@@ -91,6 +91,8 @@ class InvoiceDocumentStatusApiTests(unittest.TestCase):
         total=1000.0,
         paid=0.0,
         customer_name="Invoice Status Test",
+        lead_id=None,
+        product_category=None,
     ):
         doc = Quotation(
             doc_type=doc_type,
@@ -101,6 +103,8 @@ class InvoiceDocumentStatusApiTests(unittest.TestCase):
             subtotal=total,
             grand_total=total,
             amount_paid=paid,
+            lead_id=lead_id,
+            product_category=product_category,
             issue_date=datetime.utcnow(),
         )
         self.db.add(doc)
@@ -331,6 +335,109 @@ class InvoiceDocumentStatusApiTests(unittest.TestCase):
         stored = self.db.query(Quotation).filter(Quotation.id == legacy.id).one()
         self.assertEqual(stored.status, "paid")
         self.assertEqual(stored.payment_status, "paid")
+
+    def test_billing_summary_counts_invoice_and_proforma_deal_once(self):
+        # Legacy records without an explicit source link: same lead + category.
+        self._document(
+            "CHN/PI/TEST/5001",
+            doc_type="proforma",
+            payment_status="paid",
+            total=1000.0,
+            paid=1000.0,
+            customer_name="Shared Deal Client",
+            lead_id=9101,
+            product_category="wahrms",
+        )
+        self._document(
+            "CHN/INV/TEST/5002",
+            payment_status="paid",
+            total=1000.0,
+            paid=1000.0,
+            customer_name="Shared Deal Client",
+            lead_id=9101,
+            product_category="wahrms",
+        )
+
+        # A separate deal with no invoice must still be billed.
+        self._document(
+            "CHN/PI/TEST/5003",
+            doc_type="proforma",
+            total=500.0,
+            paid=0.0,
+            customer_name="Independent Client",
+            lead_id=9102,
+            product_category="wahrms",
+        )
+
+        # A different product category for the same lead is a separate sale.
+        self._document(
+            "CHN/INV/TEST/5004",
+            payment_status="paid",
+            total=400.0,
+            paid=400.0,
+            customer_name="Shared Deal Client",
+            lead_id=9101,
+            product_category="biometric",
+        )
+
+        response = self.client.get("/api/v1/integrations/waquote/summary")
+        self.assertEqual(response.status_code, 200, response.text)
+        financials = response.json()["metrics"]["financials"]
+
+        # Counted once: 1000 (invoice) + 500 (independent proforma) + 400 (biometric).
+        self.assertEqual(financials["totalBilled"], 1900.0)
+        self.assertEqual(financials["totalPaid"], 1400.0)
+        self.assertEqual(financials["totalOutstanding"], 500.0)
+        self.assertEqual(financials["collectionRatePercent"], 73.7)
+
+    def test_billing_summary_uses_finance_handoff_proforma_link(self):
+        proforma = self._document(
+            "CHN/PI/TEST/6001",
+            doc_type="proforma",
+            total=2500.0,
+            paid=0.0,
+            customer_name="Handoff Client",
+            lead_id=9201,
+            product_category="wahrms",
+        )
+        self._document(
+            "CHN/INV/TEST/6002",
+            payment_status="paid",
+            total=2500.0,
+            paid=2500.0,
+            customer_name="Handoff Client",
+            lead_id=None,
+            product_category=None,
+        )
+
+        from models.workflow import FinanceHandoff
+
+        handoff = FinanceHandoff(
+            lead_id=9201,
+            customer_id=9201,
+            quotation_id=proforma.id,
+            quotation_number=proforma.doc_number,
+            proforma_id=proforma.id,
+            proforma_number=proforma.doc_number,
+            customer_name="Handoff Client",
+            final_amount=2500.0,
+            paid_amount=2500.0,
+            status="PAID",
+            payment_status="PAID",
+            invoice_number="CHN/INV/TEST/6002",
+        )
+        self.db.add(handoff)
+        self.db.commit()
+
+        response = self.client.get("/api/v1/integrations/waquote/summary")
+        self.assertEqual(response.status_code, 200, response.text)
+        financials = response.json()["metrics"]["financials"]
+
+        # Handoff links the invoice to its proforma even though the invoice has
+        # no lead_id or source_quotation_* field populated.
+        self.assertEqual(financials["totalBilled"], 2500.0)
+        self.assertEqual(financials["totalPaid"], 2500.0)
+        self.assertEqual(financials["totalOutstanding"], 0.0)
 
 
 if __name__ == "__main__":

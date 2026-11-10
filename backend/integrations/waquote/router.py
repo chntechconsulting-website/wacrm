@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -14,6 +15,7 @@ from models.customer import Customer
 from models.activity import LeadActivity
 from models.quotation import Quotation, WAHRMSBundle
 from models.audit_log import AuditLog
+from models.workflow import FinanceHandoff
 from services.auth import get_current_user, require_roles
 from services.permission_service import (
     is_finance_or_admin, 
@@ -311,15 +313,100 @@ def get_waquote_summary(
     all_active_proformas = [d for d in local_docs if d.doc_type == "proforma" and d.status != "cancelled"]
     all_active_quotes = [d for d in local_docs if d.doc_type == "quotation" and d.status != "cancelled"]
 
-    # Prevent double-counting: an active proforma is superseded if an active invoice references it
+    # Prevent double-counting when a deal has both a proforma/PO and a final
+    # Tax Invoice. The invoice is authoritative for billed and paid amounts, so
+    # its source proforma must not be added again.
+    proforma_by_id = {pf.id: pf for pf in all_active_proformas}
+    proforma_by_number = {
+        pf.doc_number: pf for pf in all_active_proformas if pf.doc_number
+    }
     superseded_proforma_ids = set()
+
+    def _mark_proforma_superseded(source_id=None, source_number=None):
+        if source_id and source_id in proforma_by_id:
+            superseded_proforma_ids.add(source_id)
+        if source_number and source_number in proforma_by_number:
+            superseded_proforma_ids.add(proforma_by_number[source_number].id)
+
+    # 1. Explicit source link stored on the invoice.
     for inv in all_active_invoices:
-        if inv.source_quotation_id:
-            superseded_proforma_ids.add(inv.source_quotation_id)
-        if inv.source_quotation_number:
-            for pf in all_active_proformas:
-                if pf.doc_number == inv.source_quotation_number:
-                    superseded_proforma_ids.add(pf.id)
+        _mark_proforma_superseded(
+            inv.source_quotation_id, inv.source_quotation_number
+        )
+
+    # 2. Finance handoffs record which proforma/PO was paid and which invoice
+    #    was issued for it. Older invoices may not have source_quotation_* set.
+    active_invoice_numbers = {
+        inv.doc_number for inv in all_active_invoices if inv.doc_number
+    }
+    if active_invoice_numbers:
+        for handoff in db.query(FinanceHandoff).all():
+            handoff_invoice = (handoff.invoice_number or "").strip()
+            if handoff_invoice not in active_invoice_numbers:
+                continue
+            _mark_proforma_superseded(handoff.proforma_id, handoff.proforma_number)
+            _mark_proforma_superseded(handoff.quotation_id, handoff.quotation_number)
+
+    # 3. Legacy fallback for records without any stored link: one deal (lead)
+    #    per product category is billed once. A proforma is superseded when an
+    #    invoice exists for the same lead and category.
+    invoice_categories_by_lead = {}
+    for inv in all_active_invoices:
+        if not inv.lead_id:
+            continue
+        categories = invoice_categories_by_lead.setdefault(inv.lead_id, set())
+        categories.add((inv.product_category or "").strip().lower())
+
+    for pf in all_active_proformas:
+        categories = invoice_categories_by_lead.get(pf.lead_id)
+        if categories is None:
+            continue
+        category = (pf.product_category or "").strip().lower()
+        if not category or "" in categories or category in categories:
+            superseded_proforma_ids.add(pf.id)
+
+    # 4. Last-resort legacy match for invoices created manually without a
+    #    lead/customer link: same party, phone, amount and product category.
+    def _party_names(doc):
+        names = set()
+        for value in (doc.company_name, doc.customer_name):
+            normalized = " ".join(str(value or "").lower().split())
+            if normalized:
+                names.add(normalized)
+        return names
+
+    def _party_phone(doc):
+        digits = re.sub(r"\D", "", str(doc.phone or ""))
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    invoice_categories_by_identity = {}
+    for inv in all_active_invoices:
+        amount = round(float(inv.grand_total or 0.0), 2)
+        if amount <= 0:
+            continue
+        phone = _party_phone(inv)
+        category = (inv.product_category or "").strip().lower()
+        for name in _party_names(inv):
+            dependent = invoice_categories_by_identity.setdefault(
+                (name, phone, amount), set()
+            )
+            dependent.add(category)
+
+    for pf in all_active_proformas:
+        if pf.id in superseded_proforma_ids:
+            continue
+        amount = round(float(pf.grand_total or 0.0), 2)
+        if amount <= 0:
+            continue
+        phone = _party_phone(pf)
+        category = (pf.product_category or "").strip().lower()
+        for name in _party_names(pf):
+            categories = invoice_categories_by_identity.get((name, phone, amount))
+            if categories is None:
+                continue
+            if not category or "" in categories or category in categories:
+                superseded_proforma_ids.add(pf.id)
+                break
 
     # Billing pool consists of authoritative issued Tax Invoices and independent/pending Proformas
     billing_pool = list(all_active_invoices) + [pf for pf in all_active_proformas if pf.id not in superseded_proforma_ids]
