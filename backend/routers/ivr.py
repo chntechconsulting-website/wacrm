@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import (
     APIRouter,
@@ -1450,6 +1450,22 @@ def sync_call_recordings_endpoint(
     result = DooctiRecordingService.sync_all_missing_recordings(db=db, days_back=days)
     return result
 
+def _parse_call_log_date_filter(value: Optional[str], field_name: str) -> Optional[datetime]:
+    """Parse a YYYY-MM-DD Call Logs date filter into a naive IST datetime."""
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    try:
+        return datetime.strptime(cleaned, "%Y-%m-%d")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}. Expected YYYY-MM-DD.",
+        ) from exc
+
+
 @router.get("/calls", response_model=CallLogListResponse)
 def list_call_logs(
     response: Response,
@@ -1461,6 +1477,8 @@ def list_call_logs(
     provider: Optional[str] = None,
     department: Optional[str] = None,
     search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     page: int = 1,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -1475,6 +1493,10 @@ def list_call_logs(
       Support Manager Employee.created_at. Unassigned calls are excluded.
     - Admin: Sees company-wide calls (no support-team restriction).
     Never trusts unverified employee_id sent from frontend.
+
+    ``start_date`` and ``end_date`` are inclusive YYYY-MM-DD call dates (IST).
+    They are applied before pagination and KPI aggregation so totals, page
+    counts and metrics always describe the same filtered result set.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1556,6 +1578,23 @@ def list_call_logs(
             # An unresolvable support team/creation time must never expose
             # unrelated historical calls.
             query = query.filter(false())
+
+    # Inclusive call-date range (YYYY-MM-DD, IST). The timestamp shown in the
+    # Call Logs table is started_at, falling back to created_at, so the filter
+    # uses the same expression to keep the visible rows and KPIs consistent.
+    start_dt = _parse_call_log_date_filter(start_date, "start_date")
+    end_dt = _parse_call_log_date_filter(end_date, "end_date")
+    if start_dt is not None and end_dt is not None and start_dt > end_dt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date cannot be after end_date.",
+        )
+    if start_dt is not None or end_dt is not None:
+        call_timestamp = func.coalesce(CallLog.started_at, CallLog.created_at)
+        if start_dt is not None:
+            query = query.filter(call_timestamp >= start_dt)
+        if end_dt is not None:
+            query = query.filter(call_timestamp < end_dt + timedelta(days=1))
 
     # Direction filter (INBOUND / OUTBOUND)
     target_dir = direction or call_direction

@@ -288,6 +288,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
@@ -356,14 +357,58 @@
 .call-filters-group {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   flex-shrink: 0;
 }
 
 .select-wrapper {
   position: relative;
   display: inline-flex;
+}
+
+.call-date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+}
+
+.call-date-separator {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.call-date-input {
+  width: auto !important;
+  min-width: 138px;
+  max-width: 165px;
+  height: 42px !important;
+  padding: 8px 10px !important;
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 10px !important;
+  font-size: 0.82rem !important;
+  font-weight: 500 !important;
+  color: #334155 !important;
+  outline: none !important;
+  cursor: pointer;
+  box-sizing: border-box !important;
+  transition: all 0.15s ease;
+}
+
+.call-date-input:hover {
+  border-color: #94a3b8 !important;
+  background-color: #f8fafc !important;
+}
+
+.call-date-input:focus {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+  background-color: #ffffff !important;
 }
 
 .call-select {
@@ -439,6 +484,14 @@
     flex: 1 1 180px;
   }
   .call-select {
+    width: 100% !important;
+    max-width: 100%;
+  }
+  .call-date-range {
+    flex: 1 1 300px;
+  }
+  .call-date-input {
+    flex: 1 1 130px;
     width: 100% !important;
     max-width: 100%;
   }

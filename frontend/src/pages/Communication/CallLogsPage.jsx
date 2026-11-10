@@ -427,6 +427,8 @@ const CallLogsPage = () => {
   const [employeeFilter, setEmployeeFilter] = useState(initialEmployeeFromUrl);
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
+  const [startDateFilter, setStartDateFilter] = useState('');
+  const [endDateFilter, setEndDateFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [totalRecords, setTotalRecords] = useState(0);
@@ -476,6 +478,8 @@ const CallLogsPage = () => {
     employeeFilter,
     departmentFilter,
     providerFilter,
+    startDateFilter,
+    endDateFilter,
     search,
     currentPage,
     pageSize
@@ -503,6 +507,8 @@ const CallLogsPage = () => {
       if (cur.employeeFilter) params.employee_id = cur.employeeFilter;
       if (cur.departmentFilter) params.department = cur.departmentFilter;
       if (cur.providerFilter) params.provider = cur.providerFilter;
+      if (cur.startDateFilter) params.start_date = cur.startDateFilter;
+      if (cur.endDateFilter) params.end_date = cur.endDateFilter;
       if (cur.search && cur.search.trim()) params.search = cur.search.trim();
       
       const res = await API.get('/ivr/calls', { params });
@@ -540,6 +546,8 @@ const CallLogsPage = () => {
     setEmployeeFilter('');
     setDepartmentFilter('');
     setProviderFilter('');
+    setStartDateFilter('');
+    setEndDateFilter('');
     setCurrentPage(1);
     try {
       const res = await API.get('/ivr/calls', {
@@ -747,7 +755,7 @@ const CallLogsPage = () => {
       if (fastPollTimerRef.current) clearInterval(fastPollTimerRef.current);
       clearInterval(timer);
     };
-  }, [statusFilter, directionFilter, employeeFilter, departmentFilter, providerFilter, search, currentPage, pageSize]);
+  }, [statusFilter, directionFilter, employeeFilter, departmentFilter, providerFilter, startDateFilter, endDateFilter, search, currentPage, pageSize]);
 
   const handleInitiateNewCall = () => {
     if (window.expandDoocti) {
@@ -1026,6 +1034,37 @@ const CallLogsPage = () => {
             </div>
           )}
 
+          {/* Call Date Range */}
+          <div className="call-date-range" title="Filter calls by call date (IST)">
+            <input
+              type="date"
+              aria-label="Call date from"
+              className="call-date-input"
+              value={startDateFilter}
+              max={endDateFilter || undefined}
+              onChange={(e) => {
+                const value = e.target.value;
+                setStartDateFilter(value);
+                if (value && endDateFilter && value > endDateFilter) setEndDateFilter(value);
+                setCurrentPage(1);
+              }}
+            />
+            <span className="call-date-separator">to</span>
+            <input
+              type="date"
+              aria-label="Call date to"
+              className="call-date-input"
+              value={endDateFilter}
+              min={startDateFilter || undefined}
+              onChange={(e) => {
+                const value = e.target.value;
+                setEndDateFilter(value);
+                if (value && startDateFilter && value < startDateFilter) setStartDateFilter(value);
+                setCurrentPage(1);
+              }}
+            />
+          </div>
+
           {/* Direction Filter */}
           <div className="select-wrapper">
             <select 
@@ -1090,7 +1129,7 @@ const CallLogsPage = () => {
           </div>
 
           {/* Clear Filters */}
-          {(search || statusFilter || directionFilter || employeeFilter || departmentFilter || providerFilter) && (
+          {(search || statusFilter || directionFilter || employeeFilter || departmentFilter || providerFilter || startDateFilter || endDateFilter) && (
             <button
               type="button"
               onClick={() => {
@@ -1100,6 +1139,9 @@ const CallLogsPage = () => {
                 setEmployeeFilter('');
                 setDepartmentFilter('');
                 setProviderFilter('');
+                setStartDateFilter('');
+                setEndDateFilter('');
+                setCurrentPage(1);
               }}
               className="btn-clear-filters"
               title="Reset all active filters"
@@ -1148,14 +1190,17 @@ const CallLogsPage = () => {
                       pose="inspect"
                       height={120}
                       title="No Call Logs Found"
-                      description={(search || statusFilter || employeeFilter || departmentFilter || providerFilter) ? "No call records match your current telephony filters." : "No outbound or inbound calls have been logged yet."}
-                      secondaryActionLabel={(search || statusFilter || employeeFilter || departmentFilter || providerFilter) ? "Clear Filters" : null}
+                      description={(search || statusFilter || employeeFilter || departmentFilter || providerFilter || startDateFilter || endDateFilter) ? "No call records match your current telephony filters." : "No outbound or inbound calls have been logged yet."}
+                      secondaryActionLabel={(search || statusFilter || employeeFilter || departmentFilter || providerFilter || startDateFilter || endDateFilter) ? "Clear Filters" : null}
                       onSecondaryAction={() => {
                         setSearch('');
                         setStatusFilter('');
                         setEmployeeFilter('');
                         setDepartmentFilter('');
                         setProviderFilter('');
+                        setStartDateFilter('');
+                        setEndDateFilter('');
+                        setCurrentPage(1);
                       }}
                     />
                   </td>
