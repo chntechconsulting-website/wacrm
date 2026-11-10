@@ -31,7 +31,10 @@ from models.workflow import SupportHandoff
 from services.hierarchy_service import (
     DEPT_SALES,
     DEPT_SUPPORT,
+    ROLE_SALES_MANAGER,
+    ROLE_SUPPORT_MANAGER,
     get_department_for_role,
+    get_team_employee_ids_from_user,
     normalize_department,
     normalize_role,
 )
@@ -113,6 +116,67 @@ def get_department_employee_ids(db: Session, department: str) -> List[int]:
 
 def get_all_employee_ids(db: Session) -> List[int]:
     return [emp_id for (emp_id,) in db.query(Employee.id).all()]
+
+
+def get_department_performance_employee_ids(
+    db: Session, user, department: str
+) -> List[int]:
+    """
+    Employee IDs inside one department that the authenticated user may see.
+
+    Department membership always comes from the Employee record (explicit
+    department first, then the existing role-derived fallback). Team access is
+    resolved through the existing permission matrix and reporting hierarchy, so
+    a manager can never widen their view beyond their own department/team even
+    when an employee holds a generic or secondary role label.
+
+    Admin and explicit company-scope grants see the whole department. Everyone
+    else is restricted to their team or their own employee record.
+    """
+    normalized = normalize_department(department)
+    if normalized not in ADMIN_DEPARTMENTS or not user:
+        return []
+
+    department_ids = set(get_department_employee_ids(db, normalized))
+    if not department_ids:
+        return []
+
+    employee = db.query(Employee).filter(Employee.user_id == user.id).first()
+    roles = {
+        (user.role or "").strip().upper(),
+        (employee.role or "").strip().upper() if employee else "",
+    }
+    roles.discard("")
+    if roles & {"ADMIN", "SUPERADMIN"}:
+        return sorted(department_ids)
+
+    from services.permission_service import get_user_view_scope
+
+    scope = get_user_view_scope(user, "dashboard", db)
+    if scope == "none":
+        scope = get_user_view_scope(user, "leads", db)
+
+    if scope == "company":
+        return sorted(department_ids)
+    if not employee:
+        return []
+
+    if scope == "department":
+        if employee_department(employee) != normalized:
+            return []
+        return sorted(department_ids)
+
+    if scope == "team" or normalize_role(user.role) in {
+        ROLE_SALES_MANAGER,
+        ROLE_SUPPORT_MANAGER,
+    } or (user.role or "").strip().upper() == "MANAGER":
+        team_ids = set(get_team_employee_ids_from_user(user, db))
+        team_ids.add(employee.id)
+        return sorted(department_ids & team_ids)
+
+    if employee.id in department_ids:
+        return [employee.id]
+    return []
 
 
 def _team_member_ids(db: Session, manager_id: int) -> List[int]:

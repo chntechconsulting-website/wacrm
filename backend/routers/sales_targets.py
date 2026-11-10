@@ -28,7 +28,12 @@ from services.hierarchy_service import (
     ROLE_SALES_EXECUTIVE,
     ROLE_SUPPORT_MANAGER,
     ROLE_SUPPORT_EXECUTIVE,
+    DEPT_SALES,
     DEPT_SUPPORT,
+)
+from services.department_service import (
+    employee_department,
+    get_department_performance_employee_ids,
 )
 
 router = APIRouter(prefix="/sales-targets", tags=["Sales Targets & Revenue"])
@@ -79,6 +84,43 @@ def ensure_sales_target_access(current_user: User, db: Session):
             detail="Access forbidden: Sales targets and achievement are available only to the Sales team."
         )
 
+
+def _is_admin_user(current_user: User, db: Session) -> bool:
+    employee = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    roles = {
+        (current_user.role or "").strip().upper(),
+        (employee.role or "").strip().upper() if employee else "",
+    }
+    roles.discard("")
+    return bool(roles & ADMIN_ROLE_NAMES)
+
+
+def _authorized_sales_employee_ids(current_user: User, db: Session) -> List[int]:
+    """Sales roster the authenticated user may see for targets/achievements."""
+    return get_department_performance_employee_ids(db, current_user, DEPT_SALES)
+
+
+def _parse_department_filter(department: Optional[str]) -> Optional[str]:
+    """
+    Return SALES/SUPPORT for an explicit filter, or None for explicit ALL.
+
+    A missing filter is NOT all departments: Sales targets default to Sales so
+    Support performance can only appear when "All Departments" is selected.
+    """
+    cleaned = (department or "").strip()
+    if not cleaned:
+        return DEPT_SALES
+    if cleaned.lower() in {"all", "all departments", "all_departments", "company"}:
+        return None
+    normalized = normalize_department(cleaned)
+    if normalized not in {DEPT_SALES, DEPT_SUPPORT}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Department must be one of: ALL, SALES, SUPPORT.",
+        )
+    return normalized
+
+
 @router.post("", response_model=SalesTargetOut, status_code=status.HTTP_201_CREATED)
 def create_or_update_target(
     payload: SalesTargetCreate,
@@ -94,6 +136,11 @@ def create_or_update_target(
     emp = db.query(Employee).filter(Employee.id == payload.employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
+    if employee_department(emp) != DEPT_SALES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sales targets can only be assigned to Sales department employees.",
+        )
 
     p_type = payload.period_type.lower()
     if p_type not in ["monthly", "quarterly", "yearly"]:
@@ -148,7 +195,10 @@ def get_targets(
     Fetch assigned sales targets with optional period and employee filtering.
     """
     ensure_sales_target_access(current_user, db)
-    query = db.query(SalesTarget)
+    allowed_ids = _authorized_sales_employee_ids(current_user, db)
+    query = db.query(SalesTarget).filter(
+        SalesTarget.employee_id.in_(allowed_ids)
+    )
     if period_year:
         query = query.filter(SalesTarget.period_year == period_year)
     if period_month is not None:
@@ -156,6 +206,11 @@ def get_targets(
     if period_type:
         query = query.filter(SalesTarget.period_type == period_type.lower())
     if employee_id:
+        if employee_id not in set(allowed_ids):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Employee is outside your authorized Sales scope.",
+            )
         query = query.filter(SalesTarget.employee_id == employee_id)
 
     results = query.order_by(desc(SalesTarget.period_year), desc(SalesTarget.period_month)).all()
@@ -187,6 +242,13 @@ def update_target(
     target = db.query(SalesTarget).filter(SalesTarget.id == target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
+
+    target_employee = db.query(Employee).filter(Employee.id == target.employee_id).first()
+    if target_employee and employee_department(target_employee) != DEPT_SALES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sales targets can only be assigned to Sales department employees.",
+        )
 
     target.target_amount = float(payload.target_amount)
     target.updated_at = datetime.utcnow()
@@ -234,7 +296,8 @@ def get_employee_achievements(
     - Actual Revenue: Confirmed Won Sales Revenue attributed to that salesperson (Deduplicated)
     - Remaining Target: MAX(Assigned Target - Actual Revenue, 0)
     - Achievement %: (Actual Revenue / Assigned Target) * 100
-    - Role Scoping: Non-admin users see only their own row. Admin sees all.
+    - Role Scoping: Managers see their authorized team, executives themselves.
+    - Admin: Sales is the default; ALL is an explicit combined view.
     """
     ensure_sales_target_access(current_user, db)
     now = datetime.now()
@@ -242,34 +305,50 @@ def get_employee_achievements(
     month = period_month if period_month is not None else now.month
     p_type = period_type.lower()
 
-    # Determine user role and employee link
-    user_role = (current_user.role or "").upper()
-    is_admin = user_role in ["ADMIN", "SUPERADMIN"]
+    is_admin = _is_admin_user(current_user, db)
+    selected_department = _parse_department_filter(department)
 
-    current_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
-    if not current_emp:
-        current_emp = db.query(Employee).filter(
-            or_(
-                Employee.email == current_user.email,
-                Employee.username == current_user.username
-            )
-        ).first()
-
-    # Active employees query
-    emp_query = db.query(Employee).filter(Employee.status == "ACTIVE")
-    if department and department.strip() and department.lower() != "all":
-        emp_query = emp_query.filter(Employee.department.ilike(f"%{department.strip()}%"))
-
-    # RBAC: If non-admin, restrict strictly to their own employee ID
     if not is_admin:
-        if current_emp:
-            emp_query = emp_query.filter(Employee.id == current_emp.id)
-        else:
-            return []
-    elif employee_id:
-        emp_query = emp_query.filter(Employee.id == employee_id)
+        # Sales managers/executives can never request the Support slice here.
+        if selected_department == DEPT_SUPPORT:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Support performance is not available on the Sales dashboard.",
+            )
+        allowed_ids = _authorized_sales_employee_ids(current_user, db)
+    elif selected_department is None:
+        # Explicit "All Departments" view only.
+        allowed_ids = get_department_performance_employee_ids(
+            db, current_user, DEPT_SALES
+        ) + get_department_performance_employee_ids(
+            db, current_user, DEPT_SUPPORT
+        )
+    else:
+        allowed_ids = get_department_performance_employee_ids(
+            db, current_user, selected_department
+        )
 
-    active_emps = emp_query.all()
+    if employee_id:
+        if employee_id not in set(allowed_ids):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Employee is outside your authorized department scope.",
+            )
+        allowed_ids = [employee_id]
+
+    # Active employees query, constrained to the authorized department roster.
+    active_emps = (
+        db.query(Employee)
+        .filter(
+            Employee.status == "ACTIVE",
+            Employee.id.in_(allowed_ids),
+        )
+        .all()
+        if allowed_ids
+        else []
+    )
+    if not active_emps:
+        return []
     emp_ids = [e.id for e in active_emps]
 
     # Query targets
@@ -311,7 +390,7 @@ def get_employee_achievements(
         rows.append(EmployeeAchievementRow(
             employee_id=emp.id,
             employee_name=emp.name,
-            department=emp.department,
+            department=employee_department(emp),
             photo_url=emp.photo_url,
             assigned_target=tgt,
             actual_revenue=rev,
@@ -422,9 +501,15 @@ def get_companies_revenue(
     """
     ensure_sales_target_access(current_user, db)
     from services.revenue_service import RevenueService
-    won_transactions = RevenueService.get_won_sales_transactions(db=db)
+    allowed_ids = _authorized_sales_employee_ids(current_user, db)
+    won_transactions = RevenueService.get_won_sales_transactions(
+        db=db, employee_ids_filter=allowed_ids
+    )
 
-    active_emps = {e.id: e.name for e in db.query(Employee).all()}
+    active_emps = {
+        e.id: e.name
+        for e in db.query(Employee).filter(Employee.id.in_(allowed_ids)).all()
+    }
     customers_map = {c.id: c for c in db.query(Customer).all()}
 
     summary_map: Dict[str, Dict[str, Any]] = {}

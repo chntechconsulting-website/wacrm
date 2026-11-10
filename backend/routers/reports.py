@@ -36,7 +36,15 @@ from services.permission_service import (
     get_user_view_scope, 
     get_authorized_call_employee_ids
 )
-from services.followup_visibility_service import apply_followup_visibility_filter
+from services.followup_visibility_service import (
+    apply_admin_followup_department_filter,
+    apply_followup_visibility_filter,
+)
+from services.department_service import (
+    employee_department,
+    get_department_employee_ids,
+    get_department_performance_employee_ids,
+)
 from utils.support_status import (
     SUPPORT_STATUS_META,
     SUPPORT_STATUS_NEW,
@@ -280,13 +288,61 @@ def build_support_dashboard_payload(
             "bucket": meta["bucket"],
         })
 
+    # Support rankings may only contain Support employees. Legacy handoffs can
+    # still carry a Sales/Finance agent name, so resolve the assignment against
+    # the Support department roster instead of trusting free-text names.
+    support_employee_id_list = get_department_employee_ids(db, DEPT_SUPPORT)
+    support_employees = (
+        db.query(Employee)
+        .filter(Employee.id.in_(support_employee_id_list))
+        .all()
+        if support_employee_id_list
+        else []
+    )
+    support_employee_ids = {employee.id for employee in support_employees}
+    support_employee_name_by_id = {
+        employee.id: (employee.name or "").strip()
+        for employee in support_employees
+        if (employee.name or "").strip()
+    }
+    support_employee_name_by_lower = {
+        name.lower(): name for name in support_employee_name_by_id.values()
+    }
+
+    def safe_support_employee_name(
+        employee_id: Optional[int], raw_name: Optional[str], fallback: str
+    ) -> str:
+        """Return a Support roster name only; never expose a non-Support label."""
+        if employee_id is not None:
+            return support_employee_name_by_id.get(employee_id, fallback)
+        clean_name = (raw_name or "").strip()
+        if clean_name:
+            canonical = support_employee_name_by_lower.get(clean_name.lower())
+            if canonical:
+                return canonical
+        return fallback
+
     agent_rows = (
-        ticket_query.with_entities(SupportHandoff.assigned_agent_name, func.count(SupportHandoff.id))
-        .group_by(SupportHandoff.assigned_agent_name)
+        ticket_query.with_entities(
+            SupportHandoff.assigned_agent_id,
+            SupportHandoff.assigned_agent_name,
+            func.count(SupportHandoff.id),
+        )
+        .group_by(SupportHandoff.assigned_agent_id, SupportHandoff.assigned_agent_name)
         .all()
     )
+    agent_workload_counts: Dict[str, int] = {}
+    for agent_id, agent_name, count in agent_rows:
+        clean_name = (agent_name or "").strip()
+        if agent_id is not None and agent_id not in support_employee_ids:
+            continue
+        if agent_id is None and clean_name and clean_name.lower() not in support_employee_name_by_lower:
+            continue
+        label = safe_support_employee_name(agent_id, clean_name, "Unassigned")
+        agent_workload_counts[label] = agent_workload_counts.get(label, 0) + int(count or 0)
+
     agent_workload = []
-    for agent_name, count in agent_rows:
+    for agent_name, count in agent_workload_counts.items():
         agent_workload.append({
             "name": agent_name or "Unassigned",
             "count": int(count or 0),
@@ -318,8 +374,26 @@ def build_support_dashboard_payload(
             "onboarding_status": raw_status,
             "status_label": meta["label"],
             "status_color": meta["color"],
-            "assigned_agent_name": record.assigned_agent_name,
-            "support_manager_name": record.support_manager_name,
+            # Never display a non-Support employee label on the Support
+            # dashboard, even when a legacy handoff row still names one.
+            "assigned_agent_name": (
+                safe_support_employee_name(
+                    record.assigned_agent_id,
+                    record.assigned_agent_name,
+                    "Unassigned",
+                )
+                if record.assigned_agent_id is not None or record.assigned_agent_name
+                else None
+            ),
+            "support_manager_name": (
+                safe_support_employee_name(
+                    record.support_manager_id,
+                    record.support_manager_name,
+                    "Support Manager",
+                )
+                if record.support_manager_id is not None or record.support_manager_name
+                else None
+            ),
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "completed_at": record.completed_at.isoformat() if record.completed_at else None,
             "purchase_details": build_support_purchase_details(db, record),
@@ -334,6 +408,12 @@ def build_support_dashboard_payload(
         .filter(Followup.status == "Pending")
     )
     followup_query = apply_followup_visibility_filter(followup_query, user, db)
+    # Support dashboard follow-ups are Support-owned only. Without this an
+    # Admin sees every department here, which mixes Sales follow-ups into the
+    # Support queue.
+    followup_query = apply_admin_followup_department_filter(
+        followup_query, db, DEPT_SUPPORT
+    )
 
     customer_followups = followup_query.count()
     upcoming_followups = []
@@ -403,22 +483,37 @@ def dashboard_stats(
     if scope == "none":
         scope = get_user_view_scope(current_user, "leads", db)
 
+    # The Sales dashboard is Sales-only even for Admins. Admin department
+    # switching happens by rendering the separate support/finance payloads.
+    sales_employee_ids = get_department_performance_employee_ids(
+        db, current_user, DEPT_SALES
+    )
+    sales_employee_id_set = set(sales_employee_ids)
+
     if scope == "own" and current_emp:
         lead_query = lead_query.filter(Lead.assigned_to == current_emp.id)
-    elif scope == "team":
-        from services.hierarchy_service import get_team_employee_ids_from_user
-        team_ids = get_team_employee_ids_from_user(current_user, db)
-        lead_query = lead_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
+    elif sales_employee_ids:
+        lead_query = lead_query.filter(
+            or_(
+                Lead.assigned_to.in_(sales_employee_ids),
+                Lead.assigned_to.is_(None),
+            )
+        )
+    else:
+        lead_query = lead_query.filter(Lead.assigned_to.is_(None))
 
-    # Apply strict permission scope for calls
+    # Apply strict permission scope for calls, then intersect with the Sales
+    # roster so Support/Finance call logs can never appear here.
     authorized_call_emps = get_authorized_call_employee_ids(current_user, db)
+    call_scope_ids = set(sales_employee_id_set)
     if authorized_call_emps is not None:
-        if len(authorized_call_emps) == 0:
-            call_query = call_query.filter(CallLog.id == -1)
-        elif len(authorized_call_emps) == 1:
-            call_query = call_query.filter(CallLog.employee_id == authorized_call_emps[0])
-        else:
-            call_query = call_query.filter(CallLog.employee_id.in_(authorized_call_emps))
+        call_scope_ids &= set(authorized_call_emps)
+    if call_scope_ids:
+        call_query = call_query.filter(
+            CallLog.employee_id.in_(sorted(call_scope_ids))
+        )
+    else:
+        call_query = call_query.filter(CallLog.id == -1)
 
     total_leads = lead_query.count()
     new_leads = lead_query.filter(or_(
@@ -441,9 +536,17 @@ def dashboard_stats(
     total_calls = call_query.count()
 
     # Real Top Performing Team (calculated live from DB and scoped)
-    active_employees = db.query(Employee).filter(Employee.status == "ACTIVE").all()
-    if authorized_call_emps is not None:
-        active_employees = [e for e in active_employees if e.id in authorized_call_emps]
+    if call_scope_ids:
+        active_employees = (
+            db.query(Employee)
+            .filter(
+                Employee.status == "ACTIVE",
+                Employee.id.in_(sorted(call_scope_ids)),
+            )
+            .all()
+        )
+    else:
+        active_employees = []
     team_performance = []
     for emp in active_employees:
         emp_leads = db.query(Lead).filter(Lead.assigned_to == emp.id).count()
@@ -480,8 +583,8 @@ def dashboard_stats(
     # Sort by revenue desc, converted desc, assigned leads desc
     team_performance.sort(key=lambda x: (x["revenue"], x["converted"], x["leads"]), reverse=True)
 
-    # Real Recent Meta Leads
-    raw_meta_leads = db.query(Lead).filter(
+    # Real Recent Meta Leads (same authorized Sales lead scope as the KPIs)
+    raw_meta_leads = lead_query.filter(
         or_(Lead.source.ilike("%META%"), Lead.source == "Meta Ads")
     ).order_by(desc(Lead.id)).limit(5).all()
 
@@ -497,7 +600,7 @@ def dashboard_stats(
 
     # Real Today Activities (Role & Scope Enforced)
     act_query = db.query(LeadActivity).outerjoin(Lead, LeadActivity.lead_id == Lead.id)
-    if current_user.role == "EMPLOYEE" and current_emp:
+    if scope == "own" and current_emp:
         act_query = act_query.filter(
             or_(
                 LeadActivity.performed_by == current_emp.id,
@@ -505,17 +608,17 @@ def dashboard_stats(
                 Lead.assigned_to == current_emp.id
             )
         )
-    elif current_user.role in ["MANAGER", "SALES_MANAGER"] or scope == "team":
-        from services.hierarchy_service import get_team_employee_ids_from_user
-        sub_ids = get_team_employee_ids_from_user(current_user, db)
+    elif sales_employee_ids:
         act_query = act_query.filter(
             or_(
-                LeadActivity.performed_by.in_(sub_ids),
-                LeadActivity.employee_id.in_(sub_ids),
-                Lead.assigned_to.in_(sub_ids),
-                Lead.assigned_to == None
+                LeadActivity.performed_by.in_(sales_employee_ids),
+                LeadActivity.employee_id.in_(sales_employee_ids),
+                Lead.assigned_to.in_(sales_employee_ids),
+                Lead.assigned_to.is_(None)
             )
         )
+    else:
+        act_query = act_query.filter(LeadActivity.id == -1)
     raw_activities = act_query.order_by(desc(LeadActivity.created_at)).limit(5).all()
     today_activities = []
     for act in raw_activities:
@@ -527,17 +630,26 @@ def dashboard_stats(
             "icon": "call" if "CALL" in (act.activity_type or "") else "followup"
         })
 
-    # Employee-wise counts (restricted to self for EMPLOYEE role)
-    if current_user.role == "EMPLOYEE" and current_emp:
-        emp_counts = [(current_emp.name, current_emp.department or "SALES", total_leads)]
+    # Employee-wise counts (Sales roster only, self for own-scope users)
+    if scope == "own" and current_emp:
+        employee_lead_counts = [{
+            "employee_name": current_emp.name,
+            "department": employee_department(current_emp) or DEPT_SALES,
+            "count": total_leads,
+        }]
     else:
         emp_counts = (
-            db.query(Employee.name, Employee.department, func.count(Lead.id))
-            .join(Lead, Lead.assigned_to == Employee.id, isouter=True)
-            .group_by(Employee.id, Employee.name, Employee.department)
+            db.query(Employee, func.count(Lead.id))
+            .outerjoin(Lead, Lead.assigned_to == Employee.id)
+            .filter(Employee.id.in_(sales_employee_ids))
+            .group_by(Employee.id)
             .all()
         )
-    employee_lead_counts = [{"employee_name": name, "department": dept or "SALES", "count": count} for name, dept, count in emp_counts]
+        employee_lead_counts = [{
+            "employee_name": emp.name,
+            "department": employee_department(emp) or DEPT_SALES,
+            "count": count,
+        } for emp, count in emp_counts]
 
     # Source-wise counts
     source_counts = (
@@ -571,7 +683,10 @@ def dashboard_stats(
     # Upcoming Follow-ups (top 5) strictly scoped by department and team
     f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id).filter(Followup.status == "Pending")
     f_query = apply_followup_visibility_filter(f_query, current_user, db)
-    
+    # Sales dashboard must not borrow Support follow-ups when an Admin or a
+    # company-scope permission would otherwise expose every department.
+    f_query = apply_admin_followup_department_filter(f_query, db, DEPT_SALES)
+
     upcoming_f = f_query.order_by(Followup.followup_date.asc()).limit(5).all()
     upcoming_followups = []
     for f in upcoming_f:
@@ -654,15 +769,59 @@ def sales_overview_report(
     if scope == "none":
         scope = get_user_view_scope(current_user, "leads", db)
 
+    sales_employee_ids = get_department_performance_employee_ids(
+        db, current_user, DEPT_SALES
+    )
+    sales_employee_names = (
+        [
+            name
+            for (name,) in db.query(Employee.name)
+            .filter(Employee.id.in_(sales_employee_ids))
+            .all()
+            if name
+        ]
+        if sales_employee_ids
+        else []
+    )
+
     if scope == "own" and current_emp:
         lead_query = lead_query.filter(Lead.assigned_to == current_emp.id)
-    elif scope == "team":
-        from services.hierarchy_service import get_team_employee_ids_from_user
-        team_ids = get_team_employee_ids_from_user(current_user, db)
-        lead_query = lead_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
+    elif sales_employee_ids:
+        lead_query = lead_query.filter(
+            or_(
+                Lead.assigned_to.in_(sales_employee_ids),
+                Lead.assigned_to.is_(None),
+            )
+        )
+    else:
+        lead_query = lead_query.filter(Lead.assigned_to.is_(None))
+
+    def _scoped_quote_query():
+        quote_q = db.query(Quotation)
+        lead_ids = lead_query.with_entities(Lead.id)
+        if sales_employee_ids:
+            conditions = [
+                Quotation.assigned_to.in_(sales_employee_ids),
+                Quotation.created_by.in_(sales_employee_ids),
+                Quotation.lead_id.in_(lead_ids),
+            ]
+            if sales_employee_names:
+                conditions.append(
+                    or_(*(
+                        Quotation.prepared_by.ilike(f"%{name}%")
+                        for name in sales_employee_names
+                    ))
+                )
+            return quote_q.filter(or_(*conditions))
+        return quote_q.filter(Quotation.lead_id.in_(lead_ids))
 
     # Optional Filters
     if salesperson_id and salesperson_id > 0:
+        if salesperson_id not in set(sales_employee_ids):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Salesperson is outside your authorized Sales scope.",
+            )
         lead_query = lead_query.filter(Lead.assigned_to == salesperson_id)
 
     if source and source.strip() and source.lower() not in ["all", "all lead sources"]:
@@ -737,10 +896,10 @@ def sales_overview_report(
         d_point = now - timedelta(days=i * 5)
         trend_labels.append(d_point.strftime("%b %d"))
         d_end = d_point + timedelta(days=5)
-        c_nl = db.query(Lead).filter(Lead.created_at <= d_end).count()
-        c_int = db.query(Lead).filter(Lead.created_at <= d_end, Lead.status.in_(["INTERESTED", "QUALIFIED", "CONVERTED", "WON"])).count()
-        c_qual = db.query(Lead).filter(Lead.created_at <= d_end, Lead.status.in_(["QUALIFIED", "CONVERTED", "WON"])).count()
-        c_won = db.query(Lead).filter(Lead.created_at <= d_end, Lead.status.in_(["CONVERTED", "WON"])).count()
+        c_nl = lead_query.filter(Lead.created_at <= d_end).count()
+        c_int = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["INTERESTED", "QUALIFIED", "CONVERTED", "WON"])).count()
+        c_qual = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["QUALIFIED", "CONVERTED", "WON"])).count()
+        c_won = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["CONVERTED", "WON"])).count()
         nl_series.append(c_nl)
         int_series.append(c_int)
         qual_series.append(c_qual)
@@ -758,8 +917,9 @@ def sales_overview_report(
 
     # 3. Real Sales Funnel
     pct = lambda num, denom: round((num / denom * 100), 1) if denom > 0 else 0.0
-    quotes_count = db.query(Quotation).count()
-    proforma_count = db.query(Quotation).filter(Quotation.doc_type == "proforma").count()
+    scoped_quote_query = _scoped_quote_query()
+    quotes_count = scoped_quote_query.count()
+    proforma_count = scoped_quote_query.filter(Quotation.doc_type == "proforma").count()
     funnel = [
         {"stage": "New Leads", "count": total_leads_val, "percentage": 100.0, "color": "#2563eb"},
         {"stage": "Contacted", "count": contacted_val, "percentage": pct(contacted_val, total_leads_val), "color": "#06b6d4"},
@@ -771,7 +931,11 @@ def sales_overview_report(
     ]
 
     # 4. Real Leads by Source
-    source_counts_db = db.query(Lead.source, func.count(Lead.id)).group_by(Lead.source).all()
+    source_counts_db = (
+        lead_query.with_entities(Lead.source, func.count(Lead.id))
+        .group_by(Lead.source)
+        .all()
+    )
     source_colors_palette = ["#3b82f6", "#06b6d4", "#10b981", "#f59e0b", "#8b5cf6", "#f43f5e", "#94a3b8"]
     leads_by_source = []
     for idx, (src_name, cnt) in enumerate(source_counts_db):
@@ -785,7 +949,11 @@ def sales_overview_report(
         leads_by_source.append({"name": "Direct", "count": total_leads_val, "percentage": 100.0, "color": "#3b82f6"})
 
     # 5. Real Leads by Status
-    status_counts_db = db.query(Lead.status, func.count(Lead.id)).group_by(Lead.status).all()
+    status_counts_db = (
+        lead_query.with_entities(Lead.status, func.count(Lead.id))
+        .group_by(Lead.status)
+        .all()
+    )
     status_colors_palette = {
         "NEW": "#3b82f6",
         "NEW LEAD": "#3b82f6",
@@ -811,7 +979,12 @@ def sales_overview_report(
         })
 
     # 6. Real Leads by Location
-    city_counts_db = db.query(Lead.city, func.count(Lead.id)).filter(Lead.city.isnot(None), Lead.city != "").group_by(Lead.city).all()
+    city_counts_db = (
+        lead_query.filter(Lead.city.isnot(None), Lead.city != "")
+        .with_entities(Lead.city, func.count(Lead.id))
+        .group_by(Lead.city)
+        .all()
+    )
     leads_by_location = []
     for idx, (c_name, cnt) in enumerate(city_counts_db):
         leads_by_location.append({
@@ -828,7 +1001,16 @@ def sales_overview_report(
         ]
 
     # 7. Real Top Salespersons (Leaderboard with authentic revenue)
-    active_emps = db.query(Employee).filter(Employee.status == "ACTIVE").all()
+    active_emps = (
+        db.query(Employee)
+        .filter(
+            Employee.status == "ACTIVE",
+            Employee.id.in_(sales_employee_ids),
+        )
+        .all()
+        if sales_employee_ids
+        else []
+    )
     emp_rev_calc = {}
     for emp in active_emps:
         emp_leads = db.query(Lead).filter(Lead.assigned_to == emp.id).count()
@@ -880,7 +1062,9 @@ def sales_overview_report(
         })
 
     # 8. Real Recent Deals (from Quotation & Won Leads)
-    real_quotes = db.query(Quotation).order_by(desc(Quotation.created_at)).limit(5).all()
+    real_quotes = (
+        scoped_quote_query.order_by(desc(Quotation.created_at)).limit(5).all()
+    )
     recent_deals = []
     for q in real_quotes:
         c_name = q.customer_name or q.company_name or "Customer"
@@ -897,7 +1081,11 @@ def sales_overview_report(
 
     # If fewer than 5 quotes, append won leads
     if len(recent_deals) < 5:
-        won_leads_list = db.query(Lead).filter(Lead.status.in_(["WON", "CONVERTED"])).limit(5 - len(recent_deals)).all()
+        won_leads_list = (
+            lead_query.filter(Lead.status.in_(["WON", "CONVERTED"]))
+            .limit(5 - len(recent_deals))
+            .all()
+        )
         for wl in won_leads_list:
             recent_deals.append({
                 "customer": wl.company or wl.name or "Client",
@@ -910,6 +1098,9 @@ def sales_overview_report(
     # 9. Real Upcoming Follow-ups (strictly scoped)
     real_f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id, isouter=True).filter(Followup.status == "Pending")
     real_f_query = apply_followup_visibility_filter(real_f_query, current_user, db)
+    real_f_query = apply_admin_followup_department_filter(
+        real_f_query, db, DEPT_SALES
+    )
     real_f = real_f_query.order_by(Followup.followup_date.asc()).limit(5).all()
     upcoming_followups = []
     for f in real_f:
@@ -966,39 +1157,83 @@ def sales_revenue_report(
     """
     current_emp = get_employee_for_user(current_user, db)
     ensure_sales_report_access(current_user, current_emp, db)
-    active_emps = db.query(Employee).filter(Employee.status == "ACTIVE").all()
 
     # Permission scoping
     scope = get_user_view_scope(current_user, "reports", db)
     if scope == "none":
         scope = get_user_view_scope(current_user, "leads", db)
 
+    sales_employee_ids = get_department_performance_employee_ids(
+        db, current_user, DEPT_SALES
+    )
+    active_emps = (
+        db.query(Employee)
+        .filter(
+            Employee.status == "ACTIVE",
+            Employee.id.in_(sales_employee_ids),
+        )
+        .all()
+        if sales_employee_ids
+        else []
+    )
+
     # Base queries - Confirmed billing/invoice revenue
     quote_query = db.query(Quotation)
     lead_query = db.query(Lead)
 
     if scope == "own" and current_emp:
-        quote_query = quote_query.filter(or_(
-            Quotation.assigned_to == current_emp.id,
-            Quotation.created_by == current_emp.id,
-            Quotation.prepared_by.ilike(f"%{current_emp.name}%"),
-            Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == current_emp.id))
-        ))
-        lead_query = lead_query.filter(Lead.assigned_to == current_emp.id)
-    elif scope == "team":
-        from services.hierarchy_service import get_team_employee_ids_from_user
-        team_ids = get_team_employee_ids_from_user(current_user, db)
-        team_names = [e.name for e in active_emps if e.id in team_ids]
-        quote_query = quote_query.filter(or_(
-            Quotation.assigned_to.in_(team_ids),
-            Quotation.created_by.in_(team_ids),
-            Quotation.prepared_by.in_(team_names),
-            Quotation.lead_id.in_(db.query(Lead.id).filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None)))
-        ))
-        lead_query = lead_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
+        scoped_emp_ids = [current_emp.id]
+    else:
+        # Team, department and Admin/company views all stay inside the Sales
+        # roster resolved from the authenticated user's permissions.
+        scoped_emp_ids = list(sales_employee_ids)
+
+    scoped_employee_names = (
+        [
+            name
+            for (name,) in db.query(Employee.name)
+            .filter(Employee.id.in_(scoped_emp_ids))
+            .all()
+            if name
+        ]
+        if scoped_emp_ids
+        else []
+    )
+
+    if scope == "own" and current_emp:
+        lead_scope_clause = Lead.assigned_to == current_emp.id
+    else:
+        lead_scope_clause = or_(
+            Lead.assigned_to.in_(scoped_emp_ids),
+            Lead.assigned_to.is_(None),
+        )
+
+    if scoped_emp_ids:
+        scoped_lead_ids = db.query(Lead.id).filter(lead_scope_clause)
+        quote_conditions = [
+            Quotation.assigned_to.in_(scoped_emp_ids),
+            Quotation.created_by.in_(scoped_emp_ids),
+            Quotation.lead_id.in_(scoped_lead_ids),
+        ]
+        if scoped_employee_names:
+            quote_conditions.append(
+                or_(*(
+                    Quotation.prepared_by.ilike(f"%{name}%")
+                    for name in scoped_employee_names
+                ))
+            )
+        quote_query = quote_query.filter(or_(*quote_conditions))
+        lead_query = lead_query.filter(lead_scope_clause)
+    else:
+        lead_query = lead_query.filter(Lead.assigned_to.is_(None))
 
     # Salesperson Filter
     if salesperson_id and salesperson_id > 0:
+        if salesperson_id not in set(scoped_emp_ids):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Salesperson is outside your authorized Sales scope.",
+            )
         target_emp = db.query(Employee).filter(Employee.id == salesperson_id).first()
         if target_emp:
             quote_query = quote_query.filter(or_(
@@ -1027,13 +1262,10 @@ def sales_revenue_report(
         except Exception:
             pass
 
-    # Active salesperson / scope IDs filter for unified revenue computation
-    allowed_emp_ids = None
-    if scope == "own" and current_emp:
-        allowed_emp_ids = [current_emp.id]
-    elif scope == "team":
-        from services.hierarchy_service import get_team_employee_ids_from_user
-        allowed_emp_ids = get_team_employee_ids_from_user(current_user, db)
+    # Active salesperson / scope IDs filter for unified revenue computation.
+    # Always a concrete Sales roster, never None (which would include every
+    # department for an Admin).
+    allowed_emp_ids = list(scoped_emp_ids)
 
     # Use Unified RevenueService for won transactions deduplication
     from services.revenue_service import RevenueService
@@ -1062,6 +1294,7 @@ def sales_revenue_report(
     # Fetch active target from sales_targets table for current period, fallback to employee sum
     from models.sales_target import SalesTarget
     curr_target_records = db.query(SalesTarget).filter(
+        SalesTarget.employee_id.in_(allowed_emp_ids),
         SalesTarget.period_type == "monthly",
         SalesTarget.period_month == now.month,
         SalesTarget.period_year == now.year
@@ -1130,6 +1363,7 @@ def sales_revenue_report(
         trend_rev.append(round(m_sum / 100000.0, 2))
         
         t_hist = db.query(SalesTarget).filter(
+            SalesTarget.employee_id.in_(allowed_emp_ids),
             SalesTarget.period_type == "monthly",
             SalesTarget.period_month == m_date.month,
             SalesTarget.period_year == m_date.year
@@ -1153,13 +1387,12 @@ def sales_revenue_report(
     emp_map = {e.id: {"emp": e, "revenue": 0.0, "won_count": 0} for e in active_emps}
     for t in won_transactions:
         eid = t.get("salesperson_id")
+        # RevenueService is already filtered to the authorized Sales roster.
+        # Never fall back to the first employee: that would attribute another
+        # department's deal to a Salesperson and corrupt the ranking.
         if eid and eid in emp_map:
             emp_map[eid]["revenue"] += t["amount"]
             emp_map[eid]["won_count"] += 1
-        elif active_emps:
-            first_id = active_emps[0].id
-            emp_map[first_id]["revenue"] += t["amount"]
-            emp_map[first_id]["won_count"] += 1
 
     sorted_emps = sorted(emp_map.values(), key=lambda x: x["revenue"], reverse=True)
     for idx, item in enumerate(sorted_emps):

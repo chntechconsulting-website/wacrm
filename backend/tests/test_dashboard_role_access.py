@@ -201,7 +201,9 @@ class TestDashboardRoleAccess(unittest.TestCase):
         payload = dashboard_stats(db=self.db, current_user=self.admin_user)
 
         self.assertEqual(payload["dashboard_type"], "both")
-        self.assertEqual(payload["available_dashboards"], ["sales", "support"])
+        self.assertEqual(
+            payload["available_dashboards"], ["sales", "support", "finance"]
+        )
         self.assertIn("total_leads", payload)
         self.assertIn("support", payload)
         self.assertEqual(

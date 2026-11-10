@@ -37,7 +37,9 @@ const SalesTargetsPage = () => {
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1); // 1-12
   const [selectedPeriodType, setSelectedPeriodType] = useState('monthly');
-  const [selectedDepartment, setSelectedDepartment] = useState('All');
+  // Sales is the default view. Combined Sales + Support data is returned only
+  // when an Admin explicitly selects "All Departments".
+  const [selectedDepartment, setSelectedDepartment] = useState('SALES');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(0);
 
   const [achievements, setAchievements] = useState([]);
@@ -83,8 +85,8 @@ const SalesTargetsPage = () => {
       if (selectedPeriodType !== 'yearly') {
         achParams.period_month = selectedMonth;
       }
-      if (selectedDepartment && selectedDepartment !== 'All') {
-        achParams.department = selectedDepartment;
+      if (isAdmin) {
+        achParams.department = selectedDepartment === 'All' ? 'ALL' : selectedDepartment;
       }
       if (selectedEmployeeId && selectedEmployeeId !== 0) {
         achParams.employee_id = selectedEmployeeId;
@@ -293,20 +295,21 @@ const SalesTargetsPage = () => {
             </select>
           </div>
 
-          {/* Department */}
-          <div className="st-filter-group">
-            <label>Department</label>
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="st-select"
-            >
-              <option value="All">All Departments</option>
-              <option value="SALES">Sales</option>
-              <option value="SUPPORT">Support</option>
-              <option value="ADMINISTRATION">Administration</option>
-            </select>
-          </div>
+          {/* Department (Admin only: Sales/Support are isolated views) */}
+          {isAdmin && (
+            <div className="st-filter-group">
+              <label>Department</label>
+              <select
+                value={selectedDepartment}
+                onChange={(e) => setSelectedDepartment(e.target.value)}
+                className="st-select"
+              >
+                <option value="SALES">Sales</option>
+                <option value="SUPPORT">Support</option>
+                <option value="All">All Departments</option>
+              </select>
+            </div>
+          )}
 
           {/* Employee */}
           <div className="st-filter-group">
