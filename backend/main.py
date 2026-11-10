@@ -48,7 +48,8 @@ from routers import (
     office_sim,
     team_insights,
     admin,
-    finance
+    finance,
+    support,
 )
 
 # Ensure upload directory exists
@@ -182,6 +183,7 @@ app.include_router(roles.router, prefix=settings.API_V1_STR)
 app.include_router(sales_targets.router, prefix=settings.API_V1_STR)
 app.include_router(office_sim.router, prefix=settings.API_V1_STR)
 app.include_router(doocti.router, prefix=settings.API_V1_STR)
+app.include_router(support.router, prefix=settings.API_V1_STR)
 app.include_router(doocti.router, prefix="/api") # Allow /api/doocti/... paths
 app.include_router(doocti.router, prefix="/api/v1") # Allow /api/v1/doocti/... paths
 app.include_router(doocti.router)  # Also allow direct /doocti/... paths

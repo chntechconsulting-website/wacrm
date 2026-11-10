@@ -23,6 +23,7 @@ import {
 import { formatDateDDMMYYYY, formatTime12Hour } from '../../utils/dateUtils';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
+import BackupCustomersPanel from '../../components/Support/BackupCustomersPanel';
 
 const SupportDashboard = ({ data }) => {
   const navigate = useNavigate();
@@ -201,6 +202,11 @@ const SupportDashboard = ({ data }) => {
             </div>
           );
         })}
+      </div>
+
+      {/* TEMPORARY LEAVE COVERAGE (READ-ONLY OWNERSHIP + AUTHORIZED SUPPORT HISTORY) */}
+      <div style={{ marginTop: '20px' }}>
+        <BackupCustomersPanel compact />
       </div>
 
       {/* SUPPORT VISUALS */}

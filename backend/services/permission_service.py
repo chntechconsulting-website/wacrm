@@ -1129,8 +1129,31 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
 
     from models.workflow import SupportHandoff
     from models.lead import LeadAssignment
+    from models.support import SupportCoverageAssignment
+    from utils.timezone import get_ist_now
 
-    handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
+    handoff = (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id == lead.id)
+        .order_by(SupportHandoff.id.desc())
+        .first()
+    )
+
+    # A leave backup receives temporary access through an explicit, active
+    # coverage row. The permanent handoff owner is never rewritten.
+    active_coverage = (
+        db.query(SupportCoverageAssignment)
+        .filter(
+            SupportCoverageAssignment.lead_id == lead.id,
+            SupportCoverageAssignment.status == "ACTIVE",
+            SupportCoverageAssignment.start_date <= get_ist_now().date(),
+            SupportCoverageAssignment.end_date >= get_ist_now().date(),
+            SupportCoverageAssignment.backup_employee_id == emp.id,
+        )
+        .first()
+    )
+    if active_coverage:
+        return True
 
     if canonical_role == ROLE_SUPPORT_MANAGER:
         team_emp_ids = get_team_employee_ids_from_user(user, db)
@@ -1144,6 +1167,20 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
                 return True
 
         if lead.assigned_to and lead.assigned_to in team_emp_ids:
+            return True
+
+        team_coverage = (
+            db.query(SupportCoverageAssignment.id)
+            .filter(
+                SupportCoverageAssignment.lead_id == lead.id,
+                SupportCoverageAssignment.status == "ACTIVE",
+                SupportCoverageAssignment.start_date <= get_ist_now().date(),
+                SupportCoverageAssignment.end_date >= get_ist_now().date(),
+                SupportCoverageAssignment.backup_employee_id.in_(team_emp_ids),
+            )
+            .first()
+        )
+        if team_coverage:
             return True
 
         return False
@@ -1195,9 +1232,12 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
 
     from models.workflow import SupportHandoff
     from models.lead import Lead
+    from models.support import SupportCoverageAssignment
+    from utils.timezone import get_ist_now
     from sqlalchemy import or_
 
     lead_ids = set()
+    today = get_ist_now().date()
 
     if canonical_role == ROLE_SUPPORT_MANAGER:
         team_emp_ids = get_team_employee_ids_from_user(user, db)
@@ -1220,6 +1260,21 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
         for d in direct_leads:
             lead_ids.add(d[0])
 
+        # 3. Temporary coverage handled by any team member
+        coverage_leads = (
+            db.query(SupportCoverageAssignment.lead_id)
+            .filter(
+                SupportCoverageAssignment.status == "ACTIVE",
+                SupportCoverageAssignment.start_date <= today,
+                SupportCoverageAssignment.end_date >= today,
+                SupportCoverageAssignment.backup_employee_id.in_(team_emp_ids),
+            )
+            .all()
+        )
+        for row in coverage_leads:
+            if row[0]:
+                lead_ids.add(row[0])
+
     elif canonical_role == ROLE_SUPPORT_EXECUTIVE:
         # 1. Handoffs where assigned_agent_id == emp.id
         h_leads = db.query(SupportHandoff.lead_id).filter(SupportHandoff.assigned_agent_id == emp.id).all()
@@ -1231,6 +1286,21 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
         direct_leads = db.query(Lead.id).filter(Lead.assigned_to == emp.id).all()
         for d in direct_leads:
             lead_ids.add(d[0])
+
+        # 3. Customers temporarily covered during the permanent owner's leave
+        coverage_leads = (
+            db.query(SupportCoverageAssignment.lead_id)
+            .filter(
+                SupportCoverageAssignment.status == "ACTIVE",
+                SupportCoverageAssignment.start_date <= today,
+                SupportCoverageAssignment.end_date >= today,
+                SupportCoverageAssignment.backup_employee_id == emp.id,
+            )
+            .all()
+        )
+        for row in coverage_leads:
+            if row[0]:
+                lead_ids.add(row[0])
 
     return list(lead_ids)
 

@@ -801,6 +801,24 @@ const Sidebar = ({
                 isCollapsed={isCollapsed}
                 onClick={handleItemClick}
               />
+              <SidebarItem
+                to="/support/backup-customers"
+                exactMatch={true}
+                icon={Users}
+                label="Backup Customers"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              {(isAdmin || isSupportManager) && (
+                <SidebarItem
+                  to="/support/manager"
+                  exactMatch={true}
+                  icon={ShieldCheck}
+                  label="Manager Controls"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
             </SidebarSection>
           )}
 

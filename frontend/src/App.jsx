@@ -69,6 +69,8 @@ import WAQuotesPage from './pages/WAQuotes/WAQuotesPage';
 import FinanceQueuePage from './pages/Workflow/FinanceQueuePage';
 import SupportQueuePage from './pages/Workflow/SupportQueuePage';
 import SupportAssignedLeadsPage from './pages/Support/SupportAssignedLeadsPage';
+import SupportManagerPage from './pages/Support/SupportManagerPage';
+import BackupCustomersPage from './pages/Support/BackupCustomersPage';
 
 // FINANCE DEPARTMENT Pages
 import InvoicesPage from './pages/Finance/InvoicesPage';
@@ -155,6 +157,10 @@ function App() {
               <Route path="/support" element={<ErrorBoundary><SupportQueuePage /></ErrorBoundary>} />
               <Route path="/support/assigned-leads" element={<ErrorBoundary><SupportAssignedLeadsPage /></ErrorBoundary>} />
               <Route path="/support/leads" element={<ErrorBoundary><SupportAssignedLeadsPage /></ErrorBoundary>} />
+              <Route path="/support/backup-customers" element={<ErrorBoundary><BackupCustomersPage /></ErrorBoundary>} />
+              <Route element={<ProtectedRoute allowedRoles={['ADMIN', 'SUPPORT_MANAGER']} />}>
+                <Route path="/support/manager" element={<ErrorBoundary><SupportManagerPage /></ErrorBoundary>} />
+              </Route>
 
               {/* REPORTS & ANALYTICS Section Routes */}
               <Route path="/reports" element={<ReportsPage />} />

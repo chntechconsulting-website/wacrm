@@ -3,6 +3,7 @@ import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY, formatLeadReceivedFull } from '../../utils/dateUtils';
 import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
+import SupportInteractionTimeline from '../../components/Support/SupportInteractionTimeline';
 import './SupportAssignedLeadsPage.css';
 
 import {
@@ -30,7 +31,8 @@ import {
   Tag,
   Briefcase,
   ShieldCheck,
-  MessageSquare
+  MessageSquare,
+  History
 } from 'lucide-react';
 
 // Support status is independent from the Sales lead status. The backend
@@ -802,6 +804,14 @@ export default function SupportAssignedLeadsPage() {
                 >
                   Customer Purchase Details
                 </button>
+                <button
+                  type="button"
+                  className={`modal-tab-btn ${activeDrawerTab === 'history' ? 'active' : ''}`}
+                  onClick={() => setActiveDrawerTab('history')}
+                >
+                  <History size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                  Support History
+                </button>
               </div>
 
               {/* Tab 1: Overview & Contact */}
@@ -978,6 +988,19 @@ export default function SupportAssignedLeadsPage() {
                 <CustomerPurchaseDetails
                   purchaseDetails={selectedLead.purchase_details}
                   leadId={selectedLead.id}
+                />
+              )}
+
+              {/* Tab 5: Append-only Support interaction history */}
+              {activeDrawerTab === 'history' && (
+                <SupportInteractionTimeline
+                  leadId={selectedLead.id}
+                  customerId={selectedLead.customer_id}
+                  canAdd
+                  onChanged={() => {
+                    fetchLeadActivities(selectedLead.id);
+                    fetchAssignedLeads(true);
+                  }}
                 />
               )}
             </div>

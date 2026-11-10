@@ -6,6 +6,7 @@ import CRMDialer from './Dialer/CRMDialer';
 import DooctiInAppDialer from './Dialer/DooctiInAppDialer';
 import CallCompletionDispositionModal from './Dialer/CallCompletionDispositionModal';
 import FollowupReminderCard from './FollowupReminder/FollowupReminderCard';
+import IncomingCallSupportPanel from './Support/IncomingCallSupportPanel';
 import { Menu, Building2, PhoneIncoming, X, ArrowRight } from 'lucide-react';
 import API from '../services/api';
 
@@ -316,6 +317,10 @@ const Layout = () => {
               </div>
             )}
           </div>
+
+          {/* CRM-side Support customer context only. DooCTI keeps ownership of
+              answer/connect/hangup controls; this panel never fabricates call events. */}
+          <IncomingCallSupportPanel incomingAlert={incomingAlert} />
 
           {/* Call Controls: the DooCTI phone panel owns Answer / Hang up / Decline.
               The CRM only surfaces it, because the provider iframe accepts no call commands. */}

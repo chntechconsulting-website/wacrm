@@ -1,0 +1,115 @@
+.incoming-support-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #bfdbfe;
+  background: #f8fbff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.74rem;
+  color: #334155;
+}
+
+.incoming-support-panel.muted {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  color: #64748b;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.incoming-support-head strong {
+  display: block;
+  font-size: 0.86rem;
+  color: #0f172a;
+}
+
+.incoming-support-head span {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.incoming-support-owner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-top: 1px dashed #dbeafe;
+  border-bottom: 1px dashed #dbeafe;
+  padding: 5px 0;
+}
+
+.incoming-support-owner span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #475569;
+}
+
+.incoming-support-owner span.backup {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.incoming-support-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+}
+
+.incoming-support-row p {
+  margin: 2px 0 0;
+  color: #1e293b;
+  overflow-wrap: anywhere;
+}
+
+.incoming-support-row.danger p {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.incoming-support-row.pending p {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.incoming-support-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.incoming-support-footer > span {
+  font-size: 0.68rem;
+  color: #94a3b8;
+}
+
+.incoming-support-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.incoming-support-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 0.64rem;
+  color: #94a3b8;
+  line-height: 1.35;
+}
