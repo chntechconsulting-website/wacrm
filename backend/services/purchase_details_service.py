@@ -31,6 +31,7 @@ from services.billing_catalog import (
     extract_plan_code,
     get_default_bundle,
 )
+from utils.document_status import invoice_document_status
 
 PACKAGE_LABELS: Dict[str, str] = {
     "hr_atm": "HR + ATM",
@@ -647,7 +648,7 @@ def _documents(
                     if invoice_doc
                     else finance.payment_date if finance else None
                 ),
-                status=invoice_doc.status if invoice_doc else None,
+                status=invoice_document_status(invoice_doc),
                 payment_status=(
                     invoice_doc.payment_status
                     if invoice_doc

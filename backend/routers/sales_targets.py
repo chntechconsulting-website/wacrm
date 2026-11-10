@@ -457,7 +457,7 @@ def get_companies_revenue(
             invoice_id=t.get("invoice_id") or t.get("lead_id") or 0,
             invoice_number=t.get("deal_name") or f"WON-{t.get('lead_id')}",
             invoice_date=t["date"].strftime("%b %d, %Y") if t.get("date") and t["date"] != datetime.min else "-",
-            status=t.get("status") or "Won",
+            status=t.get("document_status") or t.get("status") or "Won",
             payment_status="PAID" if collected_amt >= billed_amt and billed_amt > 0 else "PARTIAL",
             subtotal=billed_amt,
             tax_total=0.0,

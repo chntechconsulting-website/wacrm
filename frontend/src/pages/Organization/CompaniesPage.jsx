@@ -300,36 +300,58 @@ const CompaniesPage = () => {
                       <th>Tax (GST)</th>
                       <th style={{ textAlign: 'right' }}>Total (INR)</th>
                       <th>Status</th>
+                      <th>Payment Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedCompanyInvoices.revenueSummary.invoices.map((inv) => (
-                      <tr key={inv.invoice_id}>
-                        <td>
-                          <strong style={{ color: '#0f172a' }}>{inv.invoice_number}</strong>
-                        </td>
-                        <td>{inv.invoice_date}</td>
-                        <td>{inv.salesperson_name}</td>
-                        <td>{formatINR(inv.subtotal)}</td>
-                        <td>{formatINR(inv.tax_total)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 700, color: '#16a34a' }}>
-                          {formatINR(inv.grand_total)}
-                        </td>
-                        <td>
-                          <span style={{ 
-                            fontSize: '0.72rem', 
-                            padding: '2px 8px', 
-                            borderRadius: '9999px',
-                            background: inv.payment_status === 'paid' ? '#dcfce7' : '#fef3c7',
-                            color: inv.payment_status === 'paid' ? '#15803d' : '#b45309',
-                            fontWeight: 700,
-                            textTransform: 'uppercase'
-                          }}>
-                            {inv.payment_status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {selectedCompanyInvoices.revenueSummary.invoices.map((inv) => {
+                      const isInvoice = (inv.doc_type || '').toLowerCase() === 'invoice';
+                      const documentStatus = String(inv.status || (isInvoice ? 'issued' : 'won')).toLowerCase();
+                      const paymentStatus = String(inv.payment_status || 'pending').toLowerCase();
+                      const isPaid = paymentStatus === 'paid';
+                      const isCancelled = documentStatus === 'cancelled';
+
+                      return (
+                        <tr key={inv.invoice_id}>
+                          <td>
+                            <strong style={{ color: '#0f172a' }}>{inv.invoice_number}</strong>
+                          </td>
+                          <td>{inv.invoice_date}</td>
+                          <td>{inv.salesperson_name}</td>
+                          <td>{formatINR(inv.subtotal)}</td>
+                          <td>{formatINR(inv.tax_total)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: '#16a34a' }}>
+                            {formatINR(inv.grand_total)}
+                          </td>
+                          <td>
+                            <span style={{
+                              fontSize: '0.72rem',
+                              padding: '2px 8px',
+                              borderRadius: '9999px',
+                              background: isCancelled ? '#fee2e2' : (isInvoice ? '#dbeafe' : '#dcfce7'),
+                              color: isCancelled ? '#991b1b' : (isInvoice ? '#1d4ed8' : '#15803d'),
+                              fontWeight: 700,
+                              textTransform: 'uppercase'
+                            }}>
+                              {documentStatus}
+                            </span>
+                          </td>
+                          <td>
+                            <span style={{
+                              fontSize: '0.72rem',
+                              padding: '2px 8px',
+                              borderRadius: '9999px',
+                              background: isPaid ? '#dcfce7' : '#fef3c7',
+                              color: isPaid ? '#15803d' : '#b45309',
+                              fontWeight: 700,
+                              textTransform: 'uppercase'
+                            }}>
+                              {paymentStatus}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -381,6 +381,7 @@ const Customers = () => {
                             <th style={{ padding: '8px 12px' }}>Date</th>
                             <th style={{ padding: '8px 12px', textAlign: 'right' }}>Amount</th>
                             <th style={{ padding: '8px 12px' }}>Status</th>
+                            <th style={{ padding: '8px 12px' }}>Payment Status</th>
                             <th style={{ padding: '8px 12px', textAlign: 'right' }}>Actions</th>
                           </tr>
                         </thead>
@@ -390,6 +391,18 @@ const Customers = () => {
                             .map((d) => {
                               const dType = (d.docType || 'quotation').toLowerCase();
                               const isBio = (d.productCategory || 'wahrms').toLowerCase() === 'biometric';
+                              const isInvoice = dType === 'invoice';
+                              const documentStatus = String(d.status || 'issued').toLowerCase();
+                              const paymentStatus = String(d.paymentStatus || 'unpaid').toLowerCase();
+                              const isPaid = paymentStatus === 'paid';
+                              const isPartial = paymentStatus === 'partial' || paymentStatus === 'partially_paid';
+                              const badgeStyle = {
+                                fontSize: '0.70rem',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                textTransform: 'uppercase',
+                                whiteSpace: 'nowrap'
+                              };
                               return (
                                 <tr key={d.id || d.number} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                   <td style={{ padding: '8px 12px' }}>
@@ -423,16 +436,39 @@ const Customers = () => {
                                     â‚¹ {(d.grandTotal || 0).toLocaleString('en-IN')}
                                   </td>
                                   <td style={{ padding: '8px 12px' }}>
-                                    <span style={{
-                                      fontSize: '0.70rem',
-                                      padding: '2px 6px',
-                                      borderRadius: '4px',
-                                      backgroundColor: d.paymentStatus === 'paid' ? '#dcfce7' : '#fee2e2',
-                                      color: d.paymentStatus === 'paid' ? '#166534' : '#991b1b',
-                                      textTransform: 'capitalize'
-                                    }}>
-                                      {d.paymentStatus || d.status || 'issued'}
-                                    </span>
+                                    {isInvoice ? (
+                                      <span style={{
+                                        ...badgeStyle,
+                                        fontWeight: 700,
+                                        backgroundColor: documentStatus === 'cancelled' ? '#fee2e2' : (documentStatus === 'draft' ? '#f1f5f9' : '#dbeafe'),
+                                        color: documentStatus === 'cancelled' ? '#991b1b' : (documentStatus === 'draft' ? '#475569' : '#1d4ed8')
+                                      }}>
+                                        {documentStatus}
+                                      </span>
+                                    ) : (
+                                      <span style={{
+                                        ...badgeStyle,
+                                        backgroundColor: d.paymentStatus === 'paid' ? '#dcfce7' : '#fee2e2',
+                                        color: d.paymentStatus === 'paid' ? '#166534' : '#991b1b',
+                                        textTransform: 'capitalize'
+                                      }}>
+                                        {d.paymentStatus || d.status || 'issued'}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: '8px 12px' }}>
+                                    {isInvoice ? (
+                                      <span style={{
+                                        ...badgeStyle,
+                                        fontWeight: 700,
+                                        backgroundColor: isPaid ? '#dcfce7' : (isPartial ? '#fef3c7' : '#fee2e2'),
+                                        color: isPaid ? '#166534' : (isPartial ? '#b45309' : '#991b1b')
+                                      }}>
+                                        {paymentStatus}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: '#94a3b8' }}>-</span>
+                                    )}
                                   </td>
                                   <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                                     <button

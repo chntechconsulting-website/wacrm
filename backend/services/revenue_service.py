@@ -27,6 +27,7 @@ from models.workflow import FinanceHandoff, SupportHandoff
 from models.employee import Employee
 from models.customer import Customer
 from models.sales_target import SalesTarget
+from utils.document_status import invoice_document_status
 
 
 WON_LEAD_STATUSES = {"WON", "CONVERTED", "CLOSED WON", "CLOSED_WON"}
@@ -139,6 +140,7 @@ class RevenueService:
                 "source": source,
                 "date": dt,
                 "status": "Won",
+                "document_status": invoice_document_status(inv),
                 "doc_type": "invoice",
                 "origin": "INVOICE"
             })

@@ -14,6 +14,7 @@ from models.employee import Employee
 from models.user import User
 from models.workflow import FinanceHandoff
 from services.tax_invoice_builder import build_tax_invoice_model_pdf, CHN_COMPANY_INFO
+from utils.document_status import invoice_document_status
 from utils.payment_status import (
     FINANCE_STATUS_PAID,
     FINANCE_STATUS_PENDING,
@@ -501,7 +502,7 @@ class FinanceService:
                 "amount_paid": float(doc.amount_paid or 0.0),
                 "pending_amount": max(0.0, float(doc.grand_total or 0.0) - float(doc.amount_paid or 0.0)),
                 "tax_mode": doc.tax_mode or "intra",
-                "status": doc.status,
+                "status": invoice_document_status(doc),
                 "payment_status": doc.payment_status,
                 "is_overdue": is_overdue,
                 "issue_date": doc.issue_date.isoformat() if doc.issue_date else None,
@@ -569,7 +570,7 @@ class FinanceService:
             "amount_paid": float(inv.amount_paid or 0.0),
             "pending_amount": max(0.0, float(inv.grand_total or 0.0) - float(inv.amount_paid or 0.0)),
             "payment_status": inv.payment_status,
-            "status": inv.status,
+            "status": invoice_document_status(inv),
             "is_overdue": inv.payment_status != "paid" and effective_due and effective_due < now,
             "line_items": inv.line_items or [],
             "terms_and_conditions": inv.terms_and_conditions,

@@ -26,6 +26,42 @@ const formatINR = (val) => {
   return '₹' + num.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 };
 
+const formatStatusLabel = (status, fallback) => {
+  const value = String(status || fallback || '').replace(/_/g, ' ').trim();
+  return value.toUpperCase();
+};
+
+const getDocumentStatusStyle = (status) => {
+  const value = String(status || 'issued').toLowerCase();
+  if (value === 'cancelled') {
+    return { backgroundColor: 'rgba(239, 68, 68, 0.12)', color: '#dc2626' };
+  }
+  if (value === 'draft') {
+    return { backgroundColor: 'rgba(100, 116, 139, 0.12)', color: '#475569' };
+  }
+  return { backgroundColor: 'rgba(37, 99, 235, 0.12)', color: '#1d4ed8' };
+};
+
+const getPaymentStatusStyle = (status) => {
+  const value = String(status || 'unpaid').toLowerCase();
+  if (value === 'paid') {
+    return { backgroundColor: 'rgba(16, 185, 129, 0.12)', color: '#059669' };
+  }
+  if (value === 'partial' || value === 'partially_paid') {
+    return { backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#d97706' };
+  }
+  return { backgroundColor: 'rgba(239, 68, 68, 0.12)', color: '#dc2626' };
+};
+
+const statusBadgeBase = {
+  display: 'inline-block',
+  padding: '4px 10px',
+  borderRadius: '12px',
+  fontSize: '0.72rem',
+  fontWeight: '800',
+  whiteSpace: 'nowrap'
+};
+
 const InvoicesPage = () => {
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -408,14 +444,16 @@ const InvoicesPage = () => {
                   <th style={{ padding: '12px 16px' }}>Due Date</th>
                   <th style={{ padding: '12px 16px' }}>Grand Total</th>
                   <th style={{ padding: '12px 16px' }}>Amount Paid</th>
-                  <th style={{ padding: '12px 16px' }}>Status</th>
+                  <th style={{ padding: '12px 16px' }}>Invoice Status</th>
+                  <th style={{ padding: '12px 16px' }}>Payment Status</th>
                   <th style={{ padding: '12px 16px', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {invoices.map((inv) => {
-                  const isPaid = (inv.payment_status || '').toLowerCase() === 'paid';
-                  const isPartial = (inv.payment_status || '').toLowerCase() === 'partial';
+                  const paymentStatus = (inv.payment_status || 'unpaid').toLowerCase();
+                  const documentStatus = (inv.status || 'issued').toLowerCase();
+                  const isPaid = paymentStatus === 'paid';
 
                   return (
                     <tr key={inv.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -464,15 +502,20 @@ const InvoicesPage = () => {
                       </td>
 
                       <td style={{ padding: '14px 16px' }}>
-                        <span style={{
-                          padding: '4px 10px',
-                          borderRadius: '12px',
-                          fontSize: '0.72rem',
-                          fontWeight: '800',
-                          backgroundColor: isPaid ? 'rgba(16, 185, 129, 0.12)' : (isPartial ? 'rgba(245, 158, 11, 0.12)' : 'rgba(239, 68, 68, 0.12)'),
-                          color: isPaid ? '#059669' : (isPartial ? '#d97706' : '#dc2626')
-                        }}>
-                          {(inv.payment_status || 'UNPAID').toUpperCase()}
+                        <span
+                          title="Invoice document status"
+                          style={{ ...statusBadgeBase, ...getDocumentStatusStyle(documentStatus) }}
+                        >
+                          {formatStatusLabel(documentStatus, 'issued')}
+                        </span>
+                      </td>
+
+                      <td style={{ padding: '14px 16px' }}>
+                        <span
+                          title="Payment status"
+                          style={{ ...statusBadgeBase, ...getPaymentStatusStyle(paymentStatus) }}
+                        >
+                          {formatStatusLabel(paymentStatus, 'unpaid')}
                         </span>
                       </td>
 
@@ -861,6 +904,14 @@ const InvoicesPage = () => {
                 <span style={{ fontSize: '0.78rem', color: '#64748b' }}>
                   Issued on: {formatDateDDMMYYYY(invoiceDetail.issue_date)}
                 </span>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                  <span style={{ ...statusBadgeBase, ...getDocumentStatusStyle(invoiceDetail.status) }}>
+                    Invoice: {formatStatusLabel(invoiceDetail.status, 'issued')}
+                  </span>
+                  <span style={{ ...statusBadgeBase, ...getPaymentStatusStyle(invoiceDetail.payment_status) }}>
+                    Payment: {formatStatusLabel(invoiceDetail.payment_status, 'unpaid')}
+                  </span>
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <button

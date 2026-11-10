@@ -11,6 +11,7 @@ from models.employee import Employee
 from services.auth import get_current_user
 from services.hierarchy_service import normalize_role, normalize_department, ROLE_ADMIN
 from services.finance_service import FinanceService
+from utils.document_status import invoice_document_status
 
 logger = logging.getLogger("finance_router")
 
@@ -186,7 +187,7 @@ def create_invoice(
             "invoice_id": doc.id,
             "invoice_number": doc.doc_number,
             "grand_total": doc.grand_total,
-            "status": doc.status,
+            "status": invoice_document_status(doc),
             "payment_status": doc.payment_status
         }
     except Exception as e:

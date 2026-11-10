@@ -42,6 +42,10 @@ from services.billing_catalog import (
     WAHRMS_PACKAGE_CODES
 )
 from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
+from utils.document_status import (
+    invoice_document_status,
+    normalize_invoice_document_status,
+)
 from utils.payment_status import FINANCE_STATUS_PAID, normalize_finance_status
 
 logger = logging.getLogger("waquote_router")
@@ -478,7 +482,7 @@ def list_waquote_documents(
             "rawId": r.id,
             "number": r.doc_number,
             "docType": r.doc_type,
-            "status": r.status,
+            "status": invoice_document_status(r),
             "paymentStatus": r.payment_status,
             "issueDate": int(r.issue_date.timestamp() * 1000) if r.issue_date else None,
             "issueDateFormatted": issue_formatted,
@@ -675,6 +679,9 @@ def create_document(
     doc_type_norm = (payload.doc_type or "quotation").lower().strip()
     cat_norm = (payload.product_category or "wahrms").lower().strip()
     doc_status = (payload.status or "issued").lower().strip()
+    if doc_type_norm == "invoice":
+        # Invoices are always issued documents; payment state belongs in payment_status.
+        doc_status = normalize_invoice_document_status(doc_status)
 
     plan_error = validate_custom_plan_items(payload.line_items)
     if plan_error:
@@ -936,7 +943,7 @@ def create_document(
             "productCategory": new_doc.product_category,
             "sourceQuotationId": new_doc.source_quotation_id,
             "sourceQuotationNumber": new_doc.source_quotation_number,
-            "status": new_doc.status,
+            "status": invoice_document_status(new_doc),
             "grandTotal": new_doc.grand_total,
             "pdfUrl": new_doc.pdf_url,
             "destinationSyncStatus": getattr(new_doc, "destination_sync_status", "PENDING") or "PENDING",
@@ -985,7 +992,7 @@ def get_waquote_document(
             "id": f"local_{r.id}",
             "number": r.doc_number,
             "docType": r.doc_type,
-            "status": r.status,
+            "status": invoice_document_status(r),
             "paymentStatus": r.payment_status,
             "issueDate": int(r.issue_date.timestamp() * 1000) if r.issue_date else None,
             "issueDateFormatted": issue_formatted,
@@ -1061,6 +1068,9 @@ def update_waquote_document(
     target_type = (payload.doc_type or r.doc_type).lower().strip()
     previous_status = (r.status or "").lower().strip()
     new_status = (payload.status or r.status or "issued").lower().strip()
+    if target_type == "invoice":
+        # Payment values must never be written into the invoice lifecycle status.
+        new_status = normalize_invoice_document_status(new_status)
     # STRICT PERMISSION: If modifying an invoice or attempting to change a doc to an invoice
     if r.doc_type == "invoice" or target_type == "invoice":
         if not is_finance_team(current_user, db):
@@ -1149,7 +1159,7 @@ def update_waquote_document(
             "productCategory": getattr(r, 'product_category', 'wahrms') or 'wahrms',
             "sourceQuotationId": r.source_quotation_id,
             "sourceQuotationNumber": r.source_quotation_number,
-            "status": r.status,
+            "status": invoice_document_status(r),
             "grandTotal": r.grand_total,
             "pdfUrl": r.pdf_url
         }

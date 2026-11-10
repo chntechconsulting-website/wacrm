@@ -37,6 +37,7 @@ from schemas.lead import (
 from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
 from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
+from utils.document_status import invoice_document_status
 from utils.payment_status import FINANCE_STATUS_PAID, normalize_finance_status
 from services.permission_service import (
     user_has_permission, 
@@ -1850,7 +1851,7 @@ def get_lead_waquote_documents(
             "id": f"local_{r.id}",
             "number": r.doc_number,
             "docType": r.doc_type,
-            "status": r.status,
+            "status": invoice_document_status(r),
             "paymentStatus": r.payment_status,
             "issueDateFormatted": r.issue_date.strftime("%d/%m/%Y") if r.issue_date else "—",
             "grandTotal": total_val,
