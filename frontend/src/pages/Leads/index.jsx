@@ -343,7 +343,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
   const handleBillingSuccess = (newDoc) => {
     fetchLeads();
-    if (selectedLead) {
+    const docStatus = String(newDoc?.status || '').toLowerCase();
+    const docType = String(newDoc?.docType || 'quotation').toUpperCase();
+    const isDraft = docStatus === 'draft';
+    const amount = Number(newDoc?.grandTotal || 0);
+
+    // Drafts must never overwrite the lead's official issued-quotation reference.
+    if (selectedLead && !isDraft) {
       setSelectedLead(prev => prev ? ({
         ...prev,
         quotetask_quotation_id: String(newDoc.id),
@@ -352,7 +358,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         quotetask_quotation_amount: newDoc.grandTotal
       }) : null);
     }
-    setQuotationMessage(`Issued ${newDoc.docType.toUpperCase()} #${newDoc.number} for Rs. ${newDoc.grandTotal.toLocaleString('en-IN')}!`);
+
+    setQuotationMessage(
+      isDraft
+        ? `Draft ${docType} #${newDoc?.number || ''} saved successfully!`
+        : `Issued ${docType} #${newDoc?.number || ''} for Rs. ${amount.toLocaleString('en-IN')}!`
+    );
     setTimeout(() => setQuotationMessage(''), 5000);
   };
 

@@ -674,6 +674,7 @@ def create_document(
     """
     doc_type_norm = (payload.doc_type or "quotation").lower().strip()
     cat_norm = (payload.product_category or "wahrms").lower().strip()
+    doc_status = (payload.status or "issued").lower().strip()
 
     plan_error = validate_custom_plan_items(payload.line_items)
     if plan_error:
@@ -818,7 +819,7 @@ def create_document(
         source_quotation_id=payload.source_quotation_id,
         source_quotation_number=payload.source_quotation_number,
         doc_number=doc_num,
-        status=payload.status,
+        status=doc_status,
         payment_status=payload.payment_status,
         lead_id=payload.lead_id,
         customer_id=payload.customer_id,
@@ -853,15 +854,16 @@ def create_document(
     db.commit()
     db.refresh(new_doc)
 
-    # If linked to a lead, update lead quotation status and create activity log
-    if payload.lead_id:
+    # Only issued documents update the lead's official quotation reference and
+    # sales timeline. Drafts must stay isolated until they are actually issued.
+    if payload.lead_id and doc_status == "issued":
         lead = db.query(Lead).filter(Lead.id == payload.lead_id).first()
         if lead:
             lead.quotetask_quotation_id = str(new_doc.id)
             lead.quotetask_quotation_number = new_doc.doc_number
             lead.quotetask_quotation_status = new_doc.status
             lead.quotetask_quotation_amount = new_doc.grand_total
-            if payload.status == "issued" and lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED"]:
+            if lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED"]:
                 lead.status = "PROPOSAL SENT"
             
             # Log lead activity
@@ -891,7 +893,7 @@ def create_document(
 
     # Automatically synchronize WAHRMS Proforma Invoice to Destination ERP / External Website
     sync_result = None
-    if doc_type_norm == "proforma":
+    if doc_type_norm == "proforma" and doc_status != "draft":
         try:
             from services.destination_sync_service import DestinationSyncService
             from services.product_validation_service import ProductValidationService
@@ -1057,6 +1059,8 @@ def update_waquote_document(
         )
 
     target_type = (payload.doc_type or r.doc_type).lower().strip()
+    previous_status = (r.status or "").lower().strip()
+    new_status = (payload.status or r.status or "issued").lower().strip()
     # STRICT PERMISSION: If modifying an invoice or attempting to change a doc to an invoice
     if r.doc_type == "invoice" or target_type == "invoice":
         if not is_finance_team(current_user, db):
@@ -1103,16 +1107,22 @@ def update_waquote_document(
     if payload.payment_status:
         r.payment_status = payload.payment_status
     if payload.status:
-        r.status = payload.status
+        r.status = new_status
 
     db.commit()
     db.refresh(r)
 
-    # If linked to lead, update lead quotation amount
-    if r.lead_id:
+    # Only issued documents update the lead's official quotation reference.
+    # Saving or editing a draft must not overwrite an issued quotation record.
+    if r.lead_id and new_status == "issued":
         lead = db.query(Lead).filter(Lead.id == r.lead_id).first()
         if lead:
+            lead.quotetask_quotation_id = str(r.id)
+            lead.quotetask_quotation_number = r.doc_number
+            lead.quotetask_quotation_status = r.status
             lead.quotetask_quotation_amount = r.grand_total
+            if previous_status != "issued" and lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED"]:
+                lead.status = "PROPOSAL SENT"
             db.commit()
 
     # Record AuditLog for document modification

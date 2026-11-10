@@ -20,7 +20,8 @@ import {
   CheckCircle2,
   Cpu,
   ShieldCheck,
-  Layers
+  Layers,
+  Save
 } from 'lucide-react';
 
 import PingoMascot from '../Common/PingoMascot';
@@ -580,6 +581,8 @@ export default function QuotationModal({
       );
       setError('');
       setSuccessMsg('');
+      setSavedDocId(initialData?.id || initialData?.docId || null);
+      setPendingSaveStatus('issued');
     }
   }, [isOpen, initialData]);
 
@@ -605,6 +608,12 @@ export default function QuotationModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [savedDocId, setSavedDocId] = useState(initialData?.id || initialData?.docId || null);
+  const [pendingSaveStatus, setPendingSaveStatus] = useState('issued');
+
+  const initialDocStatus = String(initialData?.status || '').toLowerCase();
+  const isExistingDraft = initialDocStatus === 'draft';
+  const activeDocId = savedDocId || initialData?.id || initialData?.docId || null;
 
   // Auto-update state code when state changes
   useEffect(() => {
@@ -871,7 +880,7 @@ export default function QuotationModal({
 
   const [showDuplicateConflict, setShowDuplicateConflict] = useState(false);
 
-  const buildDocPayload = (overrideAllowDuplicate = false) => {
+  const buildDocPayload = (overrideAllowDuplicate = false, statusOverride = null) => {
     return {
       doc_type: docType,
       selected_bundle: selectedBundle,
@@ -903,7 +912,7 @@ export default function QuotationModal({
       terms_and_conditions: terms,
       notes,
       prepared_by: preparedBy.trim(),
-      status: 'issued',
+      status: statusOverride || 'issued',
       payment_status: 'unpaid'
     };
   };
@@ -953,6 +962,73 @@ export default function QuotationModal({
     handleOpenPdfPreview();
   };
 
+  const handleSaveDraft = async () => {
+    if (isReadOnly) {
+      setError('Official Tax Invoices can only be modified by the Finance Team.');
+      return;
+    }
+    if (docType !== 'quotation') {
+      setError('Save Draft is available for quotations only.');
+      return;
+    }
+    if (!customerName.trim() && !companyName.trim()) {
+      setError('Please provide a Customer Name or Company Name.');
+      return;
+    }
+    const planError = validateBundlePlanLines(lineItems);
+    if (planError) {
+      setError(planError);
+      return;
+    }
+    try {
+      setSaving(true);
+      setError('');
+      setShowDuplicateConflict(false);
+      setPendingSaveStatus('draft');
+      const payload = buildDocPayload(false, 'draft');
+      const docId = activeDocId;
+
+      let res;
+      if (docId) {
+        res = await API.put(`/integrations/waquote/documents/${docId}`, payload);
+      } else {
+        res = await API.post('/integrations/waquote/documents', payload);
+      }
+
+      if (res.data?.ok) {
+        const savedDoc = res.data.document || {};
+        const newDocId = savedDoc.rawId || savedDoc.id || docId || null;
+        setSavedDocId(newDocId);
+        setSuccessMsg(res.data.message || (docId ? 'Draft updated successfully!' : 'Draft saved successfully!'));
+
+        if (onSuccess) {
+          onSuccess({
+            ...savedDoc,
+            status: savedDoc.status || 'draft',
+            docType: savedDoc.docType || docType
+          });
+        }
+
+        setTimeout(() => {
+          onClose();
+        }, 1200);
+      } else {
+        setError(res.data?.message || res.data?.detail || 'Failed to save draft.');
+      }
+    } catch (err) {
+      console.error('Failed to save draft:', err);
+      if (err.response?.status === 409) {
+        setError(err.response.data?.detail || 'An existing quotation already exists for this client.');
+        setShowDuplicateConflict(true);
+        setPendingSaveStatus('draft');
+      } else {
+        setError(err.response?.data?.detail || 'Failed to save draft.');
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSaveAndIssue = async () => {
     if (isReadOnly) {
       setError('Official Tax Invoices can only be modified and issued by the Finance Team.');
@@ -974,21 +1050,22 @@ export default function QuotationModal({
     try {
       setSaving(true);
       setError('');
+      setShowDuplicateConflict(false);
+      setPendingSaveStatus('issued');
       const payload = buildDocPayload();
-      const docId = initialData?.id || initialData?.docId;
+      const docId = activeDocId;
 
       let res;
-      if (isEditMode && docId) {
+      if (docId) {
         res = await API.put(`/integrations/waquote/documents/${docId}`, payload);
       } else {
         res = await API.post('/integrations/waquote/documents', payload);
       }
 
       if (res.data?.ok) {
-        setSuccessMsg(res.data.message || (isEditMode ? 'Document updated successfully!' : 'Document generated successfully!'));
-        
-        // Trigger auto download of the issued/updated PDF
         const issuedDoc = res.data.document || {};
+        setSavedDocId(issuedDoc.rawId || issuedDoc.id || docId || null);
+        setSuccessMsg(res.data.message || (docId ? 'Document updated successfully!' : 'Document generated successfully!'));
         const finalDocData = {
           ...payload,
           docType,
@@ -1045,6 +1122,7 @@ export default function QuotationModal({
       if (err.response?.status === 409) {
         setError(err.response.data?.detail || 'An existing quotation already exists for this lead.');
         setShowDuplicateConflict(true);
+        setPendingSaveStatus('issued');
       } else {
         setError(err.response?.data?.detail || (isEditMode ? 'Failed to update document.' : 'Failed to save and issue document.'));
       }
@@ -1062,19 +1140,24 @@ export default function QuotationModal({
       setError(planError);
       return;
     }
+    const targetStatus = pendingSaveStatus === 'draft' ? 'draft' : 'issued';
     try {
       setSaving(true);
-      const payload = buildDocPayload(true);
+      const payload = buildDocPayload(true, targetStatus);
       const res = await API.post('/integrations/waquote/documents', payload);
       if (res.data?.ok) {
-        setSuccessMsg(res.data.message || 'New quotation revision created successfully!');
-        const issuedDoc = res.data.document || {};
+        const savedDoc = res.data.document || {};
+        setSavedDocId(savedDoc.rawId || savedDoc.id || null);
+        setSuccessMsg(
+          res.data.message
+            || (targetStatus === 'draft' ? 'New draft revision saved successfully!' : 'New quotation revision created successfully!')
+        );
         const finalDocData = {
           ...payload,
           docType,
           companyId: selectedCompanyId,
           company: activeCompany,
-          number: issuedDoc.number || 'DOC',
+          number: savedDoc.number || 'DOC',
           customerName,
           companyName,
           phone,
@@ -1094,9 +1177,19 @@ export default function QuotationModal({
           lineItems,
           terms
         };
-        generateQuotationPdf(finalDocData, true);
-        if (onSuccess) onSuccess(res.data.document);
-        setTimeout(() => onClose(), 1400);
+        if (targetStatus === 'issued') {
+          generateQuotationPdf(finalDocData, true);
+        }
+        if (onSuccess) {
+          onSuccess({
+            ...savedDoc,
+            status: savedDoc.status || targetStatus,
+            docType: savedDoc.docType || docType
+          });
+        }
+        setTimeout(() => onClose(), targetStatus === 'draft' ? 1200 : 1400);
+      } else {
+        setError(res.data?.message || res.data?.detail || 'Failed to save new quotation revision.');
       }
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to save new quotation revision.');
@@ -2101,6 +2194,25 @@ export default function QuotationModal({
             >
               <Eye size={15} /> Preview & Download
             </button>
+            {!isReadOnly && docType === 'quotation' && (!isEditMode || isExistingDraft) && (
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                className="btn btn-outline"
+                style={{
+                  color: '#0f766e',
+                  borderColor: '#99f6e4',
+                  backgroundColor: '#f0fdfa',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+                disabled={saving}
+                title="Save this quotation as a draft without issuing it"
+              >
+                <Save size={15} /> {saving && pendingSaveStatus === 'draft' ? 'Saving Draft...' : 'Save Draft'}
+              </button>
+            )}
             {!isReadOnly && (
               <button 
                 type="button" 
@@ -2109,7 +2221,9 @@ export default function QuotationModal({
                 style={{ backgroundColor: docType === 'invoice' ? '#1d4ed8' : '#0f766e', borderColor: docType === 'invoice' ? '#1d4ed8' : '#0f766e', display: 'flex', alignItems: 'center', gap: '6px' }}
                 disabled={saving}
               >
-                <Check size={16} /> {saving ? (isEditMode ? 'Saving Changes...' : 'Issuing...') : (isEditMode ? 'Save & Update' : `Issue ${docType === 'invoice' ? 'Tax Invoice' : (docType === 'po' ? 'PO' : docType.toUpperCase())}`)}
+                <Check size={16} /> {saving
+                  ? (pendingSaveStatus === 'draft' ? 'Saving...' : (isEditMode && !isExistingDraft ? 'Saving Changes...' : 'Issuing...'))
+                  : (isEditMode && !isExistingDraft ? 'Save & Update' : `Issue ${docType === 'invoice' ? 'Tax Invoice' : (docType === 'po' ? 'PO' : docType.toUpperCase())}`)}
               </button>
             )}
           </div>

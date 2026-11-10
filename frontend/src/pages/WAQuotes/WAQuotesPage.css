@@ -267,6 +267,34 @@
   border: 1px solid #fef08a;
 }
 
+.waquotes-doc-status {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.waquotes-doc-status-draft {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.waquotes-doc-status-issued {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.waquotes-doc-status-cancelled {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
 .waquotes-payment-badge {
   display: inline-flex;
   align-items: center;

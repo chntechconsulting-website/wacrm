@@ -108,14 +108,19 @@ const WAQuotesPage = () => {
     }
   };
 
-  const fetchDocuments = async (query = searchQuery) => {
+  const fetchDocuments = async (query = searchQuery, tabOverride = activeTab) => {
     try {
       setLoading(true);
       setError(null);
       const params = {};
-      if (activeTab && activeTab !== 'all') {
-        params.doc_type = activeTab;
-        params.docType = activeTab;
+      if (tabOverride === 'drafts') {
+        // Drafts are deliberately isolated from issued quotations.
+        params.doc_type = 'quotation';
+        params.docType = 'quotation';
+        params.status = 'draft';
+      } else if (tabOverride && tabOverride !== 'all') {
+        params.doc_type = tabOverride;
+        params.docType = tabOverride;
       }
       if (query && query.trim()) {
         params.search = query.trim();
@@ -264,6 +269,7 @@ const WAQuotesPage = () => {
       id: cleanId,
       docId: cleanId,
       docType: (doc.docType || 'quotation').toLowerCase(),
+      status: String(doc.status || '').toLowerCase(),
       companyId: doc.companyId || (doc.company?.shortName?.toLowerCase().includes('chn') ? 'chn-tech' : 'wahrms'),
       customerName: doc.customer?.name || doc.customerName || doc.customer_name || '',
       companyName: doc.customer?.companyName || doc.companyName || doc.company_name || '',
@@ -286,12 +292,23 @@ const WAQuotesPage = () => {
     setShowQuoteModal(true);
   };
 
-  const handleDocSuccess = () => {
+  const handleDocSuccess = (savedDoc) => {
     if (location.search) {
       navigate('/waquotes', { replace: true });
     }
+    const savedStatus = String(savedDoc?.status || '').toLowerCase();
+    const savedType = String(savedDoc?.docType || savedDoc?.doc_type || '').toLowerCase();
+    const isDraftQuotation = savedStatus === 'draft' && savedType === 'quotation';
+    const nextTab = isDraftQuotation
+      ? 'drafts'
+      : (activeTab === 'drafts' ? 'quotation' : activeTab);
+
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    } else {
+      fetchDocuments(searchQuery, nextTab);
+    }
     fetchSummary();
-    fetchDocuments();
   };
 
   const handleOpenExistingQuote = async (quote) => {
@@ -590,6 +607,13 @@ const WAQuotesPage = () => {
             </button>
             <button
               type="button"
+              className={`waquotes-tab ${activeTab === 'drafts' ? 'active' : ''}`}
+              onClick={() => setActiveTab('drafts')}
+            >
+              Drafts
+            </button>
+            <button
+              type="button"
               className={`waquotes-tab ${activeTab === 'proforma' ? 'active' : ''}`}
               onClick={() => setActiveTab('proforma')}
             >
@@ -744,7 +768,7 @@ const WAQuotesPage = () => {
                           : "Create your first professional Quotation or Proforma Invoice with Pingo!"
                       }
                       actionLabel="Create Quotation"
-                      onAction={() => handleOpenCreate('quotation')}
+                      onAction={() => handleOpenNewDoc('quotation')}
                       actionIcon={Plus}
                       secondaryActionLabel={
                         searchQuery || activeTab !== 'all' || paymentFilter !== 'all' || categoryFilter !== 'all'
@@ -763,6 +787,7 @@ const WAQuotesPage = () => {
               ) : (
                 documents.map((doc) => {
                   const docType = (doc.docType || 'quotation').toLowerCase();
+                  const docStatus = (doc.status || 'issued').toLowerCase();
                   const paymentStatus = (doc.paymentStatus || 'unpaid').toLowerCase();
                   const customerName = doc.customer?.name || 'Walk-in / Unknown';
                   const companyName = doc.customer?.companyName || '';
@@ -774,7 +799,9 @@ const WAQuotesPage = () => {
                     <tr key={doc.id || doc.number}>
                       <td>
                         <strong style={{ color: '#0f172a', display: 'block' }}>{doc.number}</strong>
-                        <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>{doc.status || 'issued'}</span>
+                        <span className={`waquotes-doc-status waquotes-doc-status-${docStatus}`}>
+                          {docStatus}
+                        </span>
                       </td>
                       <td>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
@@ -898,8 +925,8 @@ const WAQuotesPage = () => {
                             </button>
                           )}
 
-                          {/* If Quotation, allow instant one-click Proforma Invoice generation */}
-                          {docType === 'quotation' && (
+                          {/* If Quotation is issued, allow instant one-click Proforma Invoice generation */}
+                          {docType === 'quotation' && docStatus === 'issued' && (
                             <button
                               type="button"
                               onClick={() => handleGenerateProforma(doc)}
