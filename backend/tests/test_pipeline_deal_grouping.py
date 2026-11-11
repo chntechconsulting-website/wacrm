@@ -311,6 +311,41 @@ class PipelineDealGroupingTests(unittest.TestCase):
         # Payment/transaction KPIs still count the two confirmed invoices.
         self.assertEqual(report["kpis"]["total_revenue"]["transactions_count"], 2)
 
+    def test_employee_own_scope_also_reports_one_row_per_deal(self):
+        lead = self._make_lead("Employee Scope Deal", status="WON")
+        quotation = self._make_document(
+            "quotation", "GRP/QT/0006", 10000.0, 11, lead=lead
+        )
+        proforma = self._make_document(
+            "proforma", "GRP/PI/0006", 12000.0, 12, lead=lead, source=quotation
+        )
+        invoice = self._make_document(
+            "invoice",
+            "GRP/INV/0006",
+            12500.0,
+            13,
+            lead=lead,
+            source=proforma,
+            payment_status="paid",
+            amount_paid=12500.0,
+        )
+
+        report = sales_revenue_report(
+            start_date=self.START_DATE,
+            end_date=self.END_DATE,
+            team=None,
+            salesperson_id=None,
+            db=self.db,
+            current_user=self.sales_user,
+        )
+
+        self.assertEqual(len(report["deals_details"]), 1)
+        self.assertEqual(report["deals_details"][0]["invoice_id"], invoice.id)
+        self.assertEqual(report["deals_details"][0]["status"], "Won")
+        self.assertEqual(
+            report["kpis"]["pipeline_value"]["raw_val"], 0.0
+        )
+
     def test_external_proforma_inherits_lead_and_source_quotation(self):
         lead = self._make_lead("External Proforma Deal")
         quotation = self._make_document(
