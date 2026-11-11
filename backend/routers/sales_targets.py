@@ -503,7 +503,11 @@ def get_companies_revenue(
     from services.revenue_service import RevenueService
     allowed_ids = _authorized_sales_employee_ids(current_user, db)
     won_transactions = RevenueService.get_won_sales_transactions(
-        db=db, employee_ids_filter=allowed_ids
+        db=db,
+        employee_ids_filter=allowed_ids,
+        # Admin company-wide revenue must include confirmed invoices that were
+        # recorded without a Sales attribution. Team/own scopes stay restricted.
+        include_unassigned=_is_admin_user(current_user, db),
     )
 
     active_emps = {

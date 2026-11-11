@@ -1274,7 +1274,11 @@ def sales_revenue_report(
         start_date=s_dt,
         end_date=e_dt,
         salesperson_id=salesperson_id,
-        employee_ids_filter=allowed_emp_ids
+        employee_ids_filter=allowed_emp_ids,
+        # Company/team/department reports must include confirmed invoices that
+        # were recorded without a salesperson (for example by Finance). Own-scope
+        # reports stay strictly limited to the logged-in salesperson.
+        include_unassigned=(scope != "own"),
     )
 
     all_docs = quote_query.all()
@@ -1287,9 +1291,19 @@ def sales_revenue_report(
         and q.status != "cancelled"
     ]
 
-    # 1. Calculate Real Totals strictly from Won Sales Transactions (Deduplicated)
-    total_rev_val = sum(t["amount"] for t in won_transactions)
-    paid_rev_val = sum(t["collected_amount"] for t in won_transactions)
+    # 1. Calculate Real Totals strictly from Won Sales Transactions (Deduplicated).
+    # Zero-value documents are not revenue and must not inflate the payment count.
+    revenue_transactions = [
+        t for t in won_transactions
+        if float(t.get("amount") or 0.0) > 0
+        or float(t.get("collected_amount") or 0.0) > 0
+    ]
+    total_rev_val = sum(t["amount"] for t in revenue_transactions)
+    paid_rev_val = sum(t["collected_amount"] for t in revenue_transactions)
+    payments_count = sum(
+        1 for t in revenue_transactions
+        if float(t.get("collected_amount") or 0.0) > 0
+    )
 
     # Fetch active target from sales_targets table for current period, fallback to employee sum
     from models.sales_target import SalesTarget
@@ -1321,10 +1335,15 @@ def sales_revenue_report(
         "total_revenue": {
             "value": format_inr(total_rev_val),
             "change": "+14.8%",
-            "vs_label": f"collected: {format_inr(paid_rev_val)}",
+            "vs_label": (
+                f"collected: {format_inr(paid_rev_val)} · "
+                f"{payments_count} payment{'s' if payments_count != 1 else ''}"
+            ),
             "raw_val": round(total_rev_val / 100000.0, 2),
             "collected_revenue": format_inr(paid_rev_val),
-            "collected_raw": round(paid_rev_val / 100000.0, 2)
+            "collected_raw": round(paid_rev_val / 100000.0, 2),
+            "payments_count": payments_count,
+            "transactions_count": len(revenue_transactions),
         },
         "target": {
             "value": format_inr(team_target),
@@ -1501,7 +1520,7 @@ def sales_revenue_report(
 
     # 6. Deal / Revenue Details Table (Won Sales Deals First, followed by pipeline quotes)
     deals_details = []
-    for t in sorted(won_transactions, key=lambda x: x["date"], reverse=True):
+    for t in sorted(revenue_transactions, key=lambda x: x["date"], reverse=True):
         b_date = t["date"].strftime("%b %d, %Y") if t["date"] and t["date"] != datetime.min else "-"
         deals_details.append({
             "id": t["lead_id"] or t["invoice_id"] or 0,

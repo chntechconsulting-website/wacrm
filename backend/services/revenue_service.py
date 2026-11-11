@@ -50,7 +50,8 @@ class RevenueService:
         period_month: Optional[int] = None,
         period_type: str = "monthly",
         salesperson_id: Optional[int] = None,
-        employee_ids_filter: Optional[List[int]] = None
+        employee_ids_filter: Optional[List[int]] = None,
+        include_unassigned: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Gathers all confirmed won sales transactions across Invoices, Finance Handoffs, and Won Leads.
@@ -58,6 +59,12 @@ class RevenueService:
         - If an invoice is linked to a lead_id, the lead is not counted separately.
         - If a finance handoff is linked to a lead_id, it is deduplicated against any invoice or lead record.
         - Quotations (doc_type='quotation') and unclosed proformas are strictly excluded.
+
+        When ``include_unassigned`` is True, confirmed invoices/leads that carry no
+        resolvable salesperson are retained for company-wide totals instead of being
+        discarded by the employee roster filter. They are never attributed to a
+        salesperson, so per-employee rankings stay accurate. Personal/own-scope
+        reports must leave this False.
         """
         # 1. Fetch all confirmed invoices
         inv_query = db.query(Quotation).filter(
@@ -114,8 +121,12 @@ class RevenueService:
             # Check filters
             if salesperson_id and salesperson_id > 0 and emp_id != salesperson_id:
                 continue
-            if employee_ids_filter is not None and emp_id not in employee_ids_filter:
-                continue
+            if employee_ids_filter is not None:
+                if emp_id is None:
+                    if not include_unassigned:
+                        continue
+                elif emp_id not in employee_ids_filter:
+                    continue
 
             # Amount
             amt = float(inv.grand_total or 0.0)
@@ -166,8 +177,12 @@ class RevenueService:
 
             if salesperson_id and salesperson_id > 0 and emp_id != salesperson_id:
                 continue
-            if employee_ids_filter is not None and emp_id not in employee_ids_filter:
-                continue
+            if employee_ids_filter is not None:
+                if emp_id is None:
+                    if not include_unassigned:
+                        continue
+                elif emp_id not in employee_ids_filter:
+                    continue
 
             # Amount determination: confirmed handoff final_amount or lead.quotetask_quotation_amount
             amt = 0.0
