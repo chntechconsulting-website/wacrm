@@ -147,6 +147,13 @@ class MobileSimCallManager(
             "clearPendingResult" -> clearPendingResult(call, result)
             "pickRecordingFile" -> pickRecordingFile(result)
             "consumeSharedRecordingFile" -> consumeSharedRecordingFile(result)
+            "isIgnoringBatteryOptimizations" -> result.success(isIgnoringBatteryOptimizations())
+            "openBatteryOptimizationSettings" -> openBatteryOptimizationSettings(result)
+            "scheduleAutomaticSync" -> {
+                AutomaticCallSyncScheduler.ensureScheduled(activity)
+                AutomaticCallSyncScheduler.scheduleOneOff(activity, delaySeconds = 1L)
+                result.success(true)
+            }
             "getRecentDeviceCalls" -> getRecentDeviceCalls(call, result)
             "getDeviceCallLogBaseline" -> getDeviceCallLogBaseline(result)
             "getDeviceCallsIncremental" -> getDeviceCallsIncremental(call, result)
@@ -327,6 +334,49 @@ class MobileSimCallManager(
             result.success(true)
         } catch (error: Exception) {
             result.error("SETTINGS_FAILED", error.message, null)
+        }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return try {
+            val power = activity.getSystemService(Context.POWER_SERVICE)
+                as? android.os.PowerManager
+            power?.isIgnoringBatteryOptimizations(activity.packageName) == true
+        } catch (_: Exception) {
+            // Do not nag when the OEM hides the state.
+            true
+        }
+    }
+
+    /**
+     * Opens Android's battery-optimization list. WACRM does not silently add
+     * itself to the allowlist; the employee makes that choice explicitly.
+     */
+    private fun openBatteryOptimizationSettings(result: MethodChannel.Result) {
+        try {
+            val intent = Intent(
+                Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS,
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            activity.startActivity(intent)
+            result.success(true)
+            return
+        } catch (_: Exception) {
+            // Fall through to the app details page.
+        }
+        try {
+            val fallback = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", activity.packageName, null),
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            activity.startActivity(fallback)
+            result.success(true)
+        } catch (error: Exception) {
+            result.success(false)
         }
     }
 

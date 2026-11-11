@@ -3,9 +3,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
+import '../network/api_exceptions.dart';
 import 'mobile_call_recording_manager.dart';
 import 'mobile_sim_call_service.dart';
 import 'office_sim_service.dart';
+import 'pending_call_sync_queue.dart';
 
 /// One row from the Android device call log.
 @immutable
@@ -163,6 +165,17 @@ class DeviceCallLogSyncResult {
   final int syncedUpToDateMs;
   final int syncedUpToId;
 
+  /// Calls still waiting for a confirmed backend response.
+  final int pendingSyncCount;
+
+  /// Pending calls that may succeed on a later automatic retry.
+  final int retryablePending;
+
+  /// True when this pass failed for a transient reason (network, timeout,
+  /// server or expired session) and should be retried.
+  final bool retryableFailure;
+  final DateTime? lastSuccessfulSyncAt;
+
   const DeviceCallLogSyncResult({
     this.synced = 0,
     this.recordingsUploaded = 0,
@@ -176,6 +189,10 @@ class DeviceCallLogSyncResult {
     this.syncStatus = 'NOT_CONFIGURED',
     this.syncedUpToDateMs = 0,
     this.syncedUpToId = 0,
+    this.pendingSyncCount = 0,
+    this.retryablePending = 0,
+    this.retryableFailure = false,
+    this.lastSuccessfulSyncAt,
   });
 
   bool get hasChanges => synced > 0 || recordingsUploaded > 0;
@@ -183,6 +200,11 @@ class DeviceCallLogSyncResult {
   bool get isOfficeSimBlocked =>
       officeSimState == OfficeSimState.requiresVerification ||
       officeSimState == OfficeSimState.unsupported;
+
+  bool get shouldRetry =>
+      !permissionDenied &&
+      !isOfficeSimBlocked &&
+      (retryableFailure || (syncStatus == 'ACTIVE' && retryablePending > 0));
 }
 
 @immutable
@@ -235,13 +257,18 @@ class DeviceCallLogSyncService {
   }
 
   static Future<DeviceCallLogSyncResult> sync(
-    CallsProvider callsProvider, {
+    CallsProvider? callsProvider, {
     required String employeeKey,
     bool autoUploadRecordings = true,
+    bool forceRetryPending = false,
+    bool reportSimChanges = true,
   }) async {
     if (!isSupported) return const DeviceCallLogSyncResult();
     if (_running) return const DeviceCallLogSyncResult();
     _running = true;
+    final scope = employeeKey.trim().isEmpty ? 'default' : employeeKey.trim();
+    final queue = PendingCallSyncQueue(scope);
+    await queue.reload();
     try {
       final permissions = await MobileSimCallService.permissionStatus();
       if (!permissions.readCallLog) {
@@ -249,21 +276,31 @@ class DeviceCallLogSyncService {
           '[CallDirection] History sync blocked: READ_CALL_LOG is not granted. '
           'Incoming device calls cannot be read.',
         );
-        return const DeviceCallLogSyncResult(
+        return DeviceCallLogSyncResult(
           permissionDenied: true,
           error:
               'Call-log permission is not granted, so incoming and outgoing '
               'device calls cannot be synchronized from the phone call log.',
+          pendingSyncCount: queue.count,
+          retryablePending: queue.retryableCount,
         );
       }
 
-      final officeSim = await OfficeSimService.evaluate();
+      // The background worker never persists a SIM-verification change from a
+      // transient telephony read failure (for example during boot or an OEM
+      // restriction). It still fails closed for this pass; the next foreground
+      // sync can report a genuinely replaced SIM.
+      final officeSim = await OfficeSimService.evaluate(
+        reportChange: reportSimChanges,
+      );
       final mapping = officeSim.mapping;
       if (mapping == null) {
         return DeviceCallLogSyncResult(
           officeSimState: officeSim.state,
           officeSimMessage: officeSim.message,
           syncStatus: 'NOT_CONFIGURED',
+          pendingSyncCount: queue.count,
+          retryablePending: queue.retryableCount,
         );
       }
       if (!officeSim.canSync || !mapping.isVerified) {
@@ -271,6 +308,9 @@ class DeviceCallLogSyncService {
           officeSimState: officeSim.state,
           officeSimMessage: officeSim.message,
           syncStatus: mapping.syncStatus,
+          pendingSyncCount: queue.count,
+          retryablePending: queue.retryableCount,
+          lastSuccessfulSyncAt: mapping.lastSuccessfulSyncAt,
         );
       }
       if (mapping.syncRequiresVerification) {
@@ -278,6 +318,9 @@ class DeviceCallLogSyncService {
           officeSimState: officeSim.state,
           officeSimMessage: 'The Office SIM must be re-verified before sync.',
           syncStatus: mapping.syncStatus,
+          pendingSyncCount: queue.count,
+          retryablePending: queue.retryableCount,
+          lastSuccessfulSyncAt: mapping.lastSuccessfulSyncAt,
         );
       }
       if (!mapping.syncActive) {
@@ -287,6 +330,9 @@ class DeviceCallLogSyncService {
               ? 'Mobile call-log sync is paused on this device.'
               : 'Mobile call-log sync is not enabled on this device.',
           syncStatus: mapping.syncStatus,
+          pendingSyncCount: queue.count,
+          retryablePending: queue.retryableCount,
+          lastSuccessfulSyncAt: mapping.lastSuccessfulSyncAt,
         );
       }
 
@@ -298,6 +344,9 @@ class DeviceCallLogSyncService {
               'The call-log sync baseline is missing. Pause and re-enable '
               'sync on this device.',
           syncStatus: mapping.syncStatus,
+          pendingSyncCount: queue.count,
+          retryablePending: queue.retryableCount,
+          lastSuccessfulSyncAt: mapping.lastSuccessfulSyncAt,
         );
       }
       var watermarkDate = mapping.syncWatermarkDateMs ?? baselineDate;
@@ -308,7 +357,6 @@ class DeviceCallLogSyncService {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      final scope = employeeKey.trim().isEmpty ? 'default' : employeeKey.trim();
       final handledKey = '${_skippedKey}_$scope';
       final handled = (prefs.getStringList(handledKey) ?? const <String>[])
           .toSet();
@@ -319,208 +367,282 @@ class DeviceCallLogSyncService {
       var skippedPersonal = 0;
       var skippedMissingIdentity = 0;
       var skippedUnknownDirection = 0;
-      var hadFailure = false;
+      var failureRetryable = false;
+      String? failureMessage;
+      DateTime? lastSuccessfulSyncAt = mapping.lastSuccessfulSyncAt;
       final consented = autoUploadRecordings
           ? await RecordingConsentService.hasConsent(scope)
           : false;
+
+      Future<Map<String, dynamic>?> uploadEntry(DeviceCallLogEntry entry) {
+        final entryIdentity = entry.simIdentity ?? entry.simAccountId;
+        return repository.logManualCall(
+          customerPhone: entry.phone,
+          callStatus: entry.status,
+          durationSeconds: entry.durationSeconds,
+          notes:
+              'Mobile SIM ${entry.direction.toLowerCase()} call synced from '
+              'the device call history.',
+          clientCallId: entry.nativeReference,
+          callDirection: entry.direction,
+          startedAt: entry.startedAt,
+          endedAt: entry.endedAt,
+          simAccountId: entryIdentity,
+          simSubscriptionId: entry.simSubscriptionId,
+          simSlot: entry.simSlotIndex,
+          simLabel: entry.simCarrierName,
+          callSource: 'MOBILE_SIM',
+          nativeCallReference: entry.nativeReference,
+          syncOrigin: 'HISTORY_SYNC',
+          nativeCallDateMs: entry.dateMillis,
+          nativeCallId: entry.nativeCallLogId,
+        );
+      }
+
+      Future<void> confirmEntry(
+        DeviceCallLogEntry entry,
+        Map<String, dynamic>? response,
+      ) async {
+        synced += 1;
+        debugPrint(
+          '[CallDirection] Saved row id=${_int(response?['id']) ?? "-"} '
+          'direction=${(response?['call_direction'] ?? response?['direction'] ?? "-")}',
+        );
+        // A row leaves the queue only after the backend has answered. The
+        // handled set is written first so a crash between the two writes
+        // cannot cause a duplicate scan; a retry is idempotent anyway.
+        await markHandled(entry.nativeReference, employeeKey: scope);
+        await queue.removeByReference(entry.nativeReference);
+
+        final callId = _int(response?['id']);
+        final hasRecording = (response?['recording_url'] ?? '')
+            .toString()
+            .trim()
+            .isNotEmpty;
+        final started = entry.startedDateTime;
+        // Recording discovery runs only for a row already proven to be after
+        // the baseline and on the Office SIM, so a historical or personal-SIM
+        // recording can never be uploaded.
+        if (consented &&
+            callId != null &&
+            !hasRecording &&
+            entry.durationSeconds > 0 &&
+            started != null) {
+          try {
+            final entryIdentity = entry.simIdentity ?? entry.simAccountId;
+            final match = await MobileCallRecordingManager.findRecordingForCall(
+              phone: entry.phone,
+              startedAt: started,
+              endedAt: entry.endedDateTime,
+              durationSeconds: entry.durationSeconds,
+            );
+            if (match != null) {
+              final outcome = await MobileCallRecordingManager.upload(
+                callId: callId,
+                recording: match,
+                consent: true,
+                callDurationSeconds: entry.durationSeconds,
+                simAccountId: entryIdentity,
+                simSubscriptionId: entry.simSubscriptionId,
+              );
+              if (outcome == RecordingUploadOutcome.uploaded ||
+                  outcome == RecordingUploadOutcome.duplicate) {
+                recordings += 1;
+              }
+            }
+          } catch (_) {
+            // No accessible/unambiguous recording: keep "Unavailable".
+          }
+        }
+      }
+
+      // Retry calls that were read in an earlier pass but never confirmed by
+      // the backend. They are drained before new rows so a process death or
+      // offline period cannot lose call metadata.
+      var scanBlocked = false;
+      for (final pending in queue.entries) {
+        if (!forceRetryPending && !pending.retryable) continue;
+        final entry = DeviceCallLogEntry.fromMap(pending.row);
+        if (!entry.isAfterBaseline(
+          baselineDateMs: baselineDate,
+          baselineId: baselineId,
+        )) {
+          // A fresh verification baseline intentionally excludes older calls.
+          await queue.remove(pending);
+          continue;
+        }
+        if (handled.contains(entry.nativeReference)) {
+          await queue.remove(pending);
+          continue;
+        }
+        if (!entry.isUsable) {
+          await queue.remove(pending);
+          continue;
+        }
+        try {
+          final response = await uploadEntry(entry);
+          await confirmEntry(entry, response);
+        } catch (error) {
+          final retryable = isRetryableSyncError(error);
+          failureMessage = error.toString();
+          failureRetryable = failureRetryable || retryable;
+          await queue.markFailure(pending, error, retryable: retryable);
+          debugPrint(
+            '[CallDirection] Pending sync retry failed for '
+            'nativeId=${entry.nativeReference}: $error',
+          );
+          if (retryable) {
+            scanBlocked = true;
+            break;
+          }
+        }
+      }
 
       var cursorDate = watermarkDate;
       var cursorId = watermarkId;
       var maxDate = watermarkDate;
       var maxId = watermarkId;
       var firstPage = true;
+      var scanFailed = false;
 
-      while (true) {
-        final page = await MobileSimCallService.getDeviceCallsIncremental(
-          afterDateMillis: cursorDate,
-          afterId: cursorId,
-          graceMillis: firstPage ? _lateArrivalGraceMs : 0,
-          limit: _pageSize,
-        );
-        if (page.rows.isEmpty) break;
-
-        for (final raw in page.rows) {
-          final entry = DeviceCallLogEntry.fromMap(raw);
-          final entryDate = entry.dateMillis;
-          final entryId = entry.nativeCallLogId;
-          if (entryDate != null &&
-              entryId != null &&
-              _cursorAfter(entryDate, entryId, maxDate, maxId)) {
-            maxDate = entryDate;
-            maxId = entryId;
-          }
-
-          // Only calls created after the activation baseline are eligible.
-          // This is the guard that prevents a historical import on every
-          // launch, enable, resume or app update.
-          if (!entry.isAfterBaseline(
-            baselineDateMs: baselineDate,
-            baselineId: baselineId,
-          )) {
-            if (entry.nativeReference.trim().isNotEmpty) {
-              debugPrint(
-                '[CallDirection] Skipped pre-baseline call: '
-                'nativeId=${entry.nativeReference}.',
-              );
-            }
-            continue;
-          }
-          if (handled.contains(entry.nativeReference)) continue;
-
-          if (!entry.isUsable) {
-            if (entry.nativeReference.trim().isNotEmpty &&
-                entry.phone.trim().isNotEmpty) {
-              skippedUnknownDirection += 1;
-              debugPrint(
-                '[CallDirection] Skipped device call: Android call type is '
-                'unknown, direction not inferred.',
-              );
-            }
-            continue;
-          }
-
-          final entryIdentity = entry.simIdentity ?? entry.simAccountId;
-
-          // A configured Office SIM is mandatory for history sync. Missing or
-          // unknown SIM identity is excluded, never guessed.
-          if (!entry.hasSimIdentity) {
-            skippedMissingIdentity += 1;
-            debugPrint(
-              '[OfficeSIM] Skipped device call: SIM identity missing.',
-            );
-            continue;
-          }
-          final isOfficeCall = OfficeSimService.callMatches(
-            mapping,
-            subscriptionId: entry.simSubscriptionId,
-            simAccountId: entryIdentity,
+      if (!scanBlocked) {
+        while (true) {
+          final page = await MobileSimCallService.getDeviceCallsIncremental(
+            afterDateMillis: cursorDate,
+            afterId: cursorId,
+            graceMillis: firstPage ? _lateArrivalGraceMs : 0,
+            limit: _pageSize,
           );
-          if (!isOfficeCall) {
-            skippedPersonal += 1;
-            debugPrint(
-              '[OfficeSIM] Skipped device call: handled by a non-office SIM.',
-            );
-            continue;
-          }
+          if (page.rows.isEmpty) break;
 
-          debugPrint(
-            '[CallDirection] Sync row nativeId=${entry.nativeReference} '
-            'androidType=${entry.androidCallType} '
-            'phoneAccount=${entry.simAccountId ?? "-"} '
-            'subId=${entry.simSubscriptionId ?? "-"} '
-            'nativeDirection=${entry.nativeDirection.isEmpty ? "-" : entry.nativeDirection} '
-            'payloadDirection=${entry.direction}',
-          );
+          var pageFailed = false;
+          for (final raw in page.rows) {
+            final entry = DeviceCallLogEntry.fromMap(raw);
+            final entryDate = entry.dateMillis;
+            final entryId = entry.nativeCallLogId;
+            if (entryDate != null &&
+                entryId != null &&
+                _cursorAfter(entryDate, entryId, maxDate, maxId)) {
+              maxDate = entryDate;
+              maxId = entryId;
+            }
 
-          try {
-            final response = await repository.logManualCall(
-              customerPhone: entry.phone,
-              callStatus: entry.status,
-              durationSeconds: entry.durationSeconds,
-              notes:
-                  'Mobile SIM ${entry.direction.toLowerCase()} call synced from '
-                  'the device call history.',
-              clientCallId: entry.nativeReference,
-              callDirection: entry.direction,
-              startedAt: entry.startedAt,
-              endedAt: entry.endedAt,
-              simAccountId: entryIdentity,
-              simSubscriptionId: entry.simSubscriptionId,
-              simSlot: entry.simSlotIndex,
-              simLabel: entry.simCarrierName,
-              callSource: 'MOBILE_SIM',
-              nativeCallReference: entry.nativeReference,
-              syncOrigin: 'HISTORY_SYNC',
-              nativeCallDateMs: entry.dateMillis,
-              nativeCallId: entry.nativeCallLogId,
-            );
-            synced += 1;
-            debugPrint(
-              '[CallDirection] Saved row id=${_int(response?['id']) ?? "-"} '
-              'direction=${(response?['call_direction'] ?? response?['direction'] ?? "-")}',
-            );
-            await markHandled(entry.nativeReference, employeeKey: scope);
-
-            final callId = _int(response?['id']);
-            final hasRecording = (response?['recording_url'] ?? '')
-                .toString()
-                .trim()
-                .isNotEmpty;
-            final started = entry.startedDateTime;
-            // Recording discovery runs only for a row already proven to be
-            // after the baseline and on the Office SIM, so a historical or
-            // personal-SIM recording can never be uploaded.
-            if (consented &&
-                callId != null &&
-                !hasRecording &&
-                entry.durationSeconds > 0 &&
-                started != null) {
-              try {
-                final match =
-                    await MobileCallRecordingManager.findRecordingForCall(
-                      phone: entry.phone,
-                      startedAt: started,
-                      endedAt: entry.endedDateTime,
-                      durationSeconds: entry.durationSeconds,
-                    );
-                if (match != null) {
-                  final outcome = await MobileCallRecordingManager.upload(
-                    callId: callId,
-                    recording: match,
-                    consent: true,
-                    callDurationSeconds: entry.durationSeconds,
-                    simAccountId: entryIdentity,
-                    simSubscriptionId: entry.simSubscriptionId,
-                  );
-                  if (outcome == RecordingUploadOutcome.uploaded ||
-                      outcome == RecordingUploadOutcome.duplicate) {
-                    recordings += 1;
-                  }
-                }
-              } catch (_) {
-                // No accessible/unambiguous recording: keep "Unavailable".
+            // Only calls created after the activation baseline are eligible.
+            // This is the guard that prevents a historical import on every
+            // launch, enable, resume or app update.
+            if (!entry.isAfterBaseline(
+              baselineDateMs: baselineDate,
+              baselineId: baselineId,
+            )) {
+              if (entry.nativeReference.trim().isNotEmpty) {
+                debugPrint(
+                  '[CallDirection] Skipped pre-baseline call: '
+                  'nativeId=${entry.nativeReference}.',
+                );
               }
+              continue;
             }
-          } catch (error) {
-            // Keep this row unhandled so the next launch retries it. The
-            // backend watermark must not move past a failed row.
-            hadFailure = true;
-            debugPrint(
-              '[CallDirection] Sync failed for '
-              'nativeId=${entry.nativeReference} '
-              'direction=${entry.direction}: $error',
+            if (handled.contains(entry.nativeReference)) continue;
+            if (queue.contains(entry.nativeReference)) continue;
+
+            if (!entry.isUsable) {
+              if (entry.nativeReference.trim().isNotEmpty &&
+                  entry.phone.trim().isNotEmpty) {
+                skippedUnknownDirection += 1;
+                debugPrint(
+                  '[CallDirection] Skipped device call: Android call type is '
+                  'unknown, direction not inferred.',
+                );
+              }
+              continue;
+            }
+
+            // A configured Office SIM is mandatory for history sync. Missing
+            // or unknown SIM identity is excluded, never guessed.
+            if (!entry.hasSimIdentity) {
+              skippedMissingIdentity += 1;
+              debugPrint(
+                '[OfficeSIM] Skipped device call: SIM identity missing.',
+              );
+              continue;
+            }
+            final entryIdentity = entry.simIdentity ?? entry.simAccountId;
+            final isOfficeCall = OfficeSimService.callMatches(
+              mapping,
+              subscriptionId: entry.simSubscriptionId,
+              simAccountId: entryIdentity,
             );
+            if (!isOfficeCall) {
+              skippedPersonal += 1;
+              debugPrint(
+                '[OfficeSIM] Skipped device call: handled by a non-office SIM.',
+              );
+              continue;
+            }
+
+            debugPrint(
+              '[CallDirection] Sync row nativeId=${entry.nativeReference} '
+              'androidType=${entry.androidCallType} '
+              'phoneAccount=${entry.simAccountId ?? "-"} '
+              'subId=${entry.simSubscriptionId ?? "-"} '
+              'nativeDirection=${entry.nativeDirection.isEmpty ? "-" : entry.nativeDirection} '
+              'payloadDirection=${entry.direction}',
+            );
+
+            // Persist the native row before the network call. If the process
+            // dies during upload the next engine pass retries this exact id.
+            final queued = await queue.enqueue(raw);
+            try {
+              final response = await uploadEntry(entry);
+              await confirmEntry(entry, response);
+            } catch (error) {
+              final retryable = isRetryableSyncError(error);
+              failureMessage = error.toString();
+              failureRetryable = failureRetryable || retryable;
+              if (queued != null) {
+                await queue.markFailure(queued, error, retryable: retryable);
+              }
+              debugPrint(
+                '[CallDirection] Sync failed for '
+                'nativeId=${entry.nativeReference} '
+                'direction=${entry.direction}: $error',
+              );
+              scanFailed = true;
+              pageFailed = true;
+              break;
+            }
+          }
+
+          if (pageFailed) break;
+
+          final last = page.rows.last;
+          final lastDate = _int(last['dateMillis']);
+          final lastId = _int(last['deviceCallLogId']);
+          if (lastDate == null || lastId == null) break;
+          // The grace window may return a first page whose last row is older
+          // than the watermark; follow it once so no late-arriving row is
+          // skipped. After that the cursor must strictly advance.
+          if (!firstPage &&
+              !_cursorAfter(lastDate, lastId, cursorDate, cursorId)) {
             break;
           }
+          cursorDate = lastDate;
+          cursorId = lastId;
+          if (!page.hasMore) break;
+          firstPage = false;
         }
-
-        if (hadFailure) break;
-
-        final last = page.rows.last;
-        final lastDate = _int(last['dateMillis']);
-        final lastId = _int(last['deviceCallLogId']);
-        if (lastDate == null || lastId == null) break;
-        // The grace window may return a first page whose last row is older than
-        // the watermark; follow it once so no late-arriving row is skipped.
-        // After that the cursor must strictly advance.
-        if (!firstPage &&
-            !_cursorAfter(lastDate, lastId, cursorDate, cursorId)) {
-          break;
-        }
-        cursorDate = lastDate;
-        cursorId = lastId;
-        if (!page.hasMore) break;
-        firstPage = false;
       }
 
-      if (!hadFailure) {
-        // Persist the high-water mark only after the whole pass succeeded.
-        // Re-reporting an unchanged watermark still records last sync time.
+      // The watermark may only move once every eligible row it covers was
+      // confirmed. A pending retry therefore blocks advancement, so a later
+      // pass can never skip an older unsynced call.
+      if (!scanFailed && !scanBlocked && queue.count == 0) {
         try {
-          await OfficeSimService.reportSyncProgress(
+          final updated = await OfficeSimService.reportSyncProgress(
             watermarkDateMs: maxDate,
             watermarkId: maxId,
           );
+          lastSuccessfulSyncAt = updated.lastSuccessfulSyncAt;
         } catch (error) {
           debugPrint(
             '[CallDirection] Could not persist sync watermark yet: $error',
@@ -528,12 +650,13 @@ class DeviceCallLogSyncService {
         }
       }
 
-      if (synced > 0) {
+      if (synced > 0 && callsProvider != null) {
         await callsProvider.fetchCalls(showLoading: false);
       }
       return DeviceCallLogSyncResult(
         synced: synced,
         recordingsUploaded: recordings,
+        error: failureMessage,
         officeSimState: officeSim.state,
         skippedPersonalSim: skippedPersonal,
         skippedMissingIdentity: skippedMissingIdentity,
@@ -542,9 +665,18 @@ class DeviceCallLogSyncService {
         syncStatus: mapping.syncStatus,
         syncedUpToDateMs: maxDate,
         syncedUpToId: maxId,
+        pendingSyncCount: queue.count,
+        retryablePending: queue.retryableCount,
+        retryableFailure: failureRetryable,
+        lastSuccessfulSyncAt: lastSuccessfulSyncAt,
       );
     } catch (error) {
-      return DeviceCallLogSyncResult(error: error.toString());
+      return DeviceCallLogSyncResult(
+        error: error.toString(),
+        retryableFailure: isRetryableSyncError(error),
+        pendingSyncCount: queue.count,
+        retryablePending: queue.retryableCount,
+      );
     } finally {
       _running = false;
     }
@@ -745,3 +877,19 @@ int? _int(dynamic value) {
 
 bool _cursorAfter(int date, int id, int otherDate, int otherId) =>
     date > otherDate || (date == otherDate && id > otherId);
+
+/// Network, timeout, expired-session, throttling and server failures are worth
+/// retrying automatically. Validation/forbidden business errors are kept in the
+/// queue but are not retried every 15 minutes; a manual sync can retry them
+/// after the employee corrects the underlying issue.
+bool isRetryableSyncError(Object error) {
+  if (error is NetworkException || error is TimeoutException) return true;
+  if (error is ApiException) {
+    final code = error.statusCode;
+    if (code == null) return true;
+    if (code == 401 || code == 403 || code == 408 || code == 425) return true;
+    if (code == 429 || code >= 500) return true;
+    return false;
+  }
+  return true;
+}

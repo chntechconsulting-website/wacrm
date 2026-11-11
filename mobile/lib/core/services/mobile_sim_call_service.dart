@@ -434,6 +434,38 @@ class MobileSimCallService {
     await _channel.invokeMethod<bool>('openAppSettings');
   }
 
+  /// True when Android already allows this app to run background work without
+  /// battery-optimization restrictions. Returns true when the OS cannot report
+  /// the state, so the UI does not nag unnecessarily.
+  static Future<bool> isIgnoringBatteryOptimizations() async {
+    try {
+      final response = await _channel.invokeMethod<bool>(
+        'isIgnoringBatteryOptimizations',
+      );
+      return response ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Opens the system battery-optimization list. WACRM never requests a
+  /// broad exemption silently; the employee chooses it in Android settings.
+  static Future<bool> openBatteryOptimizationSettings() async {
+    try {
+      final response = await _channel.invokeMethod<bool>(
+        'openBatteryOptimizationSettings',
+      );
+      return response ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Re-arms the native periodic worker and requests one immediate pass.
+  static Future<void> scheduleAutomaticSync() async {
+    await _channel.invokeMethod<bool>('scheduleAutomaticSync');
+  }
+
   static Future<Map<String, dynamic>> startCall({
     required String phone,
     required String callId,

@@ -3,14 +3,19 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/network/api_exceptions.dart';
+import '../../../core/services/automatic_call_sync_service.dart';
 import '../../../core/services/device_call_log_sync_service.dart';
 import '../../../core/services/mobile_sim_call_service.dart';
 import '../../../core/services/office_sim_service.dart';
+import '../../../core/services/pending_call_sync_queue.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/wacrm_button.dart';
+import '../../auth/providers/auth_provider.dart';
+import '../../calls/providers/calls_provider.dart';
 
 /// Lets an employee register the SIM card that belongs to the company.
 ///
@@ -24,7 +29,8 @@ class OfficeSimSetupScreen extends StatefulWidget {
   State<OfficeSimSetupScreen> createState() => _OfficeSimSetupScreenState();
 }
 
-class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
+class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen>
+    with WidgetsBindingObserver {
   bool _loading = true;
   bool _saving = false;
   bool _syncBusy = false;
@@ -34,13 +40,45 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
   List<SimAccount> _sims = const [];
   OfficeSimMapping? _mapping;
   int? _selectedSubscriptionId;
+  int _pendingSyncCount = 0;
+  bool? _ignoringBatteryOptimizations;
 
   bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+
+  String get _employeeKey =>
+      context.read<AuthProvider>().currentUser?.id.toString() ?? 'default';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshAutomaticStatus();
+    }
+  }
+
+  Future<void> _refreshAutomaticStatus() async {
+    if (!_isAndroid || !mounted) return;
+    final employeeKey = _employeeKey;
+    final pending = await PendingCallSyncQueue.pendingCount(employeeKey);
+    final ignoringBattery =
+        await MobileSimCallService.isIgnoringBatteryOptimizations();
+    if (!mounted) return;
+    setState(() {
+      _pendingSyncCount = pending;
+      _ignoringBatteryOptimizations = ignoringBattery;
+    });
   }
 
   Future<void> _load({bool forceMapping = false}) async {
@@ -56,6 +94,7 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
       _loading = true;
       _error = null;
     });
+    final employeeKey = _employeeKey;
     try {
       final permission = await MobileSimCallService.permissionStatus();
       var sims = const <SimAccount>[];
@@ -63,6 +102,9 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
         sims = await MobileSimCallService.getSimAccounts();
       }
       final mapping = await OfficeSimService.fetch(force: forceMapping);
+      final pending = await PendingCallSyncQueue.pendingCount(employeeKey);
+      final ignoringBattery =
+          await MobileSimCallService.isIgnoringBatteryOptimizations();
       int? selected = mapping?.subscriptionId;
       if (selected == null && mapping != null) {
         final matched = OfficeSimService.matchSim(mapping, sims);
@@ -74,6 +116,8 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
         _sims = sims;
         _mapping = mapping;
         _selectedSubscriptionId = selected;
+        _pendingSyncCount = pending;
+        _ignoringBatteryOptimizations = ignoringBattery;
         _loading = false;
       });
     } catch (error) {
@@ -231,6 +275,8 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
         _syncBusy = false;
         _permission = permission;
       });
+      await AutomaticCallSyncService.scheduleOneOffSync();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -254,6 +300,100 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
         _error = 'Unable to enable call-log sync: $error';
       });
     }
+  }
+
+  /// Manual fallback that uses the exact same queue and upload pipeline as
+  /// the native background worker. It also retries permanently-failed queue
+  /// entries that automatic passes leave alone.
+  Future<void> _syncNow() async {
+    if (_syncBusy) return;
+    final callsProvider = context.read<CallsProvider>();
+    setState(() {
+      _syncBusy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      var permission = await MobileSimCallService.permissionStatus();
+      if (!permission.readCallLog) {
+        permission = await MobileSimCallService.requestPermissions();
+      }
+      if (!permission.readCallLog) {
+        if (!mounted) return;
+        setState(() {
+          _permission = permission;
+          _syncBusy = false;
+          _notice =
+              'Call-log access is required to synchronize calls. Allow it in '
+              'Android settings, then try again.';
+        });
+        await MobileSimCallService.openAppSettings();
+        return;
+      }
+
+      final employeeKey = _employeeKey;
+      final result = await DeviceCallLogSyncService.sync(
+        callsProvider,
+        employeeKey: employeeKey,
+        forceRetryPending: true,
+      );
+      final mapping = await OfficeSimService.fetch(force: true);
+      final pending = await PendingCallSyncQueue.pendingCount(employeeKey);
+      final ignoringBattery =
+          await MobileSimCallService.isIgnoringBatteryOptimizations();
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _permission = permission;
+        _pendingSyncCount = pending;
+        _ignoringBatteryOptimizations = ignoringBattery;
+        if (mapping != null) _mapping = mapping;
+        if (result.error != null && result.synced == 0) {
+          _error = result.error;
+        }
+      });
+
+      if (result.shouldRetry) {
+        await AutomaticCallSyncService.scheduleOneOffSync();
+      }
+      if (!mounted) return;
+      final message = result.synced > 0
+          ? '${result.synced} call(s) synced.'
+          : pending > 0
+          ? '$pending call(s) are still waiting for CRM confirmation.'
+          : 'No new calls to sync.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: result.synced > 0
+              ? AppColors.success
+              : AppColors.warning,
+        ),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _error = error.message;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _syncBusy = false;
+        _error = 'Unable to sync call logs: $error';
+      });
+    }
+  }
+
+  Future<void> _openBatteryOptimizationSettings() async {
+    await MobileSimCallService.openBatteryOptimizationSettings();
+    if (!mounted) return;
+    setState(() {
+      _notice =
+          'Set WACRM to Unrestricted / allow background activity, then return '
+          'here. Samsung, Vivo and Oppo may also require Auto-start or '
+          'Background app refresh to be enabled.';
+    });
   }
 
   Future<void> _pauseSync() async {
@@ -339,9 +479,18 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
                 _buildPermissionCard()
               else ...[
                 _buildMappingStatus(),
+                if (_permission != null && !_permission!.readCallLog) ...[
+                  const SizedBox(height: 12),
+                  _buildCallLogPermissionCard(),
+                ],
                 if (_mapping != null) ...[
                   const SizedBox(height: 16),
                   _buildSyncCard(_mapping!),
+                ],
+                if (_mapping?.syncActive == true &&
+                    _ignoringBatteryOptimizations == false) ...[
+                  const SizedBox(height: 16),
+                  _buildBatteryCard(),
                 ],
                 const SizedBox(height: 16),
                 _buildSimList(),
@@ -468,6 +617,125 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
             text: 'Allow phone access',
             icon: Icons.phone_android_rounded,
             onPressed: _requestPermission,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCallLogPermissionCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.assignment_late_outlined,
+                size: 18,
+                color: AppColors.warning,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Call-log access is off',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textMain,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Android needs call-log access before incoming, outgoing and '
+            'missed device calls can be synchronized automatically. WACRM '
+            'only reads the phone call log; it never deletes it.',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.4,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: WacrmButton(
+                  text: 'Allow call-log access',
+                  icon: Icons.phone_android_rounded,
+                  onPressed: _requestPermission,
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: MobileSimCallService.openAppSettings,
+                child: const Text('App settings'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBatteryCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.battery_alert_rounded,
+                size: 18,
+                color: AppColors.warning,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Keep background sync reliable',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textMain,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Android battery optimization can delay automatic sync after a '
+            'call. Allow WACRM to run in the background. On Samsung enable '
+            'Unrestricted battery usage; on Vivo/Oppo also allow Auto-start '
+            'and Background app refresh. If Android force-stops WACRM, '
+            'automatic sync resumes the next time the app is opened.',
+            style: TextStyle(
+              fontSize: 11.5,
+              height: 1.45,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _openBatteryOptimizationSettings,
+            icon: const Icon(Icons.settings_rounded, size: 18),
+            label: const Text('Open battery settings'),
           ),
         ],
       ),
@@ -602,7 +870,9 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
           const Text(
             'Enabling sync captures the current Android call log as a '
             'baseline. Calls from before that moment, including calls made '
-            'while sync was paused, are never imported.',
+            'while sync was paused, are never imported. While sync is active, '
+            'new calls are uploaded automatically in the background after they '
+            'end — no need to open this screen.',
             style: TextStyle(
               fontSize: 11.5,
               height: 1.4,
@@ -614,11 +884,18 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
               'Activated',
               DateFormatter.formatDateTime(mapping.syncActivatedAt),
             ),
-          if (mapping.lastSuccessfulSyncAt != null)
-            _buildDetailRow(
-              'Last sync',
-              DateFormatter.formatDateTime(mapping.lastSuccessfulSyncAt),
-            ),
+          _buildDetailRow(
+            'Last sync',
+            mapping.lastSuccessfulSyncAt != null
+                ? DateFormatter.formatDateTime(mapping.lastSuccessfulSyncAt)
+                : 'Not yet',
+          ),
+          _buildDetailRow(
+            'Pending sync',
+            _pendingSyncCount == 0
+                ? 'All calls confirmed'
+                : '$_pendingSyncCount call(s) waiting',
+          ),
           if (mapping.syncBaselineDateMs != null &&
               mapping.syncBaselineDateMs! > 0)
             _buildDetailRow(
@@ -639,20 +916,18 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
               ),
             ),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              if (canEnable)
+          if (mapping.syncActive)
+            Row(
+              children: [
                 Expanded(
                   child: WacrmButton(
-                    text: mapping.syncPaused ? 'Resume sync' : 'Enable sync',
-                    icon: Icons.play_arrow_rounded,
+                    text: 'Sync now',
+                    icon: Icons.sync_rounded,
                     isLoading: _syncBusy,
-                    onPressed: _syncBusy
-                        ? null
-                        : () => _startSync(resume: mapping.syncPaused),
+                    onPressed: _syncBusy ? null : _syncNow,
                   ),
-                )
-              else if (mapping.syncActive)
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: _syncBusy ? null : _pauseSync,
@@ -660,8 +935,17 @@ class _OfficeSimSetupScreenState extends State<OfficeSimSetupScreen> {
                     label: const Text('Pause sync'),
                   ),
                 ),
-            ],
-          ),
+              ],
+            )
+          else if (canEnable)
+            WacrmButton(
+              text: mapping.syncPaused ? 'Resume sync' : 'Enable sync',
+              icon: Icons.play_arrow_rounded,
+              isLoading: _syncBusy,
+              onPressed: _syncBusy
+                  ? null
+                  : () => _startSync(resume: mapping.syncPaused),
+            ),
         ],
       ),
     );

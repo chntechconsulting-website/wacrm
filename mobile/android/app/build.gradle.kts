@@ -34,6 +34,12 @@ kotlin {
     }
 }
 
+dependencies {
+    // Persistent background call-log synchronization. WorkManager stores the
+    // unique periodic request across process death and reboots.
+    implementation("androidx.work:work-runtime:2.10.1")
+}
+
 flutter {
     source = "../.."
 }
