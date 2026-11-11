@@ -37,6 +37,7 @@ from models.finance import Payment
 from models.lead import Lead
 from models.quotation import Quotation
 from models.user import User
+from models.workflow import FinanceHandoff
 from routers.employee_monitoring import get_monitoring_overview
 from routers.reports import (
     dashboard_stats,
@@ -611,6 +612,118 @@ class SalesKpiConsistencyTests(unittest.TestCase):
         )
         self.assertEqual(sales_b_summary["converted_count"], 1)
         self.assertEqual(sales_b_summary["total_revenue"], 0.0)
+
+    def test_won_deal_handed_to_support_stays_with_closing_salesperson(self):
+        """Live regression: a won deal whose owner was changed to Support.
+
+        The finance handoff retains the salesperson who closed the deal. Sales
+        reports must keep counting the deal and its paid invoice for that
+        closer instead of dropping it because the lead's current owner sits in
+        the Support department.
+        """
+        support_user, support_emp = self._make_person(
+            "kpi_support", "SUPPORT_EXECUTIVE", "SUPPORT", name="KPI Support"
+        )
+        self.assertIsNotNone(support_user)
+
+        won_lead = Lead(
+            name="KPI Handed Off Deal",
+            phone="9400000005",
+            status="WON",
+            source="Referral",
+            company="KPI Handoff Client",
+            assigned_to=support_emp.id,
+            quotetask_quotation_amount=10000.0,
+            created_at=datetime(2026, 10, 28, 10, 0, 0),
+            updated_at=datetime(2026, 10, 29, 10, 0, 0),
+        )
+        self.db.add(won_lead)
+        self.db.commit()
+        self.db.refresh(won_lead)
+
+        handoff = FinanceHandoff(
+            lead_id=won_lead.id,
+            customer_id=self.customer.id,
+            customer_name=won_lead.name,
+            company_name=won_lead.company,
+            sales_employee_id=self.sales_a_emp.id,
+            sales_employee_name=self.sales_a_emp.name,
+            final_amount=10000.0,
+            paid_amount=10000.0,
+            status="PAID",
+            payment_status="PAID",
+            created_at=datetime(2026, 10, 29, 12, 0, 0),
+        )
+        self.db.add(handoff)
+        self.db.commit()
+
+        handed_off_invoice = Quotation(
+            doc_type="invoice",
+            doc_number="KPI/INV/26/0006",
+            status="issued",
+            payment_status="paid",
+            customer_id=self.customer.id,
+            lead_id=won_lead.id,
+            assigned_to=None,
+            created_by=None,
+            created_by_user_id=None,
+            prepared_by="System Administrator",
+            customer_name=won_lead.name,
+            company_name=won_lead.company,
+            grand_total=10000.0,
+            amount_paid=10000.0,
+            issue_date=datetime(2026, 10, 29, 12, 0, 0),
+            created_at=datetime(2026, 10, 29, 12, 0, 0),
+        )
+        self.db.add(handed_off_invoice)
+        self.db.commit()
+        self.db.refresh(handed_off_invoice)
+
+        company_summary = RevenueService.get_sales_summary(
+            db=self.db,
+            employee_ids_filter=[
+                self.manager_emp.id,
+                self.sales_a_emp.id,
+                self.sales_b_emp.id,
+            ],
+            include_unassigned=True,
+        )
+        self.assertEqual(company_summary["converted_count"], 3)
+        self.assertEqual(company_summary["sales_transactions_count"], 3)
+        self.assertEqual(company_summary["successful_payments_count"], 3)
+        self.assertEqual(company_summary["total_revenue"], 76300.0)
+
+        handed_off_rows = [
+            transaction
+            for transaction in company_summary["transactions"]
+            if transaction.get("lead_id") == won_lead.id
+        ]
+        self.assertEqual(len(handed_off_rows), 1)
+        self.assertEqual(handed_off_rows[0]["invoice_id"], handed_off_invoice.id)
+        self.assertEqual(
+            handed_off_rows[0]["salesperson_id"], self.sales_a_emp.id
+        )
+
+        # The closer keeps credit even though Support currently owns the lead.
+        sales_a_summary = RevenueService.get_sales_summary(
+            db=self.db,
+            employee_ids_filter=[self.sales_a_emp.id],
+            include_unassigned=False,
+        )
+        self.assertEqual(sales_a_summary["converted_count"], 2)
+        self.assertEqual(sales_a_summary["total_revenue"], 35000.0)
+
+        # Support never inherits Sales revenue from an onboarding handover.
+        support_summary = RevenueService.get_sales_summary(
+            db=self.db,
+            employee_ids_filter=[support_emp.id],
+            include_unassigned=False,
+        )
+        self.assertEqual(support_summary["converted_count"], 0)
+        self.assertEqual(support_summary["total_revenue"], 0.0)
+
+        self.assertEqual(self._dashboard(self.admin_user)["converted_leads"], 3)
+        self.assertEqual(self._dashboard(self.sales_a_user)["converted_leads"], 2)
 
 
 if __name__ == "__main__":

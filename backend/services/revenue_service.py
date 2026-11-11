@@ -103,10 +103,17 @@ class RevenueService:
             lead_id = inv.lead_id
             customer_id = inv.customer_id
             lead_obj = db.query(Lead).filter(Lead.id == lead_id).first() if lead_id else None
+            # A won deal is often handed to Support for onboarding, which moves
+            # the lead's current owner out of Sales. The finance handoff keeps
+            # the salesperson who actually closed the deal, so use that for
+            # revenue attribution before the current lead owner.
+            lead_handoff = handoff_by_lead.get(lead_id) if lead_id else None
 
             # Attribute salesperson
             emp_id = None
-            if inv.assigned_to and inv.assigned_to in all_emps:
+            if lead_handoff and lead_handoff.sales_employee_id in all_emps:
+                emp_id = lead_handoff.sales_employee_id
+            elif inv.assigned_to and inv.assigned_to in all_emps:
                 emp_id = inv.assigned_to
             elif inv.created_by and inv.created_by in all_emps:
                 emp_id = inv.created_by
@@ -174,10 +181,16 @@ class RevenueService:
             if not RevenueService._matches_date_filter(dt, start_date, end_date, period_year, period_month, period_type):
                 continue
 
-            # Salesperson
-            emp_id = lead.assigned_to
-            if not emp_id and handoff and handoff.sales_employee_id:
+            # Salesperson. Prefer the closer captured on the finance handoff:
+            # the lead may since have been handed to Support for onboarding,
+            # but the Sales conversion still belongs to the salesperson who won
+            # the deal. Fall back to the current lead owner when no handoff
+            # salesperson is recorded.
+            emp_id = None
+            if handoff and handoff.sales_employee_id in all_emps:
                 emp_id = handoff.sales_employee_id
+            if emp_id is None:
+                emp_id = lead.assigned_to
 
             if salesperson_id and salesperson_id > 0 and emp_id != salesperson_id:
                 continue
