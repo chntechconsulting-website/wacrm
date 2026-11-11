@@ -157,7 +157,11 @@ class RevenueService:
             })
 
             if lead_id:
-                seen_lead_ids.add(lead_id)
+                # A zero-value invoice is not a sale, so it must not hide a
+                # genuine won lead. Only invoices that represent money claim
+                # the lead for deduplication.
+                if amt > 0 or collected > 0:
+                    seen_lead_ids.add(lead_id)
 
         # Step B: Process Won Leads / Finance Handoffs not already counted via confirmed invoice
         for lead in won_leads:
@@ -223,6 +227,87 @@ class RevenueService:
             seen_lead_ids.add(lead.id)
 
         return transactions
+
+    @staticmethod
+    def is_countable_sale(transaction: Dict[str, Any]) -> bool:
+        """Return True when a won transaction counts as a conversion.
+
+        A zero-value paid invoice is not a sale or a payment and must never
+        inflate conversion, transaction or payment counters. Won leads stay
+        countable even when their amount is still unknown, because they are
+        genuine lead conversions rather than billing documents.
+        """
+        if transaction.get("origin") == "LEAD_WON":
+            return True
+        return (
+            float(transaction.get("amount") or 0.0) > 0
+            or float(transaction.get("collected_amount") or 0.0) > 0
+        )
+
+    @staticmethod
+    def get_sales_summary(
+        db: Session,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        period_year: Optional[int] = None,
+        period_month: Optional[int] = None,
+        period_type: str = "monthly",
+        salesperson_id: Optional[int] = None,
+        employee_ids_filter: Optional[List[int]] = None,
+        include_unassigned: bool = False
+    ) -> Dict[str, Any]:
+        """Single source of truth for Sales KPI counts and revenue.
+
+        The same deduplicated transaction set powers the Sales dashboard,
+        Sales Overview, Sales Revenue report and target achievement APIs.
+        ``converted_count`` counts unique won deals (confirmed invoices plus
+        won leads that do not already have an invoice). ``sales_transactions``
+        and payment/revenue totals exclude zero-value documents.
+        """
+        transactions = RevenueService.get_won_sales_transactions(
+            db=db,
+            start_date=start_date,
+            end_date=end_date,
+            period_year=period_year,
+            period_month=period_month,
+            period_type=period_type,
+            salesperson_id=salesperson_id,
+            employee_ids_filter=employee_ids_filter,
+            include_unassigned=include_unassigned,
+        )
+
+        converted_transactions = [
+            transaction
+            for transaction in transactions
+            if RevenueService.is_countable_sale(transaction)
+        ]
+        revenue_transactions = [
+            transaction
+            for transaction in transactions
+            if float(transaction.get("amount") or 0.0) > 0
+            or float(transaction.get("collected_amount") or 0.0) > 0
+        ]
+
+        return {
+            "transactions": transactions,
+            "converted_transactions": converted_transactions,
+            "revenue_transactions": revenue_transactions,
+            "converted_count": len(converted_transactions),
+            "sales_transactions_count": len(revenue_transactions),
+            "successful_payments_count": sum(
+                1
+                for transaction in revenue_transactions
+                if float(transaction.get("collected_amount") or 0.0) > 0
+            ),
+            "total_revenue": sum(
+                float(transaction.get("amount") or 0.0)
+                for transaction in revenue_transactions
+            ),
+            "collected_revenue": sum(
+                float(transaction.get("collected_amount") or 0.0)
+                for transaction in revenue_transactions
+            ),
+        }
 
     @staticmethod
     def _matches_date_filter(

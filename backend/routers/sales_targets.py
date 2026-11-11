@@ -364,7 +364,7 @@ def get_employee_achievements(
 
     # Use Unified RevenueService to compute won sales transactions
     from services.revenue_service import RevenueService
-    won_transactions = RevenueService.get_won_sales_transactions(
+    sales_summary = RevenueService.get_sales_summary(
         db=db,
         period_year=year,
         period_month=month,
@@ -374,7 +374,7 @@ def get_employee_achievements(
 
     # Attribute revenue per employee
     emp_revenue = {e.id: {"revenue": 0.0, "count": 0} for e in active_emps}
-    for t in won_transactions:
+    for t in sales_summary["revenue_transactions"]:
         eid = t.get("salesperson_id")
         if eid and eid in emp_revenue:
             emp_revenue[eid]["revenue"] += t["amount"]
@@ -461,7 +461,7 @@ def get_my_target(
 
     # Calculate actual revenue using Unified RevenueService
     from services.revenue_service import RevenueService
-    my_transactions = RevenueService.get_won_sales_transactions(
+    my_sales = RevenueService.get_sales_summary(
         db=db,
         period_year=year,
         period_month=month,
@@ -469,7 +469,7 @@ def get_my_target(
         employee_ids_filter=[emp.id]
     )
 
-    actual_rev = sum(t["amount"] for t in my_transactions)
+    actual_rev = my_sales["total_revenue"]
     remaining = max(0.0, target_amt - actual_rev)
     ach_pct = round((actual_rev / target_amt * 100), 1) if target_amt > 0 else 0.0
 
@@ -485,7 +485,7 @@ def get_my_target(
         actual_revenue=actual_rev,
         remaining_target=remaining,
         achievement_percentage=ach_pct,
-        confirmed_invoices_count=len(my_transactions)
+        confirmed_invoices_count=my_sales["sales_transactions_count"]
     )
 
 @router.get("/companies-revenue", response_model=List[CompanyRevenueSummary])
@@ -502,13 +502,22 @@ def get_companies_revenue(
     ensure_sales_target_access(current_user, db)
     from services.revenue_service import RevenueService
     allowed_ids = _authorized_sales_employee_ids(current_user, db)
-    won_transactions = RevenueService.get_won_sales_transactions(
+    include_company_scope = (
+        _is_admin_user(current_user, db)
+        or normalize_role(current_user.role) == ROLE_SALES_MANAGER
+    )
+    sales_summary = RevenueService.get_sales_summary(
         db=db,
         employee_ids_filter=allowed_ids,
-        # Admin company-wide revenue must include confirmed invoices that were
-        # recorded without a Sales attribution. Team/own scopes stay restricted.
-        include_unassigned=_is_admin_user(current_user, db),
+        # Company/team views include confirmed invoices that were recorded
+        # without a Sales attribution. An individual's own scope never borrows
+        # unassigned company revenue.
+        include_unassigned=include_company_scope,
     )
+    # Company listings include won leads that have no invoice yet, so a real
+    # conversion is still discoverable. Zero-value invoices are excluded by the
+    # shared summary because they are not sales or payments.
+    won_transactions = sales_summary["converted_transactions"]
 
     active_emps = {
         e.id: e.name

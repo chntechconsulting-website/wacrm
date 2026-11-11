@@ -17,16 +17,33 @@ class SalesOverviewModel {
 
   factory SalesOverviewModel.fromJson(Map<String, dynamic> json) {
     return SalesOverviewModel(
-      totalLeads: json['total_leads'] ?? json['kpis']?['total_leads']?['value'] ?? 0,
-      totalCustomers: json['total_customers'] ?? json['kpis']?['total_customers']?['value'] ?? 0,
-      totalRevenue: (json['total_revenue'] ?? json['kpis']?['total_revenue']?['value'] as num?)?.toDouble() ?? 0.0,
-      conversionRate: (json['conversion_rate'] ?? json['kpis']?['conversion_rate']?['value'] as num?)?.toDouble() ?? 0.0,
-      funnelStages: (json['funnel'] as List? ?? json['sales_funnel'] as List? ?? [])
-          .map((i) => FunnelStageItem.fromJson(i))
-          .toList(),
-      sources: (json['sources'] as List? ?? json['leads_by_source'] as List? ?? [])
-          .map((i) => SourceBreakdownItem.fromJson(i))
-          .toList(),
+      totalLeads:
+          json['total_leads'] ?? json['kpis']?['total_leads']?['value'] ?? 0,
+      // /reports/sales-overview exposes won deals under kpis.won_deals.
+      // total_customers is kept as a fallback for older backend payloads.
+      totalCustomers:
+          json['total_customers'] ??
+          json['kpis']?['total_customers']?['value'] ??
+          json['kpis']?['won_deals']?['value'] ??
+          0,
+      totalRevenue:
+          (json['total_revenue'] ??
+                  json['kpis']?['total_revenue']?['value'] as num?)
+              ?.toDouble() ??
+          0.0,
+      conversionRate:
+          (json['conversion_rate'] ??
+                  json['kpis']?['conversion_rate']?['value'] as num?)
+              ?.toDouble() ??
+          0.0,
+      funnelStages:
+          (json['funnel'] as List? ?? json['sales_funnel'] as List? ?? [])
+              .map((i) => FunnelStageItem.fromJson(i))
+              .toList(),
+      sources:
+          (json['sources'] as List? ?? json['leads_by_source'] as List? ?? [])
+              .map((i) => SourceBreakdownItem.fromJson(i))
+              .toList(),
     );
   }
 }
@@ -36,13 +53,18 @@ class FunnelStageItem {
   final int count;
   final double percentage;
 
-  FunnelStageItem({required this.stage, required this.count, required this.percentage});
+  FunnelStageItem({
+    required this.stage,
+    required this.count,
+    required this.percentage,
+  });
 
   factory FunnelStageItem.fromJson(Map<String, dynamic> json) {
     return FunnelStageItem(
       stage: json['stage'] ?? json['name'] ?? '',
       count: json['count'] ?? json['value'] ?? 0,
-      percentage: (json['percentage'] ?? json['rate'] as num?)?.toDouble() ?? 0.0,
+      percentage:
+          (json['percentage'] ?? json['rate'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }

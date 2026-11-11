@@ -13,7 +13,14 @@ from models.followup import Followup
 from models.monitoring import EmployeeActivityLog, EmployeePresence, FieldVisit, MonitoringSetting
 from services.auth import get_current_user
 from services.permission_service import get_authorized_call_employee_ids
-from services.hierarchy_service import get_authorized_performance_employee_ids, get_department_for_role
+from services.hierarchy_service import (
+    get_authorized_performance_employee_ids,
+    get_department_for_role,
+    normalize_role,
+    ROLE_ADMIN,
+    ROLE_SALES_MANAGER,
+)
+from services.revenue_service import RevenueService
 from routers.ivr import resolve_recording_url
 
 router = APIRouter(prefix="/employee-monitoring", tags=["Employee Monitoring"])
@@ -87,6 +94,28 @@ def get_monitoring_overview(
 
     start_dt, end_dt = get_date_range(date_filter, start_date, end_date)
 
+    # Shared Sales truth for converted counts. Admin/company and Sales Manager
+    # views include confirmed invoices recorded by Finance without a salesperson;
+    # an employee's own view never borrows unassigned company revenue.
+    monitoring_include_unassigned = (
+        authorized_emp_ids is None
+        or normalize_role(current_user.role) in {ROLE_ADMIN, ROLE_SALES_MANAGER}
+    )
+    monitoring_sales = RevenueService.get_sales_summary(
+        db=db,
+        start_date=start_dt,
+        end_date=(end_dt + timedelta(seconds=1)) if end_dt else None,
+        employee_ids_filter=authorized_emp_ids,
+        include_unassigned=monitoring_include_unassigned,
+    )
+    monitoring_emp_converted = {}
+    for transaction in monitoring_sales["converted_transactions"]:
+        transaction_emp_id = transaction.get("salesperson_id")
+        if transaction_emp_id:
+            monitoring_emp_converted[transaction_emp_id] = (
+                monitoring_emp_converted.get(transaction_emp_id, 0) + 1
+            )
+
     emp_q = db.query(Employee).filter(Employee.status == "ACTIVE")
     if authorized_emp_ids is not None:
         emp_q = emp_q.filter(Employee.id.in_(authorized_emp_ids))
@@ -126,7 +155,7 @@ def get_monitoring_overview(
         lead_query = lead_query.filter(Lead.created_at >= start_dt, Lead.created_at <= end_dt)
 
     total_assigned_leads = lead_query.filter(Lead.assigned_to.isnot(None)).count()
-    total_converted_leads = lead_query.filter(Lead.status.in_(["CONVERTED", "WON"])).count()
+    total_converted_leads = monitoring_sales["converted_count"]
 
     # Follow-ups
     followup_query = db.query(Followup)
@@ -176,6 +205,29 @@ def get_monitoring_employees_list(
     employees = query.all()
     five_mins_ago = datetime.utcnow() - timedelta(minutes=5)
     start_dt, end_dt = get_date_range(date_filter)
+
+    # Shared Sales truth for per-employee converted counts. Company/team views
+    # include Finance-recorded invoices without a salesperson; personal scopes
+    # stay strictly limited to their own attributed deals.
+    monitoring_include_unassigned = (
+        authorized_emp_ids is None
+        or normalize_role(current_user.role) in {ROLE_ADMIN, ROLE_SALES_MANAGER}
+    )
+    monitoring_sales = RevenueService.get_sales_summary(
+        db=db,
+        start_date=start_dt,
+        end_date=(end_dt + timedelta(seconds=1)) if end_dt else None,
+        employee_ids_filter=authorized_emp_ids,
+        include_unassigned=monitoring_include_unassigned,
+    )
+    monitoring_emp_converted = {}
+    for transaction in monitoring_sales["converted_transactions"]:
+        transaction_emp_id = transaction.get("salesperson_id")
+        if transaction_emp_id:
+            monitoring_emp_converted[transaction_emp_id] = (
+                monitoring_emp_converted.get(transaction_emp_id, 0) + 1
+            )
+
     result = []
 
     for e in employees:
@@ -183,7 +235,7 @@ def get_monitoring_employees_list(
         assigned = db.query(Lead).filter(Lead.assigned_to == e.id).count()
         contacted = db.query(Lead).filter(Lead.assigned_to == e.id, Lead.status == "CONTACTED").count()
         qualified = db.query(Lead).filter(Lead.assigned_to == e.id, Lead.status == "QUALIFIED").count()
-        converted = db.query(Lead).filter(Lead.assigned_to == e.id, Lead.status.in_(["CONVERTED", "WON"])).count()
+        converted = monitoring_emp_converted.get(e.id, 0)
 
         # Call Metrics from call_logs table
         calls = db.query(CallLog).filter(CallLog.employee_id == e.id)
@@ -644,7 +696,15 @@ def get_employee_detail(
     contacted = lead_query.filter(Lead.status == "CONTACTED").count()
     interested = lead_query.filter(Lead.status == "INTERESTED").count()
     qualified = lead_query.filter(Lead.status == "QUALIFIED").count()
-    converted = lead_query.filter(Lead.status.in_(["CONVERTED", "WON"])).count()
+    employee_sales = RevenueService.get_sales_summary(
+        db=db,
+        start_date=start_dt,
+        end_date=(end_dt + timedelta(seconds=1)) if end_dt else None,
+        salesperson_id=employee_id,
+        employee_ids_filter=[employee_id],
+        include_unassigned=False,
+    )
+    converted = employee_sales["converted_count"]
     lost = lead_query.filter(or_(Lead.status == "LOST", Lead.status == "NOT_INTERESTED", Lead.status == "LOST_LEAD")).count()
     pending_followups = db.query(Followup).filter(Followup.assigned_to == employee_id, Followup.status == "PENDING").count()
 

@@ -31,6 +31,7 @@ from services.hierarchy_service import (
     DEPT_FINANCE,
 )
 from services.finance_service import FinanceService
+from services.revenue_service import RevenueService
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
@@ -502,6 +503,20 @@ def dashboard_stats(
     else:
         lead_query = lead_query.filter(Lead.assigned_to.is_(None))
 
+    # Shared Sales truth for converted/won counts and revenue. Invoices and
+    # won leads are deduplicated by lead, and zero-value documents are ignored.
+    if scope == "own" and current_emp:
+        won_employee_ids = [current_emp.id]
+        won_include_unassigned = False
+    else:
+        won_employee_ids = list(sales_employee_ids)
+        won_include_unassigned = True
+    dashboard_sales = RevenueService.get_sales_summary(
+        db=db,
+        employee_ids_filter=won_employee_ids,
+        include_unassigned=won_include_unassigned,
+    )
+
     # Apply strict permission scope for calls, then intersect with the Sales
     # roster so Support/Finance call logs can never appear here.
     authorized_call_emps = get_authorized_call_employee_ids(current_user, db)
@@ -526,7 +541,7 @@ def dashboard_stats(
     contacted_leads = lead_query.filter(or_(Lead.status == "CONTACTED", Lead.status.ilike("%contact%"))).count()
     followup_leads = lead_query.filter(or_(Lead.status == "FOLLOW_UP", Lead.status == "FOLLOW-UP", Lead.status.ilike("%FOLLOW%"))).count()
     qualified_leads = lead_query.filter(or_(Lead.status == "QUALIFIED", Lead.status == "INTERESTED")).count()
-    converted_leads = lead_query.filter(or_(Lead.status == "CONVERTED", Lead.status == "WON", Lead.status.ilike("%CONVERT%"), Lead.status.ilike("%WON%"))).count()
+    converted_leads = dashboard_sales["converted_count"]
     lost_leads = lead_query.filter(or_(Lead.status == "LOST", Lead.status == "NOT_INTERESTED", Lead.status == "LOST_LEAD", Lead.status.ilike("%LOST%"))).count()
     proposal_leads = lead_query.filter(or_(Lead.status == "PROPOSAL SENT", Lead.status == "DEMO / MEETING", Lead.status.ilike("%PROPOSAL%"))).count()
 
@@ -548,27 +563,29 @@ def dashboard_stats(
     else:
         active_employees = []
     team_performance = []
+    emp_sales_stats = {}
+    for transaction in dashboard_sales["converted_transactions"]:
+        transaction_emp_id = transaction.get("salesperson_id")
+        if transaction_emp_id:
+            bucket = emp_sales_stats.setdefault(
+                transaction_emp_id, {"converted": 0, "revenue": 0.0}
+            )
+            bucket["converted"] += 1
+    for transaction in dashboard_sales["revenue_transactions"]:
+        transaction_emp_id = transaction.get("salesperson_id")
+        if transaction_emp_id:
+            bucket = emp_sales_stats.setdefault(
+                transaction_emp_id, {"converted": 0, "revenue": 0.0}
+            )
+            bucket["revenue"] += float(transaction.get("amount") or 0.0)
+
     for emp in active_employees:
         emp_leads = db.query(Lead).filter(Lead.assigned_to == emp.id).count()
         emp_calls = db.query(CallLog).filter(CallLog.employee_id == emp.id).count()
         emp_followups = db.query(Followup).filter(Followup.assigned_to == emp.id).count()
-        emp_converted = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["CONVERTED", "WON"])).count()
-        
-        # Calculate actual revenue strictly from confirmed eligible invoices attributed to this employee
-        emp_invoices = db.query(Quotation).filter(
-            Quotation.doc_type == "invoice",
-            Quotation.status.in_(["issued", "paid"]),
-            Quotation.payment_status.in_(["paid", "partial"]),
-            Quotation.status != "cancelled",
-            or_(
-                Quotation.assigned_to == emp.id,
-                Quotation.created_by == emp.id,
-                Quotation.prepared_by.ilike(f"%{emp.name}%"),
-                Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == emp.id))
-            )
-        ).all()
-        emp_revenue = sum(float(inv.grand_total or 0.0) for inv in emp_invoices)
-        
+        emp_stats = emp_sales_stats.get(emp.id, {})
+        emp_converted = emp_stats.get("converted", 0)
+        emp_revenue = emp_stats.get("revenue", 0.0)
         team_performance.append({
             "id": emp.id,
             "name": emp.name,
@@ -827,6 +844,36 @@ def sales_overview_report(
     if source and source.strip() and source.lower() not in ["all", "all lead sources"]:
         lead_query = lead_query.filter(Lead.source.ilike(f"%{source.strip()}%"))
 
+    # Shared won-sales summary. This includes confirmed paid invoices even when
+    # they are not linked to a lead, while still deduplicating invoices against
+    # their won lead. Zero-value documents never inflate the counters.
+    if scope == "own" and current_emp:
+        overview_employee_ids = [current_emp.id]
+        overview_include_unassigned = False
+    else:
+        overview_employee_ids = list(sales_employee_ids)
+        overview_include_unassigned = True
+    overview_sales = RevenueService.get_sales_summary(
+        db=db,
+        salesperson_id=salesperson_id if salesperson_id and salesperson_id > 0 else None,
+        employee_ids_filter=overview_employee_ids,
+        include_unassigned=overview_include_unassigned,
+    )
+    overview_converted_transactions = overview_sales["converted_transactions"]
+    overview_revenue_transactions = overview_sales["revenue_transactions"]
+    if source and source.strip() and source.lower() not in ["all", "all lead sources"]:
+        source_needle = source.strip().lower()
+        overview_converted_transactions = [
+            transaction
+            for transaction in overview_converted_transactions
+            if source_needle in (transaction.get("source") or "").lower()
+        ]
+        overview_revenue_transactions = [
+            transaction
+            for transaction in overview_revenue_transactions
+            if source_needle in (transaction.get("source") or "").lower()
+        ]
+
     # Active DB Counts
     db_total_leads = lead_query.count()
     db_contacted = lead_query.filter(or_(
@@ -835,7 +882,7 @@ def sales_overview_report(
     )).count()
     db_interested = lead_query.filter(Lead.status.in_(["INTERESTED", "QUALIFIED", "CONVERTED", "WON"])).count()
     db_qualified = lead_query.filter(Lead.status.in_(["QUALIFIED", "CONVERTED", "WON"])).count()
-    db_won = lead_query.filter(Lead.status.in_(["CONVERTED", "WON"])).count()
+    db_won = len(overview_converted_transactions)
     db_lost = lead_query.filter(Lead.status.in_(["LOST", "NOT_INTERESTED", "LOST_LEAD"])).count()
 
     # 1. Real KPIs from Database
@@ -845,6 +892,18 @@ def sales_overview_report(
     qualified_val = db_qualified
     won_val = db_won
     lost_val = db_lost
+    overview_revenue_val = sum(
+        float(transaction.get("amount") or 0.0)
+        for transaction in overview_revenue_transactions
+    )
+    overview_payments_val = sum(
+        1
+        for transaction in overview_revenue_transactions
+        if float(transaction.get("collected_amount") or 0.0) > 0
+    )
+    overview_conversion_rate = (
+        round((won_val / total_leads_val) * 100, 1) if total_leads_val else 0.0
+    )
 
     kpis = {
         "total_leads": {
@@ -877,6 +936,18 @@ def sales_overview_report(
             "vs_label": "won & converted deals",
             "is_increase": True
         },
+        "total_revenue": {
+            "value": overview_revenue_val,
+            "change": "+0.0%",
+            "vs_label": f"{overview_payments_val} confirmed payments",
+            "is_increase": True
+        },
+        "conversion_rate": {
+            "value": overview_conversion_rate,
+            "change": "+0.0%",
+            "vs_label": "won deals / total leads",
+            "is_increase": True
+        },
         "lost_deals": {
             "value": lost_val,
             "change": "+5.9%",
@@ -899,7 +970,13 @@ def sales_overview_report(
         c_nl = lead_query.filter(Lead.created_at <= d_end).count()
         c_int = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["INTERESTED", "QUALIFIED", "CONVERTED", "WON"])).count()
         c_qual = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["QUALIFIED", "CONVERTED", "WON"])).count()
-        c_won = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["CONVERTED", "WON"])).count()
+        c_won = sum(
+            1
+            for transaction in overview_converted_transactions
+            if not transaction.get("date")
+            or transaction.get("date") == datetime.min
+            or transaction.get("date") <= d_end
+        )
         nl_series.append(c_nl)
         int_series.append(c_int)
         qual_series.append(c_qual)
@@ -1012,25 +1089,27 @@ def sales_overview_report(
         else []
     )
     emp_rev_calc = {}
+    overview_emp_sales = {}
+    for transaction in overview_converted_transactions:
+        transaction_emp_id = transaction.get("salesperson_id")
+        if transaction_emp_id:
+            overview_emp_sales.setdefault(
+                transaction_emp_id, {"won_deals": 0, "revenue": 0.0}
+            )["won_deals"] += 1
+    for transaction in overview_revenue_transactions:
+        transaction_emp_id = transaction.get("salesperson_id")
+        if transaction_emp_id:
+            overview_emp_sales.setdefault(
+                transaction_emp_id, {"won_deals": 0, "revenue": 0.0}
+            )["revenue"] += float(transaction.get("amount") or 0.0)
+
     for emp in active_emps:
         emp_leads = db.query(Lead).filter(Lead.assigned_to == emp.id).count()
-        emp_won = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["WON", "CONVERTED"])).count()
+        emp_stats = overview_emp_sales.get(emp.id, {})
+        emp_won = emp_stats.get("won_deals", 0)
         emp_qual = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["QUALIFIED", "WON", "CONVERTED"])).count()
         emp_contacted = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["ASSIGNED", "CONTACTED", "QUALIFIED", "WON", "CONVERTED"])).count()
-        
-        emp_invoices = db.query(Quotation).filter(
-            Quotation.doc_type == "invoice",
-            Quotation.status.in_(["issued", "paid"]),
-            Quotation.payment_status.in_(["paid", "partial"]),
-            Quotation.status != "cancelled",
-            or_(
-                Quotation.assigned_to == emp.id,
-                Quotation.created_by == emp.id,
-                Quotation.prepared_by.ilike(f"%{emp.name}%"),
-                Quotation.lead_id.in_(db.query(Lead.id).filter(Lead.assigned_to == emp.id))
-            )
-        ).all()
-        emp_rev = sum(float(inv.grand_total or 0.0) for inv in emp_invoices)
+        emp_rev = emp_stats.get("revenue", 0.0)
 
         rate = f"{round((emp_won / emp_leads * 100), 1)}%" if emp_leads > 0 else "0.0%"
         rev_str = f"₹{int(emp_rev):,}" if emp_rev < 100000 else f"₹{round(emp_rev/100000.0, 2)} L"
@@ -1268,8 +1347,7 @@ def sales_revenue_report(
     allowed_emp_ids = list(scoped_emp_ids)
 
     # Use Unified RevenueService for won transactions deduplication
-    from services.revenue_service import RevenueService
-    won_transactions = RevenueService.get_won_sales_transactions(
+    sales_summary = RevenueService.get_sales_summary(
         db=db,
         start_date=s_dt,
         end_date=e_dt,
@@ -1280,6 +1358,8 @@ def sales_revenue_report(
         # reports stay strictly limited to the logged-in salesperson.
         include_unassigned=(scope != "own"),
     )
+    won_transactions = sales_summary["transactions"]
+    revenue_transactions = sales_summary["revenue_transactions"]
 
     all_docs = quote_query.all()
     all_leads = lead_query.all()
@@ -1293,17 +1373,9 @@ def sales_revenue_report(
 
     # 1. Calculate Real Totals strictly from Won Sales Transactions (Deduplicated).
     # Zero-value documents are not revenue and must not inflate the payment count.
-    revenue_transactions = [
-        t for t in won_transactions
-        if float(t.get("amount") or 0.0) > 0
-        or float(t.get("collected_amount") or 0.0) > 0
-    ]
-    total_rev_val = sum(t["amount"] for t in revenue_transactions)
-    paid_rev_val = sum(t["collected_amount"] for t in revenue_transactions)
-    payments_count = sum(
-        1 for t in revenue_transactions
-        if float(t.get("collected_amount") or 0.0) > 0
-    )
+    total_rev_val = sales_summary["total_revenue"]
+    paid_rev_val = sales_summary["collected_revenue"]
+    payments_count = sales_summary["successful_payments_count"]
 
     # Fetch active target from sales_targets table for current period, fallback to employee sum
     from models.sales_target import SalesTarget
@@ -1460,10 +1532,8 @@ def sales_revenue_report(
         if src not in source_stats:
             source_stats[src] = {"leads": 0, "won": 0, "revenue": 0.0}
         source_stats[src]["leads"] += 1
-        if l.status in ["WON", "CONVERTED"]:
-            source_stats[src]["won"] += 1
 
-    for t in won_transactions:
+    for t in revenue_transactions:
         src_raw = (t.get("source") or "Direct").lower()
         if "website" in src_raw:
             src = "Website"
@@ -1480,6 +1550,7 @@ def sales_revenue_report(
 
         if src not in source_stats:
             source_stats[src] = {"leads": 0, "won": 0, "revenue": 0.0}
+        source_stats[src]["won"] += 1
         source_stats[src]["revenue"] += t["amount"]
 
     revenue_by_source = []
