@@ -32,6 +32,13 @@ from services.hierarchy_service import (
 )
 from services.finance_service import FinanceService
 from services.revenue_service import RevenueService
+from services.deal_grouping import (
+    STAGE_NEGOTIATION,
+    STAGE_PROPOSAL,
+    build_deal_groups,
+    document_stage,
+    open_pipeline_groups,
+)
 from services.permission_service import (
     user_has_permission, 
     get_user_view_scope, 
@@ -60,6 +67,36 @@ from services.purchase_details_service import build_support_purchase_details
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 ADMIN_ROLE_NAMES = {"ADMIN", "SUPERADMIN"}
+
+
+def _deal_group_index(deal_groups):
+    """Map document ids and lead ids to their deal group."""
+    by_doc_id = {}
+    by_lead_id = {}
+    for group in deal_groups:
+        for doc_id in group.doc_ids:
+            by_doc_id[doc_id] = group
+        if group.lead_id is not None:
+            by_lead_id.setdefault(group.lead_id, group)
+    return by_doc_id, by_lead_id
+
+
+def _deal_key_for_transaction(transaction, by_doc_id, by_lead_id):
+    """Stable deal identity for a won revenue transaction."""
+    lead_id = transaction.get("lead_id")
+    if lead_id:
+        group = by_lead_id.get(lead_id)
+        if group is not None:
+            return group.key
+    invoice_id = transaction.get("invoice_id")
+    if invoice_id:
+        group = by_doc_id.get(invoice_id)
+        if group is not None:
+            return group.key
+    if lead_id:
+        return f"lead_{lead_id}"
+    return f"invoice_{invoice_id}"
+
 
 def get_employee_for_user(user: User, db: Session) -> Optional[Employee]:
     return db.query(Employee).filter(Employee.user_id == user.id).first()
@@ -995,8 +1032,40 @@ def sales_overview_report(
     # 3. Real Sales Funnel
     pct = lambda num, denom: round((num / denom * 100), 1) if denom > 0 else 0.0
     scoped_quote_query = _scoped_quote_query()
-    quotes_count = scoped_quote_query.count()
-    proforma_count = scoped_quote_query.filter(Quotation.doc_type == "proforma").count()
+    scoped_quote_docs = scoped_quote_query.all()
+    overview_deal_groups = build_deal_groups(scoped_quote_docs)
+    (
+        overview_group_by_doc_id,
+        overview_group_by_lead_id,
+    ) = _deal_group_index(overview_deal_groups)
+    overview_closed_lead_ids = {
+        transaction["lead_id"]
+        for transaction in overview_sales["transactions"]
+        if transaction.get("lead_id")
+    }
+    overview_closed_invoice_ids = {
+        transaction["invoice_id"]
+        for transaction in overview_sales["transactions"]
+        if transaction.get("invoice_id")
+    }
+    overview_pipeline_documents = [
+        group.best_pipeline_document()
+        for group in open_pipeline_groups(
+            overview_deal_groups,
+            overview_closed_lead_ids,
+            overview_closed_invoice_ids,
+        )
+    ]
+    quotes_count = sum(
+        1
+        for doc in overview_pipeline_documents
+        if document_stage(doc) == STAGE_PROPOSAL
+    )
+    proforma_count = sum(
+        1
+        for doc in overview_pipeline_documents
+        if document_stage(doc) == STAGE_NEGOTIATION
+    )
     funnel = [
         {"stage": "New Leads", "count": total_leads_val, "percentage": 100.0, "color": "#2563eb"},
         {"stage": "Contacted", "count": contacted_val, "percentage": pct(contacted_val, total_leads_val), "color": "#06b6d4"},
@@ -1140,39 +1209,64 @@ def sales_overview_report(
             "revenue": sp["revenue"]
         })
 
-    # 8. Real Recent Deals (from Quotation & Won Leads)
-    real_quotes = (
-        scoped_quote_query.order_by(desc(Quotation.created_at)).limit(5).all()
-    )
-    recent_deals = []
-    for q in real_quotes:
-        c_name = q.customer_name or q.company_name or "Customer"
-        d_name = f"{q.doc_number or 'Quotation'} ({q.doc_type.capitalize()})"
-        amt = f"₹{int(q.grand_total or 0):,}"
-        st = "Won" if q.payment_status == "paid" else ("Proposal" if q.doc_type == "quotation" else "Negotiation")
-        recent_deals.append({
-            "customer": c_name,
-            "deal_name": d_name,
-            "amount": amt,
-            "stage": st,
-            "color": "#10b981" if st == "Won" else ("#06b6d4" if st == "Proposal" else "#f59e0b")
-        })
+    # 8. Real Recent Deals (one row per deal, latest stage wins)
+    def _format_amount(amount):
+        return f"₹{int(float(amount or 0)):,}"
 
-    # If fewer than 5 quotes, append won leads
-    if len(recent_deals) < 5:
-        won_leads_list = (
-            lead_query.filter(Lead.status.in_(["WON", "CONVERTED"]))
-            .limit(5 - len(recent_deals))
-            .all()
+    recent_deal_candidates = []
+
+    won_deals_recent = {}
+    for t in sorted(
+        overview_converted_transactions,
+        key=lambda item: item.get("date") or datetime.min,
+        reverse=True,
+    ):
+        deal_key = _deal_key_for_transaction(
+            t, overview_group_by_doc_id, overview_group_by_lead_id
         )
-        for wl in won_leads_list:
-            recent_deals.append({
-                "customer": wl.company or wl.name or "Client",
-                "deal_name": wl.requirement_notes or "Enterprise Growth Deal",
-                "amount": "₹35,000",
+        if deal_key not in won_deals_recent:
+            won_deals_recent[deal_key] = {
+                "customer": t["company_name"] or t["customer_name"] or "Customer",
+                "deal_name": t["deal_name"],
+                "raw_amount": float(t["amount"] or 0.0),
+                "date": t["date"],
+            }
+        else:
+            # Multiple invoices for one deal stay a single recent-deal row.
+            won_deals_recent[deal_key]["raw_amount"] += float(t["amount"] or 0.0)
+
+    for deal in won_deals_recent.values():
+        recent_deal_candidates.append((
+            deal["date"],
+            {
+                "customer": deal["customer"],
+                "deal_name": deal["deal_name"],
+                "amount": _format_amount(deal["raw_amount"]),
                 "stage": "Won",
-                "color": "#10b981"
-            })
+                "color": "#10b981",
+            },
+        ))
+
+    for q in overview_pipeline_documents:
+        stage = document_stage(q)
+        display_stage = (
+            "Proposal" if stage == STAGE_PROPOSAL else "Negotiation"
+        )
+        recent_deal_candidates.append((
+            q.issue_date or q.created_at,
+            {
+                "customer": q.customer_name or q.company_name or "Customer",
+                "deal_name": f"{q.doc_number or 'Quotation'} ({q.doc_type.capitalize()})",
+                "amount": _format_amount(q.grand_total),
+                "stage": display_stage,
+                "color": "#06b6d4" if display_stage == "Proposal" else "#f59e0b",
+            },
+        ))
+
+    recent_deal_candidates.sort(
+        key=lambda item: item[0] or datetime.min, reverse=True
+    )
+    recent_deals = [row for _, row in recent_deal_candidates[:5]]
 
     # 9. Real Upcoming Follow-ups (strictly scoped)
     real_f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id, isouter=True).filter(Followup.status == "Pending")
@@ -1364,12 +1458,36 @@ def sales_revenue_report(
     all_docs = quote_query.all()
     all_leads = lead_query.all()
 
-    # Pipeline Quotations and Proformas for pipeline / proposal tracking ONLY (strictly separated from actual won revenue)
-    pipeline_quotes = [
-        q for q in all_docs
-        if q.doc_type in ["quotation", "proforma"]
-        and q.status != "cancelled"
+    # A deal may have a quotation, a proforma and an invoice. Link those
+    # documents back into one deal so every report counts the deal once, at
+    # its latest stage. Documents without a lead/source-quotation link stay
+    # standalone, keeping genuine separate deals for the same customer apart.
+    deal_groups = build_deal_groups(all_docs)
+    group_by_doc_id, group_by_lead_id = _deal_group_index(deal_groups)
+
+    # Deals that already have a confirmed invoice (or a won lead) are closed.
+    # Their earlier quotations/proformas must not linger in the open pipeline.
+    closed_lead_ids = {
+        transaction["lead_id"]
+        for transaction in sales_summary["transactions"]
+        if transaction.get("lead_id")
+    }
+    closed_invoice_ids = {
+        transaction["invoice_id"]
+        for transaction in sales_summary["transactions"]
+        if transaction.get("invoice_id")
+    }
+
+    # One representative document per open deal: the latest document in the
+    # highest pipeline stage reached by that deal.
+    open_pipeline_deals = [
+        (group, group.best_pipeline_document())
+        for group in open_pipeline_groups(
+            deal_groups, closed_lead_ids, closed_invoice_ids
+        )
     ]
+
+    pipeline_quotes = [representative for _, representative in open_pipeline_deals]
 
     # 1. Calculate Real Totals strictly from Won Sales Transactions (Deduplicated).
     # Zero-value documents are not revenue and must not inflate the payment count.
@@ -1576,8 +1694,16 @@ def sales_revenue_report(
 
     # 5. Deal Status by Revenue
     won_sum = total_rev_val
-    proposal_sum = sum(float(q.grand_total or 0.0) for q in pipeline_quotes if q.doc_type == 'quotation')
-    negotiation_sum = sum(float(q.grand_total or 0.0) for q in pipeline_quotes if q.doc_type == 'proforma')
+    proposal_sum = sum(
+        float(q.grand_total or 0.0)
+        for q in pipeline_quotes
+        if document_stage(q) == STAGE_PROPOSAL
+    )
+    negotiation_sum = sum(
+        float(q.grand_total or 0.0)
+        for q in pipeline_quotes
+        if document_stage(q) == STAGE_NEGOTIATION
+    )
     qualified_sum = round(pipeline_val * 0.25, 2)
     demo_sum = round(pipeline_val * 0.15, 2)
 
@@ -1589,32 +1715,54 @@ def sales_revenue_report(
         {"stage": "Qualification", "amount": format_inr(qualified_sum), "val": round(qualified_sum / 100000.0, 2), "color": "#06b6d4"}
     ]
 
-    # 6. Deal / Revenue Details Table (Won Sales Deals First, followed by pipeline quotes)
-    deals_details = []
+    # 6. Deal / Revenue Details Table (one row per deal, Won deals first)
+    won_rows_by_key = {}
     for t in sorted(revenue_transactions, key=lambda x: x["date"], reverse=True):
-        b_date = t["date"].strftime("%b %d, %Y") if t["date"] and t["date"] != datetime.min else "-"
-        deals_details.append({
-            "id": t["lead_id"] or t["invoice_id"] or 0,
-            "lead_id": t["lead_id"],
-            "invoice_id": t["invoice_id"],
-            "customer": t["company_name"] or t["customer_name"],
-            "deal_name": t["deal_name"],
-            "salesperson": t["salesperson_name"],
-            "amount": f"₹{int(t['amount']):,}",
-            "raw_amount": t["amount"],
-            "status": "Won",
-            "expected_close": b_date,
-            "won_date": b_date,
-            "doc_type": t["doc_type"],
-            "origin": t["origin"]
-        })
+        deal_key = _deal_key_for_transaction(t, group_by_doc_id, group_by_lead_id)
 
-    # Pipeline Quotations / Proformas under negotiation/proposals
-    for q in sorted(pipeline_quotes, key=lambda x: x.created_at or datetime.min, reverse=True):
-        st = "Proposal Sent" if q.doc_type == "quotation" else "Negotiation"
+        row = won_rows_by_key.get(deal_key)
+        if row is None:
+            b_date = (
+                t["date"].strftime("%b %d, %Y")
+                if t["date"] and t["date"] != datetime.min
+                else "-"
+            )
+            won_rows_by_key[deal_key] = {
+                "id": t["lead_id"] or t["invoice_id"] or 0,
+                "lead_id": t["lead_id"],
+                "invoice_id": t["invoice_id"],
+                "invoice_ids": [t["invoice_id"]] if t["invoice_id"] else [],
+                "customer": t["company_name"] or t["customer_name"],
+                "deal_name": t["deal_name"],
+                "salesperson": t["salesperson_name"],
+                "amount": f"₹{int(t['amount']):,}",
+                "raw_amount": float(t["amount"] or 0.0),
+                "status": "Won",
+                "expected_close": b_date,
+                "won_date": b_date,
+                "doc_type": t["doc_type"],
+                "origin": t["origin"],
+            }
+        else:
+            # Multiple invoices for the same deal stay one won row. Their
+            # amounts are added together so reported revenue is unchanged.
+            row["raw_amount"] += float(t["amount"] or 0.0)
+            row["amount"] = f"₹{int(row['raw_amount']):,}"
+            if t["invoice_id"] and t["invoice_id"] not in row["invoice_ids"]:
+                row["invoice_ids"].append(t["invoice_id"])
+                row["invoice_id"] = t["invoice_id"]
+
+    deals_details = list(won_rows_by_key.values())
+
+    # Pipeline Quotations / Proformas under negotiation/proposals, one row per
+    # open deal. Documents belonging to a won deal were already filtered out.
+    for q in sorted(
+        pipeline_quotes, key=lambda x: x.created_at or datetime.min, reverse=True
+    ):
+        st = document_stage(q)
         c_name = q.customer_name or q.company_name or "Valued Customer"
         sp_name = q.prepared_by or (active_emps[0].name if active_emps else "Sales Rep")
-        
+
         if not q.prepared_by and q.lead_id:
             lead_obj = next((l for l in all_leads if l.id == q.lead_id), None)
             if lead_obj and lead_obj.assigned_to:
@@ -1630,6 +1778,7 @@ def sales_revenue_report(
             "id": q.id,
             "lead_id": q.lead_id,
             "invoice_id": None,
+            "invoice_ids": [],
             "customer": c_name,
             "deal_name": f"{q.doc_number or 'Quotation'} ({q.doc_type.capitalize()})",
             "salesperson": sp_name,

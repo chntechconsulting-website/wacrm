@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple, List
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from fastapi import HTTPException, status
 
 from models.quotation import Quotation
@@ -88,8 +89,39 @@ class ProformaIntegrationService:
         proforma_id = payload.proformaId or payload.proforma_id
         proforma_number = ProformaIntegrationService._normalize_text(payload.proformaNumber or payload.proforma_number)
         quotation_number = ProformaIntegrationService._normalize_text(payload.quotationNumber or payload.quotation_number)
+        quotation_id = payload.quotationId or payload.quotation_id
         product_category = (payload.productCategory or payload.product_category or "wahrms").lower()
         selected_bundle = payload.selectedBundle or "hr_payroll"
+
+        # Resolve the source quotation so the new proforma joins the same deal
+        # instead of appearing as an unrelated pipeline row. External callers
+        # may send either the CRM id or only the quotation number.
+        source_quotation: Optional[Quotation] = None
+        if quotation_id:
+            try:
+                qid = int(str(quotation_id).replace("local_", ""))
+            except (TypeError, ValueError):
+                qid = None
+            if qid:
+                source_quotation = (
+                    db.query(Quotation)
+                    .filter(
+                        Quotation.id == qid,
+                        Quotation.doc_type.in_(["quotation", "proforma"]),
+                        Quotation.status != "cancelled",
+                    )
+                    .first()
+                )
+        if source_quotation is None and quotation_number:
+            source_quotation = (
+                db.query(Quotation)
+                .filter(
+                    func.upper(Quotation.doc_number) == quotation_number.upper(),
+                    Quotation.doc_type.in_(["quotation", "proforma"]),
+                    Quotation.status != "cancelled",
+                )
+                .first()
+            )
 
         raw_items = payload.lineItems if payload.lineItems else (payload.line_items or [])
 
@@ -172,6 +204,16 @@ class ProformaIntegrationService:
             # Update destination sync metadata if external reference was provided
             if payload.pdfUrl or payload.pdf_url:
                 existing_doc.pdf_url = payload.pdfUrl or payload.pdf_url
+
+            # Older externally-created proformas may be missing the deal link.
+            # Backfill it on re-sync so future reports can group the deal.
+            if source_quotation is not None:
+                if not existing_doc.lead_id and source_quotation.lead_id:
+                    existing_doc.lead_id = source_quotation.lead_id
+                if not existing_doc.source_quotation_id:
+                    existing_doc.source_quotation_id = source_quotation.id
+                if not existing_doc.source_quotation_number:
+                    existing_doc.source_quotation_number = source_quotation.doc_number
 
             existing_doc.destination_sync_status = "SYNCED"
             existing_doc.destination_synced_at = now_utc
@@ -348,8 +390,20 @@ class ProformaIntegrationService:
             doc_number=proforma_number,
             status="issued",
             payment_status="unpaid",
+            lead_id=(
+                source_quotation.lead_id
+                if source_quotation is not None and source_quotation.lead_id
+                else customer.converted_from_lead
+            ),
             customer_id=customer.id,
-            source_quotation_number=quotation_number or None,
+            source_quotation_id=(
+                source_quotation.id if source_quotation is not None else None
+            ),
+            source_quotation_number=(
+                source_quotation.doc_number
+                if source_quotation is not None
+                else (quotation_number or None)
+            ),
             product_category=product_category,
             selected_bundle=selected_bundle,
             customer_name=customer.contact_name,
