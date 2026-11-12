@@ -119,4 +119,8 @@ npm run dev
 
 ---
 
+## Deployment
+
+Redeploy trigger: 2026-11-12
+
 
