@@ -132,7 +132,7 @@ def _canonical_recording_status(raw: Optional[str]) -> Optional[str]:
     value = str(raw or "").strip().upper()
     if value in RECORDING_STATUSES:
         return value
-    if value in ("RECORDING_AVAILABLE", "AVAILABLE"):
+    if value in ("RECORDING_AVAILABLE", "AVAILABLE", "SYNCED"):
         return RECORDING_STATUS_AVAILABLE
     if value in ("RECORDING_PROCESSING", "PROCESSING", "PENDING"):
         return RECORDING_STATUS_PENDING_SYNC

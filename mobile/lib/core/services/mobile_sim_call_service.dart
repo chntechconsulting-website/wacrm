@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../features/calls/data/calls_repository.dart';
 import '../../features/calls/providers/calls_provider.dart';
 import 'office_sim_service.dart';
+import 'recording_upload_service.dart';
 
 /// A SIM subscription reported by Android's SubscriptionManager.
 class SimAccount {
@@ -515,8 +516,9 @@ class MobileSimCallService {
   /// refreshes the Call Logs provider. Safe to call more than once per call.
   static Future<bool> syncResult(
     MobileSimCallResult result,
-    CallsProvider callsProvider,
-  ) {
+    CallsProvider callsProvider, {
+    String employeeKey = 'default',
+  }) {
     if (result.callId.isEmpty) return Future<bool>.value(false);
     // Never send an unresolved direction. The backend also rejects device rows
     // without a direction, but failing here avoids a guaranteed rejected write
@@ -532,7 +534,11 @@ class MobileSimCallService {
     final inFlight = _syncFutures[result.callId];
     if (inFlight != null) return inFlight;
 
-    final future = _syncResultInternal(result, callsProvider);
+    final future = _syncResultInternal(
+      result,
+      callsProvider,
+      employeeKey: employeeKey,
+    );
     _syncFutures[result.callId] = future;
     future.whenComplete(() => _syncFutures.remove(result.callId));
     return future;
@@ -543,8 +549,9 @@ class MobileSimCallService {
 
   static Future<bool> _syncResultInternal(
     MobileSimCallResult result,
-    CallsProvider callsProvider,
-  ) async {
+    CallsProvider callsProvider, {
+    required String employeeKey,
+  }) async {
     if (!result.hasKnownDirection) return false;
     final identity = (result.simIdentity ?? '').trim().isNotEmpty
         ? result.simIdentity!.trim()
@@ -599,6 +606,35 @@ class MobileSimCallService {
       _syncedCallIds.add(result.callId);
       final rowId = _asInt(response?['id']);
       if (rowId != null) _callRowIds[result.callId] = rowId;
+      // Enqueue any OEM/dialer recording before clearing the native pending
+      // result. The dialer often indexes the file seconds after the call ends,
+      // so this durable task, not a one-shot lookup, owns discovery/upload.
+      if (rowId != null && !result.hasRecording && result.durationSeconds > 0) {
+        final started = result.startedAt == null
+            ? null
+            : DateTime.tryParse(result.startedAt!);
+        if (started != null) {
+          try {
+            await RecordingUploadService.enqueueForCall(
+              callId: rowId,
+              employeeKey: employeeKey,
+              phone: result.customerPhone,
+              startedAt: started.toUtc(),
+              endedAt: result.endedAt == null
+                  ? null
+                  : DateTime.tryParse(result.endedAt!)?.toUtc(),
+              durationSeconds: result.durationSeconds,
+              direction: result.callDirection,
+              nativeReference: result.nativeCallReference,
+              simAccountId: result.simIdentity ?? result.simAccountId,
+              simSubscriptionId: result.simSubscriptionId,
+            );
+          } catch (_) {
+            // The call row is saved; the foreground queue repair can enqueue
+            // this recording again from the Call Logs list.
+          }
+        }
+      }
       await clearPendingResult(result.callId);
       await callsProvider.fetchCalls(showLoading: false);
       return true;

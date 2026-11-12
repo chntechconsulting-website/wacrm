@@ -731,6 +731,25 @@
 }
 
 /* Audio Player & Recording Status Badges */
+.recording-status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  max-width: 200px;
+}
+
+.recording-status-detail {
+  display: block;
+  max-width: 100%;
+  font-size: 0.68rem;
+  line-height: 1.3;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .recording-status-badge {
   display: inline-flex;
   align-items: center;

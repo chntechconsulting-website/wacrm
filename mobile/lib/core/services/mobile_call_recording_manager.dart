@@ -24,6 +24,7 @@ enum RecordingSyncStatus {
     switch ((raw ?? '').trim().toUpperCase()) {
       case 'AVAILABLE':
       case 'RECORDING_AVAILABLE':
+      case 'SYNCED':
         return RecordingSyncStatus.available;
       case 'PENDING_SYNC':
       case 'RECORDING_PROCESSING':
@@ -317,6 +318,7 @@ class MobileCallRecordingManager {
     required int callDurationSeconds,
     String? simAccountId,
     int? simSubscriptionId,
+    bool enforceSimIdentity = true,
   }) async {
     if (!consent) {
       await reportStatus(
@@ -331,7 +333,7 @@ class MobileCallRecordingManager {
     // native call gate and the backend check; personal-SIM audio never leaves
     // the device.
     final mapping = await OfficeSimService.fetch();
-    if (mapping != null) {
+    if (enforceSimIdentity && mapping != null) {
       if (!mapping.isVerified ||
           !OfficeSimService.callMatches(
             mapping,
@@ -357,7 +359,8 @@ class MobileCallRecordingManager {
       );
       return RecordingUploadOutcome.verificationFailed;
     }
-    if (!File(recording.path).existsSync()) {
+    final recordingFile = File(recording.path);
+    if (!recordingFile.existsSync() || recordingFile.lengthSync() <= 0) {
       await reportStatus(
         callId: callId,
         status: RecordingSyncStatus.uploadFailed,

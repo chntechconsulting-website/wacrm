@@ -1,11 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../constants/api_endpoints.dart';
-import '../network/api_client.dart';
-import '../network/api_exceptions.dart';
 import '../network/token_storage.dart';
 import 'mobile_sim_call_service.dart';
 
@@ -19,6 +15,7 @@ class PickedRecording {
   final int size;
   final String mimeType;
   final int? durationSeconds;
+  final String checksum;
 
   const PickedRecording({
     required this.path,
@@ -26,6 +23,7 @@ class PickedRecording {
     required this.size,
     required this.mimeType,
     this.durationSeconds,
+    this.checksum = '',
   });
 
   factory PickedRecording.fromMap(Map<String, dynamic> map) {
@@ -38,6 +36,7 @@ class PickedRecording {
       durationSeconds: durationMs != null && durationMs > 0
           ? (durationMs / 1000).round()
           : null,
+      checksum: (map['checksum'] ?? '').toString(),
     );
   }
 
@@ -54,8 +53,6 @@ class PickedRecording {
 
 /// Upload and playback helpers for authorised Mobile SIM call recordings.
 class MobileRecordingService {
-  static final ApiClient _client = ApiClient();
-
   /// Opens the Android document picker. Returns null when cancelled.
   static Future<PickedRecording?> pick() async {
     final map = await MobileSimCallService.pickRecordingFile();
@@ -74,126 +71,6 @@ class MobileRecordingService {
     void Function(Map<String, dynamic> recording)? handler,
   ) {
     MobileSimCallService.setSharedRecordingHandler(handler);
-  }
-
-  /// Uploads an already-validated recording without UI. Used by automatic
-  /// device-history sync after a single unambiguous file was matched.
-  static Future<bool> uploadForCall({
-    required int callId,
-    required PickedRecording recording,
-    String source = 'DEVICE',
-  }) async {
-    if (!File(recording.path).existsSync()) return false;
-    try {
-      await _client.postMultipart(
-        ApiEndpoints.ivrCallRecording(callId),
-        file: File(recording.path),
-        fields: {
-          'source': source,
-          if (recording.durationSeconds != null)
-            'duration_seconds': '${recording.durationSeconds}',
-        },
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// Confirms and uploads a recording for [callId]. The backend verifies the
-  /// audio signature and only then links it to the call.
-  static Future<bool> attachToCall(
-    BuildContext context, {
-    required int callId,
-    PickedRecording? recording,
-  }) async {
-    PickedRecording? picked = recording;
-    if (picked == null) {
-      try {
-        picked = await pick();
-      } on PlatformException catch (error) {
-        if (context.mounted) {
-          _showError(
-            context,
-            error.message ?? 'Could not open the file picker.',
-          );
-        }
-        return false;
-      }
-    }
-    if (picked == null) return false;
-    if (!context.mounted) return false;
-
-    if (!File(picked.path).existsSync()) {
-      _showError(context, 'That file is no longer available. Pick it again.');
-      return false;
-    }
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text(
-          'Attach call recording?',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${picked!.name} (${picked.sizeLabel})',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'This file will be uploaded to CRM storage and linked to this '
-              'call. Only attach a recording you are authorised to store and '
-              'share with your team.',
-              style: TextStyle(fontSize: 13, height: 1.4),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Upload'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return false;
-
-    try {
-      await _client.postMultipart(
-        ApiEndpoints.ivrCallRecording(callId),
-        file: File(picked.path),
-        fields: {
-          if (picked.durationSeconds != null)
-            'duration_seconds': '${picked.durationSeconds}',
-        },
-      );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Recording uploaded and linked to this call.'),
-            backgroundColor: Color(0xFF10B981),
-          ),
-        );
-      }
-      return true;
-    } on ApiException catch (error) {
-      if (context.mounted) _showError(context, error.message);
-      return false;
-    } catch (error) {
-      if (context.mounted) {
-        _showError(context, 'Could not upload the recording: $error');
-      }
-      return false;
-    }
   }
 
   /// Opens an in-app playback dialog for a verified recording.

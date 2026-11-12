@@ -13,7 +13,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         mobileSimCallManager = MobileSimCallManager(this, flutterEngine.dartExecutor.binaryMessenger)
         mobileCallRecordingManager =
-            MobileCallRecordingManager(this, flutterEngine.dartExecutor.binaryMessenger)
+            MobileCallRecordingManager(this, this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

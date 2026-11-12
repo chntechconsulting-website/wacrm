@@ -12,6 +12,7 @@ class CallLogModel {
   final String? recordingId;
   final int? recordingDurationSeconds;
   final String? recordingStatus;
+  final String? recordingStatusDetail;
   final String? notes;
   final String? employeeName;
   final String? provider;
@@ -37,6 +38,7 @@ class CallLogModel {
     this.recordingId,
     this.recordingDurationSeconds,
     this.recordingStatus,
+    this.recordingStatusDetail,
     this.notes,
     this.employeeName,
     this.provider,
@@ -74,6 +76,25 @@ class CallLogModel {
 
   String get recordingStatusLabel => recordingSyncStatus.label;
 
+  /// Human-readable backend explanation for a pending/failed recording. The
+  /// web and mobile Call Logs surface this instead of an empty player.
+  String get recordingStatusDetailLabel {
+    final detail = (recordingStatusDetail ?? '').trim();
+    if (detail.isNotEmpty) return detail;
+    switch (recordingSyncStatus) {
+      case RecordingSyncStatus.available:
+        return '';
+      case RecordingSyncStatus.pendingSync:
+        return 'Waiting for the device recording to be found and uploaded.';
+      case RecordingSyncStatus.recordingUnavailable:
+        return 'No device recording was found for this call.';
+      case RecordingSyncStatus.uploadFailed:
+        return 'The recording exists on the device but has not reached the CRM yet.';
+      case RecordingSyncStatus.verificationFailed:
+        return 'The recording could not be verified against this call.';
+    }
+  }
+
   bool get isRecordingAvailable =>
       recordingSyncStatus == RecordingSyncStatus.available;
 
@@ -105,6 +126,7 @@ class CallLogModel {
       recordingDurationSeconds: (json['recording_duration_seconds'] as num?)
           ?.toInt(),
       recordingStatus: json['recording_status'],
+      recordingStatusDetail: json['recording_status_detail'],
       notes: json['notes'],
       employeeName: json['employee_name'],
       provider: json['provider'],

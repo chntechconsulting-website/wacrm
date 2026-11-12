@@ -449,7 +449,11 @@ class MobileSimCallManager(
             )
         }
 
-        val directory = File(activity.cacheDir, "recording_uploads").apply { mkdirs() }
+        // Keep the app-owned copy in persistent storage, not the cache: an
+        // offline/failed share upload stays queued and may be retried after
+        // process death. Only this copy is deleted after backend confirmation;
+        // the shared original is never modified.
+        val directory = File(activity.filesDir, "recording_uploads").apply { mkdirs() }
         val safeBase = displayName
             .substringBeforeLast('.', displayName)
             .replace(Regex("[^A-Za-z0-9._-]"), "_")

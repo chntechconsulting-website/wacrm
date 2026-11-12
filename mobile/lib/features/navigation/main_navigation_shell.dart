@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/services/automatic_call_sync_service.dart';
 import '../../core/services/device_call_log_sync_service.dart';
 import '../../core/services/mobile_sim_call_service.dart';
+import '../../core/services/recording_upload_service.dart';
 import '../../core/widgets/wacrm_drawer.dart';
 import '../../core/widgets/wacrm_wave_nav_bar.dart';
 import '../auth/presentation/profile_screen.dart';
@@ -116,23 +118,22 @@ class MainNavigationShellState extends State<MainNavigationShell>
   Future<void> _syncMobileSimCall(MobileSimCallResult result) async {
     if (!mounted) return;
     final callsProvider = context.read<CallsProvider>();
-    final synced = await MobileSimCallService.syncResult(result, callsProvider);
+    final synced = await MobileSimCallService.syncResult(
+      result,
+      callsProvider,
+      employeeKey: _employeeKey,
+    );
     if (!mounted) return;
-    // The native history pass deliberately re-reads this row: the backend
-    // recognizes the already tracked attempt by its native reference and
-    // updates it in place, which also gives the OEM recorder time to finish
-    // writing the file before the recording matcher runs.
     if (synced) {
-      final rowId = MobileSimCallService.callRowId(result.callId);
-      if (rowId != null) {
-        final uploaded = await DeviceCallLogSyncService.attachRecordingForLiveResult(
-          result: result,
-          callId: rowId,
-          employeeKey: _employeeKey,
-        );
-        if (uploaded && mounted) {
-          await callsProvider.fetchCalls(showLoading: false);
-        }
+      // The call row now exists and the recording task was persisted. Try the
+      // OEM file immediately; if the dialer has not finalized/indexed it yet,
+      // the durable queue keeps the task and WorkManager retries it.
+      final recordingResult = await RecordingUploadService.processQueue(
+        employeeKey: _employeeKey,
+        callsProvider: callsProvider,
+      );
+      if (recordingResult.retryablePending > 0) {
+        await AutomaticCallSyncService.scheduleOneOffSync();
       }
     }
     if (!mounted) return;

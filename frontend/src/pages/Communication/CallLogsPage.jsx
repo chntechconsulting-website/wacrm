@@ -1369,6 +1369,7 @@ const CallLogsPage = () => {
                       <td>
                         {(() => {
                           const recStatus = String(log.recording_status || '').toUpperCase();
+                          const recDetail = String(log.recording_status_detail || '').trim();
                           const isProcessing = recStatus.includes('PROCESSING') || recStatus === 'PENDING_SYNC';
                           const isFailed = recStatus === 'UPLOAD_FAILED';
                           const isVerificationFailed = recStatus === 'VERIFICATION_FAILED';
@@ -1387,27 +1388,49 @@ const CallLogsPage = () => {
                           }
                           if (isProcessing) {
                             return (
-                              <span className="recording-status-badge processing" title="Waiting for the device/OEM recording to be imported and synced.">
-                                <span className="recording-pulse-dot" />
-                                Pending Sync
-                              </span>
+                              <div className="recording-status-cell">
+                                <span className="recording-status-badge processing" title={recDetail || 'Waiting for the device/OEM recording to be imported and synced.'}>
+                                  <span className="recording-pulse-dot" />
+                                  Pending Sync
+                                </span>
+                                {recDetail && (
+                                  <span className="recording-status-detail" title={recDetail}>{recDetail}</span>
+                                )}
+                              </div>
                             );
                           }
                           if (isFailed) {
                             return (
-                              <span className="recording-status-badge failed" title="The recording upload failed. Retry from the mobile app.">
-                                Upload Failed
-                              </span>
+                              <div className="recording-status-cell">
+                                <span className="recording-status-badge failed" title={recDetail || 'The recording upload failed. Retry from the mobile app.'}>
+                                  Upload Failed
+                                </span>
+                                {recDetail && (
+                                  <span className="recording-status-detail" title={recDetail}>{recDetail}</span>
+                                )}
+                              </div>
                             );
                           }
                           if (isVerificationFailed) {
                             return (
-                              <span className="recording-status-badge verification" title="The imported file did not match this call and was not attached.">
-                                Verification Failed
-                              </span>
+                              <div className="recording-status-cell">
+                                <span className="recording-status-badge verification" title={recDetail || 'The imported file did not match this call and was not attached.'}>
+                                  Verification Failed
+                                </span>
+                                {recDetail && (
+                                  <span className="recording-status-detail" title={recDetail}>{recDetail}</span>
+                                )}
+                              </div>
                             );
                           }
-                          return <span className="no-recording-text">Recording Unavailable</span>;
+                          return (
+                            <div className="recording-status-cell">
+                              <span className="no-recording-text" title={recDetail || 'No recording is available for this call.'}>Recording Unavailable</span>
+                              {recDetail && (
+                                <span className="recording-status-detail" title={recDetail}>{recDetail}</span>
+                              )}
+                            </div>
+                          );
                         })()}
                       </td>
 

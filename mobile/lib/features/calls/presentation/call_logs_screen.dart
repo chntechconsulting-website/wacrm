@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/doocti_call_service.dart';
+import '../../../core/services/automatic_call_sync_service.dart';
 import '../../../core/services/mobile_call_recording_manager.dart';
 import '../../../core/services/mobile_recording_service.dart';
 import '../../../core/services/mobile_sim_call_service.dart';
 import '../../../core/services/office_sim_service.dart';
+import '../../../core/services/recording_upload_service.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_view.dart';
@@ -32,6 +34,7 @@ class CallLogsScreen extends StatefulWidget {
 class _CallLogsScreenState extends State<CallLogsScreen>
     with WidgetsBindingObserver {
   bool _handlingSharedRecording = false;
+  bool _processingRecordings = false;
   MobileSimPermissionStatus? _permissionStatus;
   bool _permissionBusy = false;
 
@@ -45,6 +48,8 @@ class _CallLogsScreenState extends State<CallLogsScreen>
     _refreshCallLogPermission();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await context.read<CallsProvider>().fetchCalls();
+      if (!mounted) return;
+      await _processPendingRecordings();
       if (mounted) _maybeHandleSharedRecording();
     });
   }
@@ -118,7 +123,40 @@ class _CallLogsScreenState extends State<CallLogsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _refreshCallLogPermission();
+      _processPendingRecordings();
       _maybeHandleSharedRecording();
+    }
+  }
+
+  /// Re-queues recent PENDING_SYNC/UPLOAD_FAILED calls (including rows synced
+  /// by an older app version) and processes due recording tasks. The queue is
+  /// durable, so a call whose dialer has not written its file yet stays here
+  /// until WorkManager or the next foreground pass can retry it.
+  Future<void> _processPendingRecordings({bool forceRetry = false}) async {
+    if (_processingRecordings || !mounted) return;
+    _processingRecordings = true;
+    try {
+      final provider = context.read<CallsProvider>();
+      final employeeKey = _employeeKey;
+      await RecordingUploadService.enqueueFromCalls(
+        provider.calls,
+        employeeKey: employeeKey,
+      );
+      final result = await RecordingUploadService.processQueue(
+        employeeKey: employeeKey,
+        callsProvider: provider,
+        forceRetry: forceRetry,
+      );
+      if (result.uploaded > 0 && mounted) {
+        await provider.fetchCalls(showLoading: false);
+      }
+      if (result.retryablePending > 0) {
+        await AutomaticCallSyncService.scheduleOneOffSync();
+      }
+    } catch (_) {
+      // The durable queue keeps the task for the next pass.
+    } finally {
+      _processingRecordings = false;
     }
   }
 
@@ -166,7 +204,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
         return;
       }
 
-      final callId = await showModalBottomSheet<int>(
+      final selectedCall = await showModalBottomSheet<CallLogModel>(
         context: context,
         isScrollControlled: true,
         shape: const RoundedRectangleBorder(
@@ -210,7 +248,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                         borderRadius: BorderRadius.circular(14),
                         child: InkWell(
                           borderRadius: BorderRadius.circular(14),
-                          onTap: () => Navigator.pop(ctx, call.id),
+                          onTap: () => Navigator.pop(ctx, call),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -260,7 +298,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
           ),
         ),
       );
-      if (callId == null || !mounted) return;
+      if (selectedCall == null || !mounted) return;
 
       final consented = await RecordingConsentService.ensureConsent(
         context,
@@ -268,13 +306,35 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       );
       if (!consented || !mounted) return;
 
-      final uploaded = await MobileRecordingService.attachToCall(
-        context,
-        callId: callId,
-        recording: shared,
+      final outcome = await RecordingUploadService.uploadPickedRecording(
+        callId: selectedCall.id,
+        employeeKey: _employeeKey,
+        recording: _importedFromPicked(shared),
+        phone: selectedCall.customerNumber,
+        startedAt: _startedAtFor(selectedCall),
+        endedAt: _endedAtFor(selectedCall),
+        durationSeconds: selectedCall.durationSeconds,
+        direction: selectedCall.callType,
+        nativeReference: selectedCall.nativeCallReference,
+        simAccountId: selectedCall.simAccountId,
+        simSubscriptionId: selectedCall.simSubscriptionId,
       );
-      if (uploaded && mounted) {
+      if (!mounted) return;
+      final uploaded =
+          outcome == RecordingUploadOutcome.uploaded ||
+          outcome == RecordingUploadOutcome.duplicate;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_outcomeMessage(outcome)),
+          backgroundColor: uploaded
+              ? const Color(0xFF10B981)
+              : const Color(0xFFDC2626),
+        ),
+      );
+      if (uploaded) {
         await provider.fetchCalls(showLoading: false);
+      } else {
+        await AutomaticCallSyncService.scheduleOneOffSync();
       }
     } finally {
       _handlingSharedRecording = false;
@@ -413,10 +473,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
 
     ImportedCallRecording? recording;
     if (choice == 'auto') {
-      final rawStarted = call.startedAt ?? call.createdAt;
-      final started = rawStarted == null
-          ? null
-          : DateTime.tryParse(rawStarted);
+      final started = _startedAtFor(call);
       if (started == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -432,18 +489,33 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       recording = await MobileCallRecordingManager.findRecordingForCall(
         phone: call.customerNumber,
         startedAt: started,
-        endedAt: call.endedAt == null
-            ? null
-            : DateTime.tryParse(call.endedAt!),
+        endedAt: _endedAtFor(call),
         durationSeconds: call.durationSeconds,
       );
       if (recording == null) {
+        // Keep a durable task: the dialer may index the file later, and the
+        // same queue retries it automatically with WorkManager.
+        await RecordingUploadService.enqueueForCall(
+          callId: call.id,
+          employeeKey: employeeKey,
+          phone: call.customerNumber,
+          startedAt: started,
+          endedAt: _endedAtFor(call),
+          durationSeconds: call.durationSeconds,
+          direction: call.callType,
+          nativeReference: call.nativeCallReference,
+          simAccountId: call.simAccountId,
+          simSubscriptionId: call.simSubscriptionId,
+          source: 'MANUAL',
+        );
+        await AutomaticCallSyncService.scheduleOneOffSync();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'No unambiguous device recording was found for this call. '
-              'Nothing was attached. Try Choose a file instead.',
+              'No unambiguous device recording was found yet. The call stays '
+              'queued and WACRM will retry automatically. You can also use '
+              'Choose a file.',
             ),
             backgroundColor: Color(0xFFB45309),
           ),
@@ -459,11 +531,16 @@ class _CallLogsScreenState extends State<CallLogsScreen>
 
     if (!mounted || recording == null) return;
 
-    final outcome = await MobileCallRecordingManager.upload(
+    final outcome = await RecordingUploadService.uploadRecordingForCall(
       callId: call.id,
+      employeeKey: employeeKey,
+      phone: call.customerNumber,
+      startedAt: _startedAtFor(call) ?? DateTime.now().toUtc(),
+      endedAt: _endedAtFor(call),
+      durationSeconds: call.durationSeconds,
       recording: recording,
-      consent: true,
-      callDurationSeconds: call.durationSeconds,
+      direction: call.callType,
+      nativeReference: call.nativeCallReference,
       simAccountId: call.simAccountId,
       simSubscriptionId: call.simSubscriptionId,
     );
@@ -480,6 +557,33 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       ),
     );
     await context.read<CallsProvider>().fetchCalls(showLoading: false);
+    if (!uploaded) {
+      await AutomaticCallSyncService.scheduleOneOffSync();
+    }
+  }
+
+  DateTime? _startedAtFor(CallLogModel call) {
+    final raw = call.startedAt ?? call.createdAt;
+    return raw == null ? null : DateTime.tryParse(raw)?.toUtc();
+  }
+
+  DateTime? _endedAtFor(CallLogModel call) {
+    final raw = call.endedAt;
+    return raw == null ? null : DateTime.tryParse(raw)?.toUtc();
+  }
+
+  ImportedCallRecording _importedFromPicked(PickedRecording picked) {
+    final seconds = picked.durationSeconds ?? 0;
+    return ImportedCallRecording(
+      path: picked.path,
+      name: picked.name,
+      size: picked.size,
+      mimeType: picked.mimeType,
+      durationMs: seconds * 1000,
+      checksum: picked.checksum,
+      source: 'SHARED',
+      verified: seconds > 0,
+    );
   }
 
   Future<RecordingPickResult> _pickRecordingSafely() async {
@@ -1070,6 +1174,25 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                                     ),
                                   ],
                                 ),
+                                if (!call.isRecordingAvailable &&
+                                    call
+                                        .recordingStatusDetailLabel
+                                        .isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    call.recordingStatusDetailLabel,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      height: 1.3,
+                                      color: call.recordingSyncStatus ==
+                                              RecordingSyncStatus.uploadFailed
+                                          ? const Color(0xFFB91C1C)
+                                          : const Color(0xFFB45309),
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 6),
                                 Wrap(
                                   spacing: 8,

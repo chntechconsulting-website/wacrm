@@ -46,9 +46,10 @@ class AutomaticCallSyncService {
       final result = await DeviceCallLogSyncService.sync(
         null,
         employeeKey: employeeKey,
-        // The background engine never opens MediaStore or attaches recordings.
-        // The next foreground pass can still attach one if consent exists.
-        autoUploadRecordings: false,
+        // The worker registers the same read-only recording bridge as the UI,
+        // so WorkManager can discover and upload OEM/dialer recordings while
+        // the app is closed.
+        autoUploadRecordings: true,
         // Never persist a SIM verification failure from a background pass;
         // SIM reads can be temporarily unavailable at boot or under OEM
         // battery restrictions. The pass still fails closed.
@@ -61,6 +62,8 @@ class AutomaticCallSyncService {
         synced: result.synced,
         pending: result.pendingSyncCount,
         retryablePending: result.retryablePending,
+        recordingsPending: result.recordingsPending,
+        recordingRetryablePending: result.recordingRetryablePending,
         permissionDenied: result.permissionDenied,
         error: result.error,
       );
@@ -90,6 +93,8 @@ class AutomaticCallSyncService {
     int? synced,
     int? pending,
     int? retryablePending,
+    int? recordingsPending,
+    int? recordingRetryablePending,
     bool permissionDenied = false,
     String? error,
     String? reason,
@@ -101,6 +106,8 @@ class AutomaticCallSyncService {
         'synced': synced ?? 0,
         'pending': pending ?? 0,
         'retryablePending': retryablePending ?? 0,
+        'recordingsPending': recordingsPending ?? 0,
+        'recordingRetryablePending': recordingRetryablePending ?? 0,
         'permissionDenied': permissionDenied,
         'error': error,
         'reason': reason,

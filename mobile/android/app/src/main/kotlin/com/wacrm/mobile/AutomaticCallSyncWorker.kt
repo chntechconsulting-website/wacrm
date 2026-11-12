@@ -21,10 +21,11 @@ import java.util.concurrent.atomic.AtomicReference
  * Headless WorkManager worker that runs the exact Dart pipeline used by the
  * manual Sync button.
  *
- * The worker never uploads call logs itself: it starts a Flutter engine,
- * registers [BackgroundCallLogBridge] on the same channel as the UI, and waits
- * for the Dart entrypoint to report its outcome. WorkManager then retries
- * transient failures with backoff while the Dart queue keeps unsynced calls.
+ * The worker never uploads call logs or recordings itself: it starts a Flutter
+ * engine, registers [BackgroundCallLogBridge] and [MobileCallRecordingManager]
+ * on the same channels as the UI, and waits for the Dart entrypoint to report
+ * its outcome. WorkManager then retries transient failures with backoff while
+ * the Dart queues keep unsynced calls and recordings.
  */
 class AutomaticCallSyncWorker(
     appContext: Context,
@@ -69,6 +70,14 @@ class AutomaticCallSyncWorker(
                 val engine = FlutterEngine(context)
                 engineRef.set(engine)
                 BackgroundCallLogBridge(context, engine.dartExecutor.binaryMessenger)
+                // Headless recording bridge: same read-only MediaStore lookup
+                // and app-storage import as the foreground module, but without
+                // an Activity (the SAF picker stays foreground-only).
+                MobileCallRecordingManager(
+                    context,
+                    null,
+                    engine.dartExecutor.binaryMessenger,
+                )
                 MethodChannel(
                     engine.dartExecutor.binaryMessenger,
                     BACKGROUND_CHANNEL,

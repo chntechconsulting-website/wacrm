@@ -17,7 +17,9 @@ from models.call_log import CallLog
 from models.integration import IntegrationConfig
 from routers.ivr import (
     MAX_RECORDING_BYTES,
+    RECORDING_STATUS_AVAILABLE,
     _absolute_media_url,
+    _canonical_recording_status,
     _looks_like_audio,
     _safe_recording_extension,
 )
@@ -42,6 +44,16 @@ class TestMobileRecordingHelpers(unittest.TestCase):
         self.assertEqual(_safe_recording_extension("recording", "audio/mp4"), ".m4a")
         self.assertEqual(_safe_recording_extension("voice.wav", "audio/wav"), ".wav")
         self.assertIsNone(_safe_recording_extension("notes.txt", "text/plain"))
+
+    def test_synced_is_a_legacy_alias_for_available(self):
+        self.assertEqual(
+            _canonical_recording_status("SYNCED"),
+            RECORDING_STATUS_AVAILABLE,
+        )
+        self.assertEqual(
+            _canonical_recording_status("recording_available"),
+            RECORDING_STATUS_AVAILABLE,
+        )
 
     def test_local_media_paths_become_absolute(self):
         url = _absolute_media_url("/uploads/recordings/42/call.mp3")

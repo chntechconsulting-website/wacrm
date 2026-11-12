@@ -8,6 +8,7 @@ import 'mobile_call_recording_manager.dart';
 import 'mobile_sim_call_service.dart';
 import 'office_sim_service.dart';
 import 'pending_call_sync_queue.dart';
+import 'recording_upload_service.dart';
 
 /// One row from the Android device call log.
 @immutable
@@ -171,6 +172,12 @@ class DeviceCallLogSyncResult {
   /// Pending calls that may succeed on a later automatic retry.
   final int retryablePending;
 
+  /// Recordings still waiting for a device file or backend confirmation.
+  final int recordingsPending;
+
+  /// Recordings that may succeed on a later automatic retry.
+  final int recordingRetryablePending;
+
   /// True when this pass failed for a transient reason (network, timeout,
   /// server or expired session) and should be retried.
   final bool retryableFailure;
@@ -191,6 +198,8 @@ class DeviceCallLogSyncResult {
     this.syncedUpToId = 0,
     this.pendingSyncCount = 0,
     this.retryablePending = 0,
+    this.recordingsPending = 0,
+    this.recordingRetryablePending = 0,
     this.retryableFailure = false,
     this.lastSuccessfulSyncAt,
   });
@@ -204,7 +213,9 @@ class DeviceCallLogSyncResult {
   bool get shouldRetry =>
       !permissionDenied &&
       !isOfficeSimBlocked &&
-      (retryableFailure || (syncStatus == 'ACTIVE' && retryablePending > 0));
+      (retryableFailure ||
+          (syncStatus == 'ACTIVE' &&
+              (retryablePending > 0 || recordingRetryablePending > 0)));
 }
 
 @immutable
@@ -420,38 +431,31 @@ class DeviceCallLogSyncService {
             .trim()
             .isNotEmpty;
         final started = entry.startedDateTime;
-        // Recording discovery runs only for a row already proven to be after
-        // the baseline and on the Office SIM, so a historical or personal-SIM
-        // recording can never be uploaded.
+        // Recording discovery is queued only for a row already proven to be
+        // after the baseline and on the Office SIM, so a historical or
+        // personal-SIM recording can never be uploaded. The durable queue,
+        // rather than this call, owns the discovery/upload retry.
         if (consented &&
             callId != null &&
             !hasRecording &&
             entry.durationSeconds > 0 &&
             started != null) {
           try {
-            final entryIdentity = entry.simIdentity ?? entry.simAccountId;
-            final match = await MobileCallRecordingManager.findRecordingForCall(
+            await RecordingUploadService.enqueueForCall(
+              callId: callId,
+              employeeKey: scope,
               phone: entry.phone,
               startedAt: started,
               endedAt: entry.endedDateTime,
               durationSeconds: entry.durationSeconds,
+              direction: entry.direction,
+              nativeReference: entry.nativeReference,
+              simAccountId: entry.simIdentity ?? entry.simAccountId,
+              simSubscriptionId: entry.simSubscriptionId,
             );
-            if (match != null) {
-              final outcome = await MobileCallRecordingManager.upload(
-                callId: callId,
-                recording: match,
-                consent: true,
-                callDurationSeconds: entry.durationSeconds,
-                simAccountId: entryIdentity,
-                simSubscriptionId: entry.simSubscriptionId,
-              );
-              if (outcome == RecordingUploadOutcome.uploaded ||
-                  outcome == RecordingUploadOutcome.duplicate) {
-                recordings += 1;
-              }
-            }
           } catch (_) {
-            // No accessible/unambiguous recording: keep "Unavailable".
+            // The call row is already durable; a later foreground pass can
+            // enqueue the recording from the call-log list.
           }
         }
       }
@@ -650,7 +654,21 @@ class DeviceCallLogSyncService {
         }
       }
 
-      if (synced > 0 && callsProvider != null) {
+      var recordingResult = const RecordingQueueResult();
+      if (autoUploadRecordings) {
+        // Discovery and upload use the same durable queue for live calls,
+        // history rows, the WorkManager pass and manual Sync Now. It runs after
+        // call metadata is confirmed so a failed recording upload can never
+        // roll back or duplicate the call row.
+        recordingResult = await RecordingUploadService.processQueue(
+          employeeKey: scope,
+          callsProvider: callsProvider,
+          forceRetry: forceRetryPending,
+        );
+        recordings = recordingResult.uploaded;
+      }
+
+      if ((synced > 0 || recordings > 0) && callsProvider != null) {
         await callsProvider.fetchCalls(showLoading: false);
       }
       return DeviceCallLogSyncResult(
@@ -667,6 +685,8 @@ class DeviceCallLogSyncService {
         syncedUpToId: maxId,
         pendingSyncCount: queue.count,
         retryablePending: queue.retryableCount,
+        recordingsPending: recordingResult.pending,
+        recordingRetryablePending: recordingResult.retryablePending,
         retryableFailure: failureRetryable,
         lastSuccessfulSyncAt: lastSuccessfulSyncAt,
       );
@@ -778,64 +798,6 @@ class DeviceCallLogSyncService {
       await callsProvider.fetchCalls(showLoading: false);
     }
     return repaired;
-  }
-
-  /// Uploads the single device recording that matches a just-finished live
-  /// tracked call. History sync skips that native row, so this closes the gap
-  /// without ever guessing or attaching another call's audio.
-  static Future<bool> attachRecordingForLiveResult({
-    required MobileSimCallResult result,
-    required int callId,
-    required String employeeKey,
-  }) async {
-    if (!isSupported || result.hasRecording || result.durationSeconds <= 0) {
-      return false;
-    }
-    final identity = (result.simIdentity ?? '').trim().isNotEmpty
-        ? result.simIdentity!.trim()
-        : (result.simSubscriptionId != null
-              ? 'subId:${result.simSubscriptionId}'
-              : (result.simAccountId ?? '').trim());
-    final mapping = await OfficeSimService.fetch();
-    if (mapping != null &&
-        (!mapping.isVerified ||
-            !OfficeSimService.callMatches(
-              mapping,
-              subscriptionId: result.simSubscriptionId,
-              simAccountId: identity,
-            ))) {
-      return false;
-    }
-    final consented = await RecordingConsentService.hasConsent(employeeKey);
-    if (!consented) return false;
-    final startedRaw = result.startedAt;
-    if (startedRaw == null || startedRaw.isEmpty) return false;
-    final started = DateTime.tryParse(startedRaw)?.toUtc();
-    if (started == null) return false;
-    final ended = result.endedAt == null
-        ? null
-        : DateTime.tryParse(result.endedAt!)?.toUtc();
-    try {
-      final match = await MobileCallRecordingManager.findRecordingForCall(
-        phone: result.customerPhone,
-        startedAt: started,
-        endedAt: ended,
-        durationSeconds: result.durationSeconds,
-      );
-      if (match == null) return false;
-      final outcome = await MobileCallRecordingManager.upload(
-        callId: callId,
-        recording: match,
-        consent: true,
-        callDurationSeconds: result.durationSeconds,
-        simAccountId: identity.isEmpty ? null : identity,
-        simSubscriptionId: result.simSubscriptionId,
-      );
-      return outcome == RecordingUploadOutcome.uploaded ||
-          outcome == RecordingUploadOutcome.duplicate;
-    } catch (_) {
-      return false;
-    }
   }
 
   /// Remembers a native row already handled by the live in-app tracker, so the

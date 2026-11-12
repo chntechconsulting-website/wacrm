@@ -2,6 +2,7 @@ package com.wacrm.mobile
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
@@ -34,7 +35,8 @@ import java.util.UUID
  * Channel: wacrm/mobile_call_recording
  */
 class MobileCallRecordingManager(
-    private val activity: Activity,
+    private val context: Context,
+    private val activity: Activity?,
     messenger: BinaryMessenger,
 ) : MethodChannel.MethodCallHandler {
     companion object {
@@ -66,7 +68,7 @@ class MobileCallRecordingManager(
     }
 
     private val channel = MethodChannel(messenger, CHANNEL)
-    private val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private var pendingPickResult: MethodChannel.Result? = null
 
     init {
@@ -114,17 +116,17 @@ class MobileCallRecordingManager(
 
     private fun hasCallLogPermission(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-        return activity.checkSelfPermission(Manifest.permission.READ_CALL_LOG) ==
+        return context.checkSelfPermission(Manifest.permission.READ_CALL_LOG) ==
             PackageManager.PERMISSION_GRANTED
     }
 
     private fun hasAudioPermission(): Boolean {
         return when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
-                activity.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) ==
+                context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) ==
                     PackageManager.PERMISSION_GRANTED
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
-                activity.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
                     PackageManager.PERMISSION_GRANTED
             else -> true
         }
@@ -133,7 +135,7 @@ class MobileCallRecordingManager(
     private fun nativeDialerPackage(): String? {
         return try {
             val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:"))
-            activity.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
                 ?.activityInfo?.packageName
         } catch (_: Exception) {
             null
@@ -144,7 +146,7 @@ class MobileCallRecordingManager(
         val known = OEM_RECORDER_PACKAGES[oemFamily()] ?: emptyList()
         return known.filter { pkg ->
             try {
-                activity.packageManager.getPackageInfo(pkg, 0)
+                context.packageManager.getPackageInfo(pkg, 0)
                 true
             } catch (_: PackageManager.NameNotFoundException) {
                 false
@@ -172,7 +174,7 @@ class MobileCallRecordingManager(
             return listOf(MediaStore.VOLUME_EXTERNAL)
         }
         return try {
-            MediaStore.getExternalVolumeNames(activity).toList().ifEmpty {
+            MediaStore.getExternalVolumeNames(context).toList().ifEmpty {
                 listOf(MediaStore.VOLUME_EXTERNAL)
             }
         } catch (_: Exception) {
@@ -215,7 +217,7 @@ class MobileCallRecordingManager(
         val seen = mutableSetOf<String>()
         for (volume in audioVolumes()) {
             try {
-                activity.contentResolver.query(
+                context.contentResolver.query(
                     volumeUri(volume),
                     projection,
                     selection,
@@ -393,6 +395,18 @@ class MobileCallRecordingManager(
             result.error("PICK_IN_PROGRESS", "A recording picker is already open.", null)
             return
         }
+        // The picker needs the foreground activity. The headless WorkManager
+        // engine registers this module without one, so it must fail closed
+        // instead of attempting to start an activity from the background.
+        val host = activity
+        if (host == null) {
+            result.error(
+                "PICKER_UNAVAILABLE",
+                "A recording can only be chosen while the app is open.",
+                null,
+            )
+            return
+        }
         pendingPickResult = result
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -408,7 +422,7 @@ class MobileCallRecordingManager(
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         try {
-            activity.startActivityForResult(
+            host.startActivityForResult(
                 Intent.createChooser(intent, "Select call recording"),
                 PICK_REQUEST_CODE,
             )
@@ -430,16 +444,16 @@ class MobileCallRecordingManager(
             return true
         }
         try {
-            activity.contentResolver.takePersistableUriPermission(
+            activity?.contentResolver?.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         } catch (_: Exception) {
-            // Not all providers grant persistable access; the cached copy
+            // Not all providers grant persistable access; the copied file
             // created below is still sufficient for this upload.
         }
         try {
-            pending.success(copyRecordingToCache(uri, "SAF_IMPORT"))
+            pending.success(copyRecordingToStorage(uri, "SAF_IMPORT"))
         } catch (error: RecordingVerificationException) {
             pending.error("VERIFICATION_FAILED", error.message, null)
         } catch (error: Exception) {
@@ -504,7 +518,7 @@ class MobileCallRecordingManager(
             return
         }
         try {
-            val copied = copyRecordingToCache(chosen.uri, "MEDIASTORE_MATCH")
+            val copied = copyRecordingToStorage(chosen.uri, "MEDIASTORE_MATCH")
             result.success(
                 copied + mapOf(
                     "matchedBy" to if (
@@ -529,8 +543,8 @@ class MobileCallRecordingManager(
 
     class RecordingVerificationException(message: String) : Exception(message)
 
-    private fun copyRecordingToCache(uri: Uri, importSource: String): Map<String, Any?> {
-        val resolver = activity.contentResolver
+    private fun copyRecordingToStorage(uri: Uri, importSource: String): Map<String, Any?> {
+        val resolver = context.contentResolver
         var displayName = "call-recording"
         var reportedSize = -1L
         try {
@@ -568,7 +582,11 @@ class MobileCallRecordingManager(
             )
         }
 
-        val targetDir = File(activity.cacheDir, "call_recordings").apply { mkdirs() }
+        // Persist the verified copy in app storage, not the cache: the durable
+        // recording queue may retry the upload after a process death or an
+        // offline period. Only this app-owned copy is deleted after the backend
+        // confirms the upload; the OEM/MediaStore original is never touched.
+        val targetDir = File(context.filesDir, "call_recordings").apply { mkdirs() }
         val target = File(targetDir, "${UUID.randomUUID()}.$extension")
         val digest = MessageDigest.getInstance("SHA-256")
         var total = 0L
@@ -637,7 +655,7 @@ class MobileCallRecordingManager(
     private fun readMetadata(uri: Uri): Map<String, Any?> {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(activity, uri)
+            retriever.setDataSource(context, uri)
             val duration = retriever
                 .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
