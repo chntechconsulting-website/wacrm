@@ -167,6 +167,13 @@ class LeadEnquiryOut(BaseModel):
     website_name: Optional[str] = None
     landing_page: Optional[str] = None
     requirement_notes: Optional[str] = None
+    meta_lead_id: Optional[str] = None
+    meta_form_id: Optional[str] = None
+    meta_page_id: Optional[str] = None
+    meta_platform: Optional[str] = None
+    meta_campaign_id: Optional[str] = None
+    meta_adset_id: Optional[str] = None
+    meta_ad_id: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -195,6 +202,20 @@ class LeadOut(LeadBase):
     latest_enquiry_date: Optional[datetime] = None
     previous_sources: Optional[str] = None
     latest_source: Optional[str] = None
+
+    # Facebook / Instagram Lead Ads attribution
+    meta_lead_id: Optional[str] = None
+    meta_form_id: Optional[str] = None
+    meta_form_name: Optional[str] = None
+    meta_page_id: Optional[str] = None
+    meta_page_name: Optional[str] = None
+    meta_campaign_id: Optional[str] = None
+    meta_adset_id: Optional[str] = None
+    meta_adset_name: Optional[str] = None
+    meta_ad_id: Optional[str] = None
+    meta_ad_name: Optional[str] = None
+    meta_platform: Optional[str] = None
+    meta_created_at: Optional[datetime] = None
 
     # QuoteTask Integration Mapping Fields
     quotetask_quotation_id: Optional[str] = None

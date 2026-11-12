@@ -134,6 +134,7 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 from integrations.meta.webhook import router as meta_webhook_router
+from integrations.meta.admin import router as meta_admin_router
 from integrations.website.router import router as website_lead_router
 from integrations.whatsapp.webhook import webhook_router as whatsapp_webhook_router
 from integrations.whatsapp_ads.webhook import router as whatsapp_ad_webhook_router
@@ -167,6 +168,7 @@ app.include_router(activities.router, prefix=settings.API_V1_STR)
 app.include_router(activities.router)  # Allow direct /api/activities endpoint
 app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(meta_webhook_router, prefix=settings.API_V1_STR)
+app.include_router(meta_admin_router, prefix=settings.API_V1_STR)
 app.include_router(website_lead_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_ad_webhook_router, prefix=settings.API_V1_STR)
@@ -312,7 +314,18 @@ async def startup_db_client():
                     "previous_sources": "VARCHAR(255) NULL",
                     "latest_source": "VARCHAR(50) NULL",
                     "product_category": "VARCHAR(50) NULL",
-                    "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL"
+                    "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL",
+                    "meta_page_id": "VARCHAR(100) NULL",
+                    "meta_page_name": "VARCHAR(255) NULL",
+                    "meta_form_name": "VARCHAR(255) NULL",
+                    "meta_campaign_id": "VARCHAR(100) NULL",
+                    "meta_adset_id": "VARCHAR(100) NULL",
+                    "meta_adset_name": "VARCHAR(255) NULL",
+                    "meta_ad_id": "VARCHAR(100) NULL",
+                    "meta_ad_name": "VARCHAR(255) NULL",
+                    "meta_platform": "VARCHAR(20) NULL",
+                    "meta_created_at": "DATETIME NULL",
+                    "meta_custom_answers": "TEXT NULL"
                 }
                 for col_name, col_type in missing_cols.items():
                     if col_name not in columns:
@@ -321,6 +334,52 @@ async def startup_db_client():
                         print(f"Auto-added missing column '{col_name}' to 'leads' table.")
             except Exception as ex:
                 print(f"Leads column sync check: {ex}")
+
+            # Meta Lead Ads multi-Page OAuth / form discovery columns (additive)
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM meta_pages"))
+                meta_page_cols = [row[0] for row in result.fetchall()]
+                missing_meta_page_cols = {
+                    "connection_id": "INT NULL",
+                    "page_picture_url": "VARCHAR(500) NULL",
+                    "instagram_account_id": "VARCHAR(100) NULL",
+                    "instagram_username": "VARCHAR(255) NULL",
+                    "is_selected": "TINYINT(1) DEFAULT 1 NOT NULL",
+                    "auto_sync_enabled": "TINYINT(1) DEFAULT 1 NOT NULL",
+                    "webhook_subscribed": "TINYINT(1) DEFAULT 0 NOT NULL",
+                    "token_expires_at": "DATETIME NULL",
+                    "forms_last_synced_at": "DATETIME NULL",
+                    "last_lead_at": "DATETIME NULL",
+                    "last_error_code": "VARCHAR(50) NULL",
+                }
+                for col_name, col_type in missing_meta_page_cols.items():
+                    if col_name not in meta_page_cols:
+                        conn.execute(text(f"ALTER TABLE meta_pages ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                        print(f"Auto-added missing column '{col_name}' to 'meta_pages' table.")
+            except Exception as ex:
+                print(f"Meta Pages column sync check: {ex}")
+
+            # Lead enquiry level Meta attribution (additive)
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM lead_enquiries"))
+                enquiry_cols = [row[0] for row in result.fetchall()]
+                missing_enquiry_cols = {
+                    "meta_lead_id": "VARCHAR(100) NULL",
+                    "meta_form_id": "VARCHAR(100) NULL",
+                    "meta_page_id": "VARCHAR(100) NULL",
+                    "meta_platform": "VARCHAR(20) NULL",
+                    "meta_campaign_id": "VARCHAR(100) NULL",
+                    "meta_adset_id": "VARCHAR(100) NULL",
+                    "meta_ad_id": "VARCHAR(100) NULL",
+                }
+                for col_name, col_type in missing_enquiry_cols.items():
+                    if col_name not in enquiry_cols:
+                        conn.execute(text(f"ALTER TABLE lead_enquiries ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                        print(f"Auto-added missing column '{col_name}' to 'lead_enquiries' table.")
+            except Exception as ex:
+                print(f"Lead enquiries column sync check: {ex}")
 
             # Call logs table schema sync
             try:
@@ -719,6 +778,15 @@ async def startup_db_client():
         print("CDR reconciliation scheduler launched.")
     except Exception as ex:
         print(f"Failed to start CDR reconciliation scheduler: {ex}")
+
+    # Launch Meta Lead Ads retry worker (signed webhook event queue)
+    try:
+        import asyncio
+        from integrations.meta.service import MetaLeadService as _MetaLeadService
+        asyncio.create_task(_MetaLeadService.start_meta_lead_worker(interval_seconds=60))
+        print("Meta Lead Ads retry worker launched.")
+    except Exception as ex:
+        print(f"Failed to start Meta Lead Ads retry worker: {ex}")
 
     # Seed initial Admin, Manager, and Employee users if not existing
     db = SessionLocal()

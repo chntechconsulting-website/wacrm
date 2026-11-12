@@ -1,708 +1,1074 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import API from '../../services/api';
-import { 
-  Share2, 
-  Layers, 
-  Plus, 
-  RefreshCw, 
-  Power, 
-  Key, 
-  Trash2, 
-  Copy, 
-  Check, 
-  ExternalLink, 
-  ArrowLeft, 
-  CheckCircle2, 
-  AlertTriangle, 
-  HelpCircle, 
-  Zap, 
-  Eye, 
-  EyeOff, 
-  X,
+import {
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  Copy,
+  Download,
+  ExternalLink,
+  FileText,
+  Camera,
+  KeyRound,
+  Layers,
+  LayoutDashboard,
+  Loader2,
+  Play,
+  PlugZap,
+  RefreshCw,
+  RotateCcw,
   ShieldCheck,
-  Globe
+  Unplug,
+  Users,
+  Wifi,
+  X,
+  XCircle,
+  Zap,
 } from 'lucide-react';
 import './MetaIntegrationPage.css';
 
+const RANGE_OPTIONS = [
+  { value: '24H', label: 'Last 24 hours' },
+  { value: '7D', label: 'Last 7 days' },
+  { value: '30D', label: 'Last 30 days' },
+  { value: '90D', label: 'Last 90 days' },
+  { value: 'CUSTOM', label: 'Custom range' },
+];
+
+const REQUIRED_SCOPES = [
+  'pages_show_list',
+  'pages_read_engagement',
+  'pages_manage_metadata',
+  'leads_retrieval',
+  'ads_read',
+  'instagram_basic',
+];
+
+const formatDateTime = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const statusTone = (status) => {
+  const value = String(status || '').toUpperCase();
+  if (value === 'CONNECTED' || value === 'ACTIVE' || value === 'PROCESSED' || value === 'COMPLETED' || value === 'VALID' || value === 'SUCCESS') return 'success';
+  if (value === 'DISCONNECTED' || value === 'INACTIVE' || value === 'IGNORED' || value === 'CANCELLED') return 'muted';
+  if (value === 'EXPIRING_SOON' || value === 'RETRYING' || value === 'PENDING' || value === 'RUNNING' || value === 'PARTIAL' || value === 'WARNING' || value === 'IDLE' || value === 'READY') return 'warning';
+  return 'danger';
+};
+
 const MetaIntegrationPage = () => {
-  const [pages, setPages] = useState([]);
-  const [metaStatus, setMetaStatus] = useState(null);
+  const [dashboard, setDashboard] = useState(null);
+  const [activity, setActivity] = useState([]);
+  const [failedEvents, setFailedEvents] = useState([]);
+  const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [pageActionLoading, setPageActionLoading] = useState({});
+  const [busy, setBusy] = useState('');
   const [toast, setToast] = useState(null);
-  const [copiedField, setCopiedField] = useState(null);
-  const [showSecrets, setShowSecrets] = useState({});
+  const [activeTab, setActiveTab] = useState('overview');
+  const [copied, setCopied] = useState(false);
+  const [importRange, setImportRange] = useState('24H');
+  const [customRange, setCustomRange] = useState({ since: '', until: '' });
+  const [pageFilter, setPageFilter] = useState('ALL');
 
-  // Modals
-  const [addModalOpen, setAddModalOpen] = useState(false);
-  const [newPageData, setNewPageData] = useState({ page_id: '', page_name: '', access_token: '' });
-  const [addingPage, setAddingPage] = useState(false);
-
-  const [refreshModal, setRefreshModal] = useState({ isOpen: false, page: null, newAccessToken: '' });
-  const [refreshingPage, setRefreshingPage] = useState(false);
+  const user = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('crm_user') || '{}');
+    } catch {
+      return {};
+    }
+  }, []);
+  const canManage = String(user?.role || '').toUpperCase() === 'ADMIN';
 
   const showToast = (type, message) => {
     setToast({ type, message });
-    setTimeout(() => setToast(null), 4500);
+    window.setTimeout(() => setToast(null), 5000);
   };
 
-  const handleCopy = (text, label) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 2000);
-  };
-
-  const toggleSecret = (key) => {
-    setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  // Fetch Data
-  const fetchData = async () => {
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      setLoading(true);
-      const [pagesRes, statusRes] = await Promise.all([
-        API.get('/integrations/meta/pages'),
-        API.get('/integrations/meta/status')
+      const [dashRes, activityRes, eventsRes, jobsRes] = await Promise.all([
+        API.get('/integrations/meta/dashboard'),
+        API.get('/integrations/meta/activity?limit=60'),
+        API.get('/integrations/meta/events?status=FAILED&limit=100'),
+        API.get('/integrations/meta/import/jobs?limit=15'),
       ]);
-      setPages(pagesRes.data || []);
-      setMetaStatus(statusRes.data || null);
-    } catch (err) {
-      showToast('error', 'Failed to load Meta integration data: ' + (err.response?.data?.detail || err.message));
+      setDashboard(dashRes.data || null);
+      setActivity(activityRes.data?.activity || []);
+      setFailedEvents(eventsRes.data?.events || []);
+      setJobs(jobsRes.data?.jobs || []);
+    } catch (error) {
+      showToast(
+        'error',
+        error.response?.data?.detail || 'Failed to load Facebook & Instagram integration.'
+      );
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
+    const params = new URLSearchParams(window.location.search);
+    const oauthStatus = params.get('meta_oauth');
+    if (oauthStatus) {
+      showToast(
+        oauthStatus === 'success' ? 'success' : 'error',
+        params.get('message') || (oauthStatus === 'success' ? 'Facebook connected successfully.' : 'Facebook connection failed.')
+      );
+      params.delete('meta_oauth');
+      params.delete('message');
+      const query = params.toString();
+      window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Page Handlers
-  const handleConnectNewPage = async (e) => {
-    e.preventDefault();
-    if (!newPageData.page_id.trim() || !newPageData.access_token.trim()) {
-      showToast('error', 'Page ID and Page Access Token are required.');
-      return;
-    }
-    try {
-      setAddingPage(true);
-      const res = await API.post('/integrations/meta/pages', newPageData);
-      if (res.data.success) {
-        showToast('success', res.data.message || 'Facebook Page connected successfully!');
-        setAddModalOpen(false);
-        setNewPageData({ page_id: '', page_name: '', access_token: '' });
-        fetchData();
-      } else {
-        showToast('error', `${res.data.message} ${res.data.error_details ? '(' + res.data.error_details + ')' : ''}`);
+  useEffect(() => {
+    const active = jobs.some((job) => ['PENDING', 'RUNNING'].includes(job.status));
+    if (!active) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await API.get('/integrations/meta/import/jobs?limit=15');
+        setJobs(res.data?.jobs || []);
+      } catch {
+        /* polling failure is non-fatal */
       }
-    } catch (err) {
-      showToast('error', 'Failed to connect page: ' + (err.response?.data?.detail || err.message));
-    } finally {
-      setAddingPage(false);
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [jobs]);
+
+  const pages = dashboard?.pages || [];
+  const forms = dashboard?.forms || [];
+  const stats = dashboard?.stats || {};
+  const connection = dashboard?.connection;
+  const token = dashboard?.token || {};
+  const latestImport = jobs[0] || dashboard?.latest_import;
+
+  const scopes = connection?.scopes || [];
+  const missingScopes = REQUIRED_SCOPES.filter((scope) => !scopes.includes(scope));
+  const filteredForms = pageFilter === 'ALL' ? forms : forms.filter((form) => form.page_id === pageFilter);
+  const activePages = pages.filter((page) => page.is_selected);
+  const totalFormsCount = forms.length;
+  const selectedFormsCount = forms.filter((form) => form.is_selected).length;
+
+  const handleConnect = async () => {
+    try {
+      setBusy('connect');
+      const res = await API.get('/integrations/meta/oauth/start');
+      if (!res.data?.authorize_url) throw new Error('Meta authorization URL was not returned.');
+      window.location.href = res.data.authorize_url;
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || error.message || 'Unable to start Facebook OAuth.');
+      setBusy('');
     }
   };
 
-  const handleSyncPage = async (pageId) => {
+  const handleDisconnect = async () => {
+    if (!window.confirm('Disconnect the Facebook account? Auto Sync will stop until you reconnect.')) return;
     try {
-      setPageActionLoading(prev => ({ ...prev, [pageId]: 'sync' }));
-      const res = await API.post(`/integrations/meta/pages/${pageId}/sync`);
-      if (res.data.success) {
-        showToast('success', res.data.message);
-      } else {
-        showToast('error', `${res.data.message} ${res.data.error_details ? '(' + res.data.error_details + ')' : ''}`);
-      }
-      fetchData();
-    } catch (err) {
-      showToast('error', 'Sync failed: ' + (err.response?.data?.detail || err.message));
+      setBusy('disconnect');
+      const res = await API.post('/integrations/meta/connection/disconnect');
+      showToast('success', res.data?.message || 'Facebook account disconnected.');
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to disconnect Facebook.');
     } finally {
-      setPageActionLoading(prev => ({ ...prev, [pageId]: null }));
+      setBusy('');
     }
   };
 
-  const handleToggleStatus = async (page) => {
-    const isConnected = page.status === 'CONNECTED';
-    const action = isConnected ? 'disconnect' : 'connect';
+  const handleAutoSync = async (enabled) => {
     try {
-      setPageActionLoading(prev => ({ ...prev, [page.page_id]: action }));
-      await API.post(`/integrations/meta/pages/${page.page_id}/${action}`);
-      showToast('success', `Page '${page.page_name}' ${isConnected ? 'disconnected' : 'connected'}.`);
-      fetchData();
-    } catch (err) {
-      showToast('error', `Failed to ${action} page: ` + (err.response?.data?.detail || err.message));
+      setBusy('auto-sync');
+      await API.post('/integrations/meta/connection/auto-sync', { enabled });
+      showToast('success', `Auto Sync ${enabled ? 'enabled' : 'disabled'}.`);
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to update Auto Sync.');
     } finally {
-      setPageActionLoading(prev => ({ ...prev, [page.page_id]: null }));
+      setBusy('');
     }
   };
 
-  const handleRefreshPage = async (e) => {
-    e.preventDefault();
-    if (!refreshModal.newAccessToken.trim()) {
-      showToast('error', 'Please provide the new Page Access Token.');
-      return;
-    }
+  const handleSyncNow = async () => {
     try {
-      setRefreshingPage(true);
-      const res = await API.post(`/integrations/meta/pages/${refreshModal.page.page_id}/refresh`, {
-        access_token: refreshModal.newAccessToken.trim()
+      setBusy('sync');
+      const res = await API.post('/integrations/meta/sync-now', {}, { timeout: 180000 });
+      const summary = res.data?.summary || {};
+      showToast(
+        'success',
+        `Sync complete. ${summary.pages ?? 0} Page(s), ${summary.forms ?? 0} form(s), ${summary.events?.processed ?? 0} lead(s) processed.`
+      );
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Sync Now failed.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handlePageSelect = async (page, selected) => {
+    try {
+      setBusy(`page-${page.page_id}`);
+      const res = await API.post(`/integrations/meta/pages/${page.page_id}/select`, {
+        selected,
+        auto_sync_enabled: selected ? page.auto_sync_enabled : false,
       });
-      if (res.data.success) {
-        showToast('success', res.data.message);
-        setRefreshModal({ isOpen: false, page: null, newAccessToken: '' });
-        fetchData();
+      if (res.data?.subscription && !res.data.subscription.success) {
+        showToast('warning', `Page saved, but webhook subscription failed: ${res.data.subscription.message}`);
       } else {
-        showToast('error', `${res.data.message} ${res.data.error_details ? '(' + res.data.error_details + ')' : ''}`);
+        showToast('success', `Page ${selected ? 'connected' : 'paused'}.`);
       }
-    } catch (err) {
-      showToast('error', 'Token refresh failed: ' + (err.response?.data?.detail || err.message));
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to update Page selection.');
     } finally {
-      setRefreshingPage(false);
+      setBusy('');
     }
   };
 
-  const handleDeletePage = async (pageId, pageName) => {
-    if (!window.confirm(`Are you sure you want to remove the connected Facebook Page '${pageName}' (ID: ${pageId})? Leads captured for this page will remain in CRM, but future webhook leads from this page will be paused.`)) {
+  const handlePageAutoSync = async (page, enabled) => {
+    try {
+      setBusy(`page-auto-${page.page_id}`);
+      await API.post(`/integrations/meta/pages/${page.page_id}/auto-sync`, { enabled });
+      await load(true);
+      showToast('success', `Auto Sync ${enabled ? 'enabled' : 'disabled'} for ${page.page_name}.`);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to update Page Auto Sync.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleRefreshForms = async (page) => {
+    try {
+      setBusy(`forms-${page.page_id}`);
+      const res = await API.post(`/integrations/meta/pages/${page.page_id}/forms/sync`, {}, { timeout: 90000 });
+      showToast('success', `${res.data?.count ?? 0} form(s) refreshed for ${page.page_name}.`);
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Form refresh failed.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleSubscribe = async (page) => {
+    try {
+      setBusy(`subscribe-${page.page_id}`);
+      const res = await API.post(`/integrations/meta/pages/${page.page_id}/subscribe`);
+      showToast(res.data?.success ? 'success' : 'warning', res.data?.message || 'Subscription requested.');
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Webhook subscription failed.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const updateFormSelection = async (formIds, selected) => {
+    if (!formIds.length) return;
+    try {
+      setBusy('forms-selection');
+      await API.post('/integrations/meta/forms/selection', {
+        form_ids: formIds,
+        selected,
+      });
+      await load(true);
+      showToast('success', `${formIds.length} form(s) ${selected ? 'selected' : 'deselected'}.`);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to update form selection.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleStartImport = async () => {
+    if (importRange === 'CUSTOM' && (!customRange.since || !customRange.until)) {
+      showToast('error', 'Select both a start and end date for the custom range.');
       return;
     }
     try {
-      setPageActionLoading(prev => ({ ...prev, [pageId]: 'delete' }));
-      await API.delete(`/integrations/meta/pages/${pageId}`);
-      showToast('success', `Facebook Page '${pageName}' removed.`);
-      fetchData();
-    } catch (err) {
-      showToast('error', 'Failed to remove page: ' + (err.response?.data?.detail || err.message));
+      setBusy('import');
+      const payload = { range: importRange };
+      if (importRange === 'CUSTOM') {
+        payload.since = `${customRange.since}T00:00:00`;
+        payload.until = `${customRange.until}T23:59:59`;
+      }
+      const res = await API.post('/integrations/meta/import', payload, { timeout: 60000 });
+      showToast('success', res.data?.message || 'Historical import started.');
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to start historical import.');
     } finally {
-      setPageActionLoading(prev => ({ ...prev, [pageId]: null }));
+      setBusy('');
     }
   };
 
-  const webhookUrl = `${window.location.origin}/api/integrations/meta/webhook`;
-  const verifyToken = 'wacrm_meta_verify_secret';
-  const totalLeads = pages.reduce((sum, p) => sum + (p.lead_count || 0), 0) || (metaStatus?.total_meta_leads || 0);
-  const activeCount = pages.filter(p => p.status === 'CONNECTED').length;
+  const handleCancelImport = async (jobId) => {
+    try {
+      setBusy(`cancel-${jobId}`);
+      await API.post(`/integrations/meta/import/jobs/${jobId}/cancel`);
+      showToast('success', 'Import cancellation requested.');
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Failed to cancel import.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleRetryAll = async () => {
+    try {
+      setBusy('retry-all');
+      const res = await API.post('/integrations/meta/events/retry-failed');
+      showToast('success', res.data?.message || 'Failed leads queued for retry.');
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Retry failed.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleRetryOne = async (eventId) => {
+    try {
+      setBusy(`retry-${eventId}`);
+      const res = await API.post(`/integrations/meta/events/${eventId}/retry`);
+      showToast('success', res.data?.message || 'Lead retried.');
+      await load(true);
+    } catch (error) {
+      showToast('error', error.response?.data?.detail || 'Retry failed.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const copyWebhook = () => {
+    if (!dashboard?.webhook_url) return;
+    navigator.clipboard.writeText(dashboard.webhook_url);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  };
+
+  const tabs = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'pages', label: 'Pages & Forms', icon: Layers, badge: pages.length },
+    { id: 'import', label: 'Historical Import', icon: Download },
+    { id: 'activity', label: 'Activity & Errors', icon: Activity, badge: failedEvents.length },
+  ];
+
+  if (loading) {
+    return (
+      <div className="meta-page-wrapper">
+        <div className="meta-loading">
+          <Loader2 className="spin" size={28} />
+          <span>Loading Facebook & Instagram integration…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="meta-page-wrapper">
-      {/* Toast Alert */}
       {toast && (
-        <div 
-          style={{ 
-            position: 'fixed', 
-            top: '20px', 
-            right: '20px', 
-            zIndex: 3000, 
-            maxWidth: '460px',
-            backgroundColor: toast.type === 'success' ? '#ecfdf5' : '#fef2f2',
-            color: toast.type === 'success' ? '#065f46' : '#991b1b',
-            border: `1px solid ${toast.type === 'success' ? '#a7f3d0' : '#fecaca'}`,
-            borderRadius: '12px',
-            padding: '14px 18px',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            fontWeight: 600,
-            fontSize: '0.88rem'
-          }}
-        >
-          {toast.type === 'success' ? <CheckCircle2 size={20} color="#059669" /> : <AlertTriangle size={20} color="#dc2626" />}
+        <div className={`meta-toast ${toast.type}`}>
+          {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
           <span>{toast.message}</span>
+          <button type="button" onClick={() => setToast(null)} aria-label="Dismiss">
+            <X size={16} />
+          </button>
         </div>
       )}
 
-      {/* Header with Navigation */}
       <div className="meta-page-header">
         <div>
           <div className="meta-breadcrumb">
             <Link to="/settings/integrations">
-              <ArrowLeft size={14} /> Back to Integration Hub
+              <ArrowLeft size={14} /> Integrations
             </Link>
-            <span>/</span>
-            <span>Meta Ads Integration</span>
+            <ChevronRight size={14} />
+            <span>Facebook &amp; Instagram</span>
           </div>
-
           <div className="meta-title-group">
             <div className="meta-header-icon">
-              <Share2 size={28} />
+              <PlugZap size={26} />
             </div>
             <div>
-              <h1 className="meta-page-title">Meta Ads Integration Hub</h1>
+              <h1 className="meta-page-title">Facebook &amp; Instagram Lead Ads</h1>
               <p className="meta-page-subtitle">
-                Manage connected Facebook & Instagram Pages, encrypted Page Access Tokens, and webhook ingestion.
+                Official Meta OAuth · Instant Form leads · Page &amp; Form auto-discovery · Historical import
               </p>
             </div>
           </div>
         </div>
-
         <div className="meta-header-actions">
-          <button 
-            type="button" 
-            className="btn-meta-outline"
-            onClick={fetchData}
-            disabled={loading}
-          >
-            <RefreshCw size={15} className={loading ? 'spin' : ''} />
-            <span>Refresh</span>
+          <button type="button" className="btn-meta-ghost" onClick={() => load()} disabled={loading}>
+            <RefreshCw size={15} /> Refresh
           </button>
-
-          <button 
-            type="button" 
+          <button
+            type="button"
             className="btn-meta-primary"
-            onClick={() => setAddModalOpen(true)}
+            onClick={handleSyncNow}
+            disabled={!canManage || busy === 'sync' || (!connection && !pages.length)}
           >
-            <Plus size={16} />
-            <span>Connect Facebook Page</span>
+            {busy === 'sync' ? <Loader2 size={15} className="spin" /> : <Zap size={15} />}
+            Sync Now
           </button>
         </div>
       </div>
 
-      {/* 4 Summary Metric Cards */}
-      <div className="meta-metrics-grid">
-        <div className="meta-metric-card">
-          <div className="meta-metric-icon blue">
-            <Layers size={18} />
-          </div>
-          <div className="meta-metric-content">
-            <h4>Connected Pages</h4>
-            <p>{pages.length} {pages.length === 1 ? 'Page' : 'Pages'} ({activeCount} Active)</p>
+      {!dashboard?.configured && (
+        <div className="meta-banner info">
+          <ShieldCheck size={18} />
+          <div>
+            <strong>Server configuration required.</strong>
+            <p>
+              Add <code>META_APP_ID</code>, <code>META_APP_SECRET</code> and{' '}
+              <code>META_VERIFY_TOKEN</code> to the backend environment, then reload this page.
+            </p>
           </div>
         </div>
+      )}
 
-        <div className="meta-metric-card">
-          <div className="meta-metric-icon emerald">
-            <Zap size={18} />
+      {connection && ['EXPIRED', 'EXPIRING_SOON'].includes(token.status) && (
+        <div className={`meta-banner ${token.status === 'EXPIRED' ? 'danger' : 'warning'}`}>
+          <KeyRound size={18} />
+          <div>
+            <strong>{token.status === 'EXPIRED' ? 'Meta access token expired.' : 'Meta access token expires soon.'}</strong>
+            <p>{token.label} Reconnect the Facebook account to keep lead sync running.</p>
           </div>
-          <div className="meta-metric-content">
-            <h4>Total Leads Captured</h4>
-            <p>{totalLeads} Leads</p>
-          </div>
+          {canManage && (
+            <button type="button" className="btn-meta-primary" onClick={handleConnect}>
+              Reconnect
+            </button>
+          )}
         </div>
+      )}
 
-        <div className="meta-metric-card">
-          <div className="meta-metric-icon purple">
-            <ShieldCheck size={18} />
-          </div>
-          <div className="meta-metric-content">
-            <h4>Webhook Status</h4>
-            <p>{metaStatus?.configured ? '🟢 Active & Listening' : '⚪ Setup Ready'}</p>
+      {dashboard?.webhook_configured === false && (
+        <div className="meta-banner danger">
+          <Wifi size={18} />
+          <div>
+            <strong>Webhook signature verification is not configured.</strong>
+            <p>Set <code>META_APP_SECRET</code>. The webhook fails closed until the app secret is present.</p>
           </div>
         </div>
+      )}
 
-        <div className="meta-metric-card">
-          <div className="meta-metric-icon amber">
-            <Globe size={18} />
-          </div>
-          <div className="meta-metric-content">
-            <h4>Graph API Version</h4>
-            <p>{metaStatus?.api_version || 'v26.0'}</p>
-          </div>
-        </div>
+      <div className="meta-stats-grid">
+        <StatCard icon={Users} label="Connected accounts" value={stats.connected_accounts ?? 0} />
+        <StatCard icon={Layers} label="Connected Pages" value={`${stats.connected_pages ?? 0}/${stats.total_pages ?? 0}`} />
+        <StatCard icon={FileText} label="Lead Forms" value={`${stats.selected_forms ?? 0}/${stats.total_forms ?? 0}`} />
+        <StatCard icon={Zap} label="Meta leads" value={stats.total_leads ?? 0} />
+        <StatCard icon={Clock} label="Leads today" value={stats.today_leads ?? 0} />
+        <StatCard icon={AlertTriangle} label="Failed syncs" value={stats.failed_events ?? 0} tone={stats.failed_events ? 'danger' : ''} />
+        <StatCard icon={RefreshCw} label="Last sync" value={formatDateTime(stats.last_sync_at)} compact />
+        <StatCard icon={Wifi} label="Webhook" value={dashboard?.webhook_status || '—'} tone={statusTone(dashboard?.webhook_status)} compact />
       </div>
 
-      <div className="meta-layout-main">
-        {/* Section 1: Connected Facebook Pages */}
-        <div className="meta-section-card">
-          <div className="meta-section-header">
-            <div className="meta-section-title-wrap">
-              <h2 className="meta-section-title">Connected Facebook Pages</h2>
-              <span className="meta-badge-count">{pages.length} {pages.length === 1 ? 'Page' : 'Pages'}</span>
+      <div className="meta-tabs">
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={`meta-tab ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <Icon size={16} />
+              {tab.label}
+              {tab.badge ? <span className="meta-tab-badge">{tab.badge}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === 'overview' && (
+        <div className="meta-grid-2">
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Facebook connection</h2>
+                <p>Official Meta OAuth. Tokens stay encrypted on the server.</p>
+              </div>
+              <span className={`meta-pill ${statusTone(connection?.status)}`}>
+                {connection?.status || 'NOT CONNECTED'}
+              </span>
             </div>
 
-            <button 
-              type="button" 
-              className="btn-meta-primary" 
-              style={{ padding: '8px 16px', fontSize: '0.82rem' }}
-              onClick={() => setAddModalOpen(true)}
-            >
-              <Plus size={15} />
-              <span>Add Another Page</span>
-            </button>
-          </div>
-
-          {pages.length === 0 ? (
-            <div className="meta-empty-state">
-              <div className="meta-empty-icon">
-                <Share2 size={28} />
+            {connection ? (
+              <>
+                <div className="meta-connection-row">
+                  <div className="meta-avatar">{(connection.fb_user_name || 'F').charAt(0).toUpperCase()}</div>
+                  <div className="meta-connection-meta">
+                    <strong>{connection.fb_user_name || 'Facebook account'}</strong>
+                    <span>User ID: {connection.fb_user_id}</span>
+                    <span>Connected: {formatDateTime(connection.created_at)}</span>
+                  </div>
+                </div>
+                <div className="meta-kv-grid">
+                  <KV label="Token status" value={<span className={`meta-pill ${statusTone(token.status)}`}>{token.label || token.status}</span>} />
+                  <KV label="Token expiry" value={formatDateTime(token.expires_at)} />
+                  <KV label="Last successful sync" value={formatDateTime(stats.last_sync_at)} />
+                  <KV label="Last webhook" value={formatDateTime(stats.last_webhook_at)} />
+                </div>
+                <div className="meta-toggle-row">
+                  <div>
+                    <strong>Auto Sync</strong>
+                    <span>Capture new Instant Form leads automatically.</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`meta-toggle ${connection.auto_sync_enabled ? 'on' : ''}`}
+                    onClick={() => handleAutoSync(!connection.auto_sync_enabled)}
+                    disabled={!canManage || busy === 'auto-sync'}
+                    aria-pressed={connection.auto_sync_enabled}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="meta-actions">
+                  <button type="button" className="btn-meta-primary" onClick={handleConnect} disabled={!canManage}>
+                    <RefreshCw size={15} /> Reconnect
+                  </button>
+                  <button type="button" className="btn-meta-danger" onClick={handleDisconnect} disabled={!canManage || busy === 'disconnect'}>
+                    <Unplug size={15} /> Disconnect
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="meta-empty">
+                <div className="meta-empty-icon"><PlugZap size={26} /></div>
+                <h3>Connect your Facebook Business account</h3>
+                <p>
+                  Authorize CHN CRM to discover your Pages, Lead Forms and Instant Form leads.
+                  Access tokens are encrypted and never sent to the browser.
+                </p>
+                <button type="button" className="btn-meta-primary" onClick={handleConnect} disabled={!canManage || !dashboard?.configured}>
+                  <PlugZap size={16} /> Connect Facebook
+                </button>
+                {!canManage && <small>Only an administrator can connect Facebook.</small>}
               </div>
-              <h3>No Facebook Pages Connected Yet</h3>
-              <p>
-                Each Facebook Page requires its own Page Access Token with <code>leads_retrieval</code> permission. 
-                Connect your first Page to start ingesting leads automatically.
-              </p>
-              <button 
-                type="button" 
-                className="btn-meta-primary"
-                onClick={() => setAddModalOpen(true)}
-              >
-                <Plus size={16} />
-                <span>Connect Your First Facebook Page</span>
+            )}
+          </section>
+
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Webhook</h2>
+                <p>Meta sends every Instant Form submission to this endpoint.</p>
+              </div>
+              <span className={`meta-pill ${statusTone(dashboard?.webhook_status)}`}>{dashboard?.webhook_status || '—'}</span>
+            </div>
+            <label className="meta-label">Callback URL</label>
+            <div className="meta-copy-field">
+              <code>{dashboard?.webhook_url || '—'}</code>
+              <button type="button" onClick={copyWebhook} aria-label="Copy webhook URL">
+                {copied ? <Check size={15} /> : <Copy size={15} />}
               </button>
             </div>
-          ) : (
-            <div className="meta-pages-grid">
-              {pages.map((p) => {
-                const isActioning = pageActionLoading[p.page_id];
-                return (
-                  <div key={p.page_id} className="meta-page-card">
-                    <div>
-                      <div className="meta-card-top">
-                        <div className="meta-card-name-group">
+            <div className="meta-kv-grid">
+              <KV label="API version" value={dashboard?.api_version || '—'} />
+              <KV label="Verify token" value={<span className="meta-muted">Configured server-side (META_VERIFY_TOKEN)</span>} />
+              <KV label="Signature check" value={dashboard?.webhook_configured ? <span className="meta-ok">Enabled</span> : <span className="meta-bad">Not configured</span>} />
+              <KV label="Pending retries" value={stats.pending_events ?? 0} />
+            </div>
+            <div className="meta-note">
+              In Meta App Dashboard → Webhooks, subscribe the <strong>Page</strong> object to the{' '}
+              <code>leadgen</code> field using this URL. CHN CRM subscribes each selected Page automatically.
+            </div>
+          </section>
+
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Setup checklist</h2>
+                <p>Everything required for real-time lead capture.</p>
+              </div>
+            </div>
+            <ChecklistItem done={Boolean(connection)} label="Facebook account connected" />
+            <ChecklistItem done={dashboard?.webhook_configured} label="Webhook signature verification configured" />
+            <ChecklistItem done={activePages.length > 0} label={`At least one Page selected (${activePages.length})`} />
+            <ChecklistItem done={selectedFormsCount > 0} label={`At least one Lead Form selected (${selectedFormsCount})`} />
+            <ChecklistItem done={Boolean(connection?.auto_sync_enabled)} label="Auto Sync enabled" />
+            <ChecklistItem done={!missingScopes.length} label={missingScopes.length ? `Missing permissions: ${missingScopes.join(', ')}` : 'All recommended permissions granted'} />
+          </section>
+
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Permissions &amp; Instagram</h2>
+                <p>Scopes requested by the official OAuth dialog.</p>
+              </div>
+              <ShieldCheck size={18} className="meta-muted" />
+            </div>
+            <div className="meta-scope-list">
+              {REQUIRED_SCOPES.map((scope) => (
+                <span key={scope} className={`meta-scope ${scopes.includes(scope) ? 'granted' : ''}`}>
+                  {scopes.includes(scope) ? <Check size={12} /> : <X size={12} />} {scope}
+                </span>
+              ))}
+            </div>
+            <div className="meta-note">
+              <Camera size={14} /> Instagram business assets linked to your Pages are discovered automatically.
+              Instagram Instant Form leads are captured when the authorized Page and Meta app permissions support them;
+              not every Instagram account or ad format supports Instant Lead Forms.
+            </div>
+          </section>
+        </div>
+      )}
+
+      {activeTab === 'pages' && (
+        <div className="meta-stack">
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Pages &amp; Lead Forms</h2>
+                <p>All Pages returned by Meta for the connected account. No manual Page or Form ID entry.</p>
+              </div>
+              <div className="meta-inline-actions">
+                <select className="meta-select" value={pageFilter} onChange={(event) => setPageFilter(event.target.value)}>
+                  <option value="ALL">All Pages</option>
+                  {pages.map((page) => (
+                    <option key={page.page_id} value={page.page_id}>{page.page_name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn-meta-ghost"
+                  disabled={!canManage || !pages.length || Boolean(busy)}
+                  onClick={async () => {
+                    for (const page of pages.filter((item) => item.is_selected)) {
+                      await handleRefreshForms(page);
+                    }
+                  }}
+                >
+                  <RefreshCw size={14} /> Refresh all forms
+                </button>
+              </div>
+            </div>
+
+            {!pages.length ? (
+              <div className="meta-empty">
+                <Layers size={26} />
+                <h3>No Pages discovered yet</h3>
+                <p>Connect Facebook or run Sync Now to retrieve authorized Pages.</p>
+              </div>
+            ) : (
+              <div className="meta-page-list">
+                {pages
+                  .filter((page) => pageFilter === 'ALL' || page.page_id === pageFilter)
+                  .map((page) => {
+                    const pageForms = forms.filter((form) => form.page_id === page.page_id);
+                    const selectedCount = pageForms.filter((form) => form.is_selected).length;
+                    return (
+                      <div key={page.page_id} className="meta-page-block">
+                        <div className="meta-page-row">
                           <div className="meta-page-avatar">
-                            {p.page_name ? p.page_name.charAt(0).toUpperCase() : 'F'}
+                            {page.page_picture_url ? (
+                              <img src={page.page_picture_url} alt="" />
+                            ) : (
+                              <span>{(page.page_name || 'P').charAt(0)}</span>
+                            )}
                           </div>
-                          <div>
-                            <h3 className="meta-page-card-title">{p.page_name}</h3>
-                            <div className="meta-page-id-badge">
-                              <span>Page ID: {p.page_id}</span>
-                              <button 
-                                className="meta-btn-copy-mini"
-                                onClick={() => handleCopy(p.page_id, p.page_id)}
-                                title="Copy Page ID"
+                          <div className="meta-page-main">
+                            <div className="meta-page-name">
+                              <strong>{page.page_name}</strong>
+                              <span className={`meta-pill ${statusTone(page.status)}`}>{page.status}</span>
+                              {page.instagram_username && (
+                                <span className="meta-pill instagram">
+                                  <Camera size={12} /> @{page.instagram_username}
+                                </span>
+                              )}
+                            </div>
+                            <div className="meta-page-details">
+                              <span>Page ID: {page.page_id}</span>
+                              <span>{page.form_count} form(s) · {page.selected_form_count} selected</span>
+                              <span>{page.lead_count} lead(s)</span>
+                              {page.last_synced_at && <span>Synced {formatDateTime(page.last_synced_at)}</span>}
+                            </div>
+                            {page.error_message && (
+                              <div className="meta-inline-error">
+                                <AlertTriangle size={13} /> {page.error_message}
+                              </div>
+                            )}
+                          </div>
+                          <div className="meta-page-controls">
+                            <label className="meta-check">
+                              <input
+                                type="checkbox"
+                                checked={page.is_selected}
+                                onChange={(event) => handlePageSelect(page, event.target.checked)}
+                                disabled={!canManage || busy === `page-${page.page_id}`}
+                              />
+                              Connected
+                            </label>
+                            <label className="meta-check">
+                              <input
+                                type="checkbox"
+                                checked={page.auto_sync_enabled}
+                                onChange={(event) => handlePageAutoSync(page, event.target.checked)}
+                                disabled={!canManage || !page.is_selected || busy === `page-auto-${page.page_id}`}
+                              />
+                              Auto Sync
+                            </label>
+                            <span className={`meta-pill ${page.webhook_subscribed ? 'success' : 'warning'}`}>
+                              {page.webhook_subscribed ? 'Webhook active' : 'Webhook missing'}
+                            </span>
+                            <div className="meta-inline-actions">
+                              <button
+                                type="button"
+                                className="btn-meta-ghost small"
+                                onClick={() => handleRefreshForms(page)}
+                                disabled={!canManage || busy === `forms-${page.page_id}`}
                               >
-                                {copiedField === p.page_id ? <Check size={12} style={{ color: '#10b981' }} /> : <Copy size={12} />}
+                                {busy === `forms-${page.page_id}` ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+                                Forms
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-meta-ghost small"
+                                onClick={() => handleSubscribe(page)}
+                                disabled={!canManage || busy === `subscribe-${page.page_id}`}
+                              >
+                                <Wifi size={13} /> Subscribe
                               </button>
                             </div>
                           </div>
                         </div>
 
-                        <span className={`status-badge ${p.status.toLowerCase()}`}>
-                          {p.status === 'CONNECTED' && '🟢 Connected'}
-                          {p.status === 'DISCONNECTED' && '⚪ Disconnected'}
-                          {p.status === 'ERROR' && '🔴 Error'}
-                        </span>
+                        <div className="meta-forms-head">
+                          <div>
+                            <strong>Lead Forms</strong>
+                            <span>{selectedCount} of {pageForms.length} selected</span>
+                          </div>
+                          <div className="meta-inline-actions">
+                            <button type="button" className="btn-meta-link" onClick={() => updateFormSelection(pageForms.map((f) => f.form_id), true)} disabled={!canManage || !pageForms.length}>
+                              Select all
+                            </button>
+                            <button type="button" className="btn-meta-link" onClick={() => updateFormSelection(pageForms.map((f) => f.form_id), false)} disabled={!canManage || !pageForms.length}>
+                              Deselect all
+                            </button>
+                          </div>
+                        </div>
+
+                        {pageForms.length ? (
+                          <div className="meta-table-wrap">
+                            <table className="meta-table">
+                              <thead>
+                                <tr>
+                                  <th style={{ width: 42 }} />
+                                  <th>Form name</th>
+                                  <th>Form ID</th>
+                                  <th>Status</th>
+                                  <th>Leads</th>
+                                  <th>Last lead</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {pageForms.map((form) => (
+                                  <tr key={form.form_id} className={form.is_selected ? 'selected' : ''}>
+                                    <td>
+                                      <input
+                                        type="checkbox"
+                                        checked={form.is_selected}
+                                        onChange={() => updateFormSelection([form.form_id], !form.is_selected)}
+                                        disabled={!canManage || busy === 'forms-selection'}
+                                      />
+                                    </td>
+                                    <td><strong>{form.name || 'Untitled form'}</strong></td>
+                                    <td><code>{form.form_id}</code></td>
+                                    <td><span className={`meta-pill ${statusTone(form.status)}`}>{form.status}</span></td>
+                                    <td>{form.leads_count ?? 0}</td>
+                                    <td>{formatDateTime(form.last_lead_at)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="meta-empty small">
+                            <FileText size={18} />
+                            <span>No forms discovered. Click <strong>Forms</strong> to refresh from Meta.</span>
+                          </div>
+                        )}
                       </div>
-
-                      {p.error_message && (
-                        <div className="meta-card-error" style={{ marginTop: '12px' }}>
-                          <AlertTriangle size={15} />
-                          <span>{p.error_message}</span>
-                        </div>
-                      )}
-
-                      <div className="meta-card-stats" style={{ marginTop: '14px' }}>
-                        <div className="meta-stat-item">
-                          <span className="meta-stat-label">Leads Received</span>
-                          <span className="meta-stat-val" style={{ color: '#059669', fontSize: '1.05rem' }}>
-                            {p.lead_count || 0}
-                          </span>
-                        </div>
-
-                        <div className="meta-stat-item">
-                          <span className="meta-stat-label">Page Token</span>
-                          <span className="meta-token-preview">{p.masked_token}</span>
-                        </div>
-
-                        <div className="meta-stat-item">
-                          <span className="meta-stat-label">Last Synced</span>
-                          <span className="meta-stat-val" style={{ fontSize: '0.8rem', color: '#475569' }}>
-                            {p.last_synced_at ? new Date(p.last_synced_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }) : 'Never'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="meta-card-actions">
-                      <button
-                        type="button"
-                        className="btn-card-action"
-                        onClick={() => handleSyncPage(p.page_id)}
-                        disabled={Boolean(isActioning)}
-                        title="Sync & verify this Page token with Meta Graph API"
-                      >
-                        <RefreshCw size={13} className={isActioning === 'sync' ? 'spin' : ''} />
-                        <span>{isActioning === 'sync' ? 'Syncing...' : 'Sync'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className={`btn-card-action ${p.status === 'CONNECTED' ? 'disconnect' : 'connect'}`}
-                        onClick={() => handleToggleStatus(p)}
-                        disabled={Boolean(isActioning)}
-                        title={p.status === 'CONNECTED' ? 'Pause lead ingestion for this Page' : 'Resume lead ingestion for this Page'}
-                      >
-                        <Power size={13} />
-                        <span>{p.status === 'CONNECTED' ? 'Disconnect' : 'Connect'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className="btn-card-action"
-                        onClick={() => {
-                          setShowSecrets({});
-                          setRefreshModal({ isOpen: true, page: p, newAccessToken: '' });
-                        }}
-                        disabled={Boolean(isActioning)}
-                        title="Update Page Access Token"
-                      >
-                        <Key size={13} />
-                        <span>Refresh Token</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className="btn-card-action danger"
-                        onClick={() => handleDeletePage(p.page_id, p.page_name)}
-                        disabled={Boolean(isActioning)}
-                        title="Remove this Facebook Page from CRM"
-                      >
-                        <Trash2 size={13} />
-                        <span>Remove</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Section 2: Bottom Grid (Webhook Configuration & Step Guide) */}
-        <div className="meta-bottom-grid">
-          {/* Card: Webhook Configuration */}
-          <div className="meta-section-card">
-            <div className="meta-section-header">
-              <div className="meta-section-title-wrap">
-                <Zap size={20} style={{ color: '#1877f2' }} />
-                <h3 className="meta-section-title">Webhook Configuration</h3>
+                    );
+                  })}
               </div>
-            </div>
-
-            <div className="meta-setup-field">
-              <label className="meta-setup-label">Callback URL (Webhook Endpoint)</label>
-              <div className="meta-input-group">
-                <input type="text" readOnly value={webhookUrl} />
-                <button 
-                  type="button" 
-                  className="meta-btn-copy"
-                  onClick={() => handleCopy(webhookUrl, 'webhookUrl')}
-                >
-                  {copiedField === 'webhookUrl' ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
-                  <span>{copiedField === 'webhookUrl' ? 'Copied' : 'Copy'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="meta-setup-field">
-              <label className="meta-setup-label">Verify Token (hub.verify_token)</label>
-              <div className="meta-input-group">
-                <input type="text" readOnly value={verifyToken} />
-                <button 
-                  type="button" 
-                  className="meta-btn-copy"
-                  onClick={() => handleCopy(verifyToken, 'verifyToken')}
-                >
-                  {copiedField === 'verifyToken' ? <Check size={14} style={{ color: '#10b981' }} /> : <Copy size={14} />}
-                  <span>{copiedField === 'verifyToken' ? 'Copied' : 'Copy'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', marginTop: '16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Webhook Object Type</span>
-                <strong style={{ fontSize: '0.82rem', color: '#0f172a' }}>page</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Subscribed Field</span>
-                <strong style={{ fontSize: '0.82rem', color: '#1877f2' }}>leadgen</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Last Ingested Webhook</span>
-                <strong style={{ fontSize: '0.82rem', color: '#0f172a' }}>
-                  {metaStatus?.last_webhook_received ? new Date(metaStatus.last_webhook_received).toLocaleString() : 'Ready & Listening'}
-                </strong>
-              </div>
-            </div>
-          </div>
-
-          {/* Card: Setup Instructions Guide */}
-          <div className="meta-section-card">
-            <div className="meta-section-header">
-              <div className="meta-section-title-wrap">
-                <HelpCircle size={20} style={{ color: '#1877f2' }} />
-                <h3 className="meta-section-title">Setup Instructions</h3>
-              </div>
-              <a 
-                href="https://developers.facebook.com/apps" 
-                target="_blank" 
-                rel="noreferrer"
-                className="meta-breadcrumb" 
-                style={{ margin: 0, textDecoration: 'none', color: '#1877f2', fontWeight: 600, fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px' }}
-              >
-                Meta Developer App <ExternalLink size={13} />
-              </a>
-            </div>
-
-            <div className="meta-step-item">
-              <span className="meta-step-num">1</span>
-              <div className="meta-step-body">
-                <h4>Configure Webhooks in Meta Developer Portal</h4>
-                <p>Go to your Meta App &gt; <strong>Webhooks</strong> &gt; Select <strong>Page</strong> object &gt; Subscribe to the <code>leadgen</code> field using the Callback URL and Verify Token above.</p>
-              </div>
-            </div>
-
-            <div className="meta-step-item">
-              <span className="meta-step-num">2</span>
-              <div className="meta-step-body">
-                <h4>Generate Page Access Tokens</h4>
-                <p>For every Facebook Page running Lead Ads, generate a Page Access Token with <code>leads_retrieval</code> and <code>pages_manage_ads</code> permissions.</p>
-              </div>
-            </div>
-
-            <div className="meta-step-item">
-              <span className="meta-step-num">3</span>
-              <div className="meta-step-body">
-                <h4>Connect Pages in this Hub</h4>
-                <p>Click <strong>"+ Connect Facebook Page"</strong> and paste each Page's ID and token. WaCRM encrypts every token at rest and automatically routes leads to the correct page.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Modal: Connect Facebook Page */}
-      {addModalOpen && (
-        <div className="modal-overlay" onClick={() => setAddModalOpen(false)}>
-          <div className="modal-content" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h3>Connect Facebook Page</h3>
-                <span style={{ fontSize: '0.82rem', color: '#64748b' }}>
-                  Each Page is configured with its own encrypted Page Access Token.
-                </span>
-              </div>
-              <button className="modal-close-btn" onClick={() => setAddModalOpen(false)}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleConnectNewPage}>
-              <div className="modal-body">
-                <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', padding: '12px 14px', marginBottom: '18px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: '#1d4ed8', fontSize: '0.84rem', marginBottom: '4px' }}>
-                    <Layers size={16} /> Multi-Page Isolation
-                  </div>
-                  <p style={{ fontSize: '0.8rem', color: '#1e40af', margin: 0 }}>
-                    When a lead arrives via webhook, WaCRM identifies the Facebook Page ID and retrieves the lead details using that specific Page's access token.
-                  </p>
-                </div>
-
-                <div className="form-group">
-                  <label>Facebook Page ID <span style={{ color: '#ef4444' }}>*</span></label>
-                  <input 
-                    type="text" 
-                    required
-                    value={newPageData.page_id} 
-                    onChange={(e) => setNewPageData(prev => ({ ...prev, page_id: e.target.value }))}
-                    placeholder="e.g. 1320343594494609"
-                  />
-                  <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                    Found in Facebook Page &gt; Settings &gt; Page Setup &gt; Page ID.
-                  </span>
-                </div>
-
-                <div className="form-group">
-                  <label>Page Name</label>
-                  <input 
-                    type="text" 
-                    value={newPageData.page_name} 
-                    onChange={(e) => setNewPageData(prev => ({ ...prev, page_name: e.target.value }))}
-                    placeholder="e.g. Acme Realty Official (optional, auto-detected from Meta)"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Page Access Token (Encrypted) <span style={{ color: '#ef4444' }}>*</span></label>
-                  <div className="secret-input-wrapper">
-                    <input 
-                      type={showSecrets.newPageToken ? 'text' : 'password'} 
-                      required
-                      value={newPageData.access_token} 
-                      onChange={(e) => setNewPageData(prev => ({ ...prev, access_token: e.target.value }))}
-                      placeholder="EAABb..."
-                    />
-                    <button type="button" className="toggle-secret-btn" onClick={() => toggleSecret('newPageToken')}>
-                      {showSecrets.newPageToken ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                  <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                    Requires <code>leads_retrieval</code> and <code>pages_manage_ads</code> permissions.
-                  </span>
-                </div>
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn-hub btn-hub-outline" onClick={() => setAddModalOpen(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn-meta-primary" disabled={addingPage}>
-                  {addingPage ? <RefreshCw size={15} className="spin" /> : <CheckCircle2 size={15} />}
-                  <span>{addingPage ? 'Verifying & Saving...' : 'Verify & Connect Page'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
+            )}
+          </section>
         </div>
       )}
 
-      {/* Modal: Refresh Page Access Token */}
-      {refreshModal.isOpen && (
-        <div className="modal-overlay" onClick={() => setRefreshModal({ isOpen: false, page: null, newAccessToken: '' })}>
-          <div className="modal-content" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
+      {activeTab === 'import' && (
+        <div className="meta-grid-2">
+          <section className="meta-card">
+            <div className="meta-card-head">
               <div>
-                <h3>Refresh Page Access Token</h3>
-                <span style={{ fontSize: '0.82rem', color: '#64748b' }}>
-                  {refreshModal.page?.page_name} (Page ID: {refreshModal.page?.page_id})
-                </span>
+                <h2>Sync previous leads</h2>
+                <p>Import historical Instant Form leads. Duplicates are skipped using the Meta Lead ID.</p>
               </div>
-              <button className="modal-close-btn" onClick={() => setRefreshModal({ isOpen: false, page: null, newAccessToken: '' })}>
-                <X size={20} />
-              </button>
+              <Download size={18} className="meta-muted" />
             </div>
 
-            <form onSubmit={handleRefreshPage}>
-              <div className="modal-body">
-                <p style={{ fontSize: '0.86rem', color: '#475569', marginBottom: '16px' }}>
-                  Paste the updated Page Access Token below if it expired or was regenerated. It will be encrypted and validated against Meta Graph API.
-                </p>
+            <label className="meta-label">Date range</label>
+            <div className="meta-range-grid">
+              {RANGE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`meta-range ${importRange === option.value ? 'active' : ''}`}
+                  onClick={() => setImportRange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
 
-                <div className="form-group">
-                  <label>New Page Access Token <span style={{ color: '#ef4444' }}>*</span></label>
-                  <div className="secret-input-wrapper">
-                    <input 
-                      type={showSecrets.refreshToken ? 'text' : 'password'} 
-                      required
-                      value={refreshModal.newAccessToken} 
-                      onChange={(e) => setRefreshModal(prev => ({ ...prev, newAccessToken: e.target.value }))}
-                      placeholder="EAABb..."
-                    />
-                    <button type="button" className="toggle-secret-btn" onClick={() => toggleSecret('refreshToken')}>
-                      {showSecrets.refreshToken ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
+            {importRange === 'CUSTOM' && (
+              <div className="meta-date-grid">
+                <div>
+                  <label className="meta-label">From</label>
+                  <input
+                    type="date"
+                    className="meta-input"
+                    value={customRange.since}
+                    onChange={(event) => setCustomRange((prev) => ({ ...prev, since: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="meta-label">To</label>
+                  <input
+                    type="date"
+                    className="meta-input"
+                    value={customRange.until}
+                    onChange={(event) => setCustomRange((prev) => ({ ...prev, until: event.target.value }))}
+                  />
                 </div>
               </div>
+            )}
 
-              <div className="modal-footer">
-                <button 
-                  type="button" 
-                  className="btn-hub btn-hub-outline" 
-                  onClick={() => setRefreshModal({ isOpen: false, page: null, newAccessToken: '' })}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn-meta-primary" disabled={refreshingPage}>
-                  {refreshingPage ? <RefreshCw size={15} className="spin" /> : <RefreshCw size={15} />}
-                  <span>{refreshingPage ? 'Updating & Verifying...' : 'Update & Verify Token'}</span>
-                </button>
+            <div className="meta-import-scope">
+              <div>
+                <strong>{activePages.length}</strong>
+                <span>selected Page(s)</span>
               </div>
-            </form>
-          </div>
+              <div>
+                <strong>{selectedFormsCount}</strong>
+                <span>selected form(s)</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="btn-meta-primary wide"
+              onClick={handleStartImport}
+              disabled={!canManage || busy === 'import' || !selectedFormsCount}
+            >
+              {busy === 'import' ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
+              Start historical import
+            </button>
+
+            <div className="meta-note">
+              Meta only returns lead data while the form and Page are accessible and within Meta's retention rules.
+              Older leads may be unavailable. Imported leads keep their original Meta creation date and use the existing
+              CRM assignment and re-inquiry rules.
+            </div>
+          </section>
+
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Import jobs</h2>
+                <p>Progress is persisted and survives page reloads.</p>
+              </div>
+            </div>
+            {!jobs.length ? (
+              <div className="meta-empty small">
+                <Download size={20} />
+                <span>No historical imports have been run yet.</span>
+              </div>
+            ) : (
+              <div className="meta-job-list">
+                {jobs.map((job) => (
+                  <div key={job.id} className="meta-job">
+                    <div className="meta-job-head">
+                      <div>
+                        <strong>Import #{job.id}</strong>
+                        <span>{job.range_preset} · {formatDateTime(job.created_at)}</span>
+                      </div>
+                      <span className={`meta-pill ${statusTone(job.status)}`}>{job.status}</span>
+                    </div>
+                    <div className="meta-progress">
+                      <span style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
+                    </div>
+                    <div className="meta-job-stats">
+                      <span><strong>{job.imported}</strong> imported</span>
+                      <span><strong>{job.duplicates}</strong> duplicates</span>
+                      <span><strong>{job.failed}</strong> failed</span>
+                      <span><strong>{job.processed_forms}/{job.total_forms}</strong> forms</span>
+                    </div>
+                    {job.current_item && <div className="meta-job-current"><Loader2 size={12} className="spin" /> {job.current_item}</div>}
+                    {job.error && <div className="meta-inline-error"><AlertTriangle size={13} /> {job.error}</div>}
+                    {['PENDING', 'RUNNING'].includes(job.status) && canManage && (
+                      <button
+                        type="button"
+                        className="btn-meta-link"
+                        onClick={() => handleCancelImport(job.id)}
+                        disabled={busy === `cancel-${job.id}`}
+                      >
+                        Cancel import
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {activeTab === 'activity' && (
+        <div className="meta-stack">
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Failed syncs</h2>
+                <p>Failed lead fetches are retried automatically with backoff. You can retry immediately.</p>
+              </div>
+              <button
+                type="button"
+                className="btn-meta-primary"
+                onClick={handleRetryAll}
+                disabled={!canManage || !failedEvents.length || busy === 'retry-all'}
+              >
+                <RotateCcw size={15} /> Retry failed leads
+              </button>
+            </div>
+            {!failedEvents.length ? (
+              <div className="meta-empty small success">
+                <CheckCircle2 size={22} />
+                <span>No failed lead syncs. Everything is healthy.</span>
+              </div>
+            ) : (
+              <div className="meta-table-wrap">
+                <table className="meta-table">
+                  <thead>
+                    <tr>
+                      <th>Leadgen ID</th>
+                      <th>Page / Form</th>
+                      <th>Attempts</th>
+                      <th>Error</th>
+                      <th>Last attempt</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {failedEvents.map((event) => (
+                      <tr key={event.id}>
+                        <td><code>{event.leadgen_id || event.event_key}</code></td>
+                        <td>
+                          <div className="meta-cell-stack">
+                            <strong>{event.page_name || event.page_id || '—'}</strong>
+                            <span>{event.form_name || event.form_id || '—'}</span>
+                          </div>
+                        </td>
+                        <td>{event.attempt_count}/{event.max_attempts}</td>
+                        <td className="meta-error-cell">{event.last_error || '—'}</td>
+                        <td>{formatDateTime(event.created_at)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn-meta-ghost small"
+                            onClick={() => handleRetryOne(event.id)}
+                            disabled={!canManage || busy === `retry-${event.id}`}
+                          >
+                            <RotateCcw size={13} /> Retry
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="meta-card">
+            <div className="meta-card-head">
+              <div>
+                <h2>Sync activity log</h2>
+                <p>OAuth, asset discovery, webhook and lead-processing history.</p>
+              </div>
+            </div>
+            {!activity.length ? (
+              <div className="meta-empty small">
+                <Activity size={20} />
+                <span>No activity recorded yet.</span>
+              </div>
+            ) : (
+              <div className="meta-timeline">
+                {activity.map((item, index) => (
+                  <div key={`${item.source}-${item.id}-${index}`} className="meta-timeline-item">
+                    <span className={`meta-dot ${statusTone(item.status)}`} />
+                    <div>
+                      <div className="meta-timeline-head">
+                        <strong>{String(item.event_type || '').replaceAll('_', ' ')}</strong>
+                        <span>{formatDateTime(item.created_at)}</span>
+                      </div>
+                      <p>{item.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       )}
     </div>
   );
 };
+
+const StatCard = ({ icon: Icon, label, value, tone = '', compact = false }) => (
+  <div className={`meta-stat-card ${tone}`}>
+    <div className="meta-stat-icon"><Icon size={18} /></div>
+    <div className="meta-stat-copy">
+      <span>{label}</span>
+      <strong className={compact ? 'compact' : ''}>{value}</strong>
+    </div>
+  </div>
+);
+
+const KV = ({ label, value }) => (
+  <div className="meta-kv">
+    <span>{label}</span>
+    <strong>{value ?? '—'}</strong>
+  </div>
+);
+
+const ChecklistItem = ({ done, label }) => (
+  <div className={`meta-checklist-item ${done ? 'done' : ''}`}>
+    {done ? <CheckCircle2 size={17} /> : <XCircle size={17} />}
+    <span>{label}</span>
+  </div>
+);
 
 export default MetaIntegrationPage;

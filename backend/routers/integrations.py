@@ -32,8 +32,8 @@ router = APIRouter(prefix="/integrations", tags=["Integration Hub"])
 
 INTEGRATION_METADATA = {
     "META": {
-        "name": "Meta Ads",
-        "description": "Automatically receive leads from Meta / Facebook & Instagram lead ad campaigns.",
+        "name": "Facebook & Instagram Lead Ads",
+        "description": "Official Meta OAuth for Facebook Pages and Instagram business assets — Instant Form lead capture, Form discovery and historical import.",
         "webhook_url": "/api/integrations/meta/webhook"
     },
     "WHATSAPP": {

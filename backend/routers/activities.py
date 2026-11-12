@@ -119,7 +119,16 @@ def get_activities(
     # 5. Lead Source Filter (META, WEBSITE, MANUAL, EXCEL)
     if source and source.strip():
         src_upper = source.upper().strip()
-        query = query.filter(Lead.source.ilike(f"%{src_upper}%"))
+        if src_upper in ["META", "META ADS", "META_ADS"]:
+            query = query.filter(
+                or_(
+                    Lead.source.ilike("%META%"),
+                    Lead.source == "INSTAGRAM",
+                    Lead.source == "Instagram",
+                )
+            )
+        else:
+            query = query.filter(Lead.source.ilike(f"%{src_upper}%"))
 
     # 6. Role & Scope Enforcement (Backend Level Authorization)
     user_role = (current_user.role or "").upper()

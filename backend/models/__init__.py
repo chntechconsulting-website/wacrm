@@ -13,6 +13,12 @@ from models.audit_log import AuditLog
 from models.monitoring import EmployeeActivityLog, EmployeePresence, FieldVisit, MonitoringSetting
 from models.deletion_request import DeletionRequest
 from models.meta_page import MetaPage
+from models.meta_connection import (
+    MetaConnection,
+    MetaLeadForm,
+    MetaLeadEvent,
+    MetaImportJob,
+)
 from models.quotation import Quotation
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from models.role import Role, RolePermission
@@ -55,6 +61,10 @@ __all__ = [
     "MonitoringSetting",
     "DeletionRequest",
     "MetaPage",
+    "MetaConnection",
+    "MetaLeadForm",
+    "MetaLeadEvent",
+    "MetaImportJob",
     "Quotation",
     "FinanceHandoff",
     "SupportHandoff",

@@ -44,6 +44,20 @@ class MetaPageOut(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    # Additive OAuth / asset discovery fields
+    connection_id: Optional[int] = None
+    page_picture_url: Optional[str] = None
+    instagram_account_id: Optional[str] = None
+    instagram_username: Optional[str] = None
+    is_selected: bool = True
+    auto_sync_enabled: bool = True
+    webhook_subscribed: bool = False
+    token_expires_at: Optional[datetime] = None
+    forms_last_synced_at: Optional[datetime] = None
+    last_lead_at: Optional[datetime] = None
+    last_error_code: Optional[str] = None
+    form_count: int = 0
+    selected_form_count: int = 0
 
     class Config:
         from_attributes = True
@@ -77,3 +91,27 @@ class MetaLeadDetails(BaseModel):
     city: Optional[str] = None
     company: Optional[str] = None
     raw_field_data: Optional[Dict[str, Any]] = None
+
+
+class MetaPageSelectionUpdate(BaseModel):
+    selected: bool = True
+    auto_sync_enabled: Optional[bool] = None
+
+
+class MetaAutoSyncUpdate(BaseModel):
+    enabled: bool
+
+
+class MetaFormsSelectionUpdate(BaseModel):
+    form_ids: List[str] = []
+    selected: bool = True
+    page_id: Optional[str] = None
+    select_all_for_page: bool = False
+
+
+class MetaImportRequest(BaseModel):
+    range: str = "24H"
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
+    page_ids: Optional[List[str]] = None
+    form_ids: Optional[List[str]] = None

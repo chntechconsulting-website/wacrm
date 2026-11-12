@@ -66,6 +66,63 @@ class MetaConfig:
         return val or "v26.0"
 
     @staticmethod
+    def get_graph_base() -> str:
+        return f"https://graph.facebook.com/{MetaConfig.get_api_version()}"
+
+    @staticmethod
+    def get_public_base_url() -> str:
+        return (
+            os.getenv("PUBLIC_BASE_URL")
+            or getattr(settings, "PUBLIC_BASE_URL", "")
+            or "https://www.wapluscrm.in"
+        ).rstrip("/")
+
+    @staticmethod
+    def get_oauth_redirect_uri() -> str:
+        """Backend OAuth callback. Must match the Meta App's Valid OAuth URI."""
+        explicit = os.getenv("META_OAUTH_REDIRECT_URI", "").strip()
+        if explicit:
+            return explicit
+        return f"{MetaConfig.get_public_base_url()}/api/integrations/meta/oauth/callback"
+
+    @staticmethod
+    def get_frontend_redirect_uri() -> str:
+        explicit = os.getenv("META_OAUTH_FRONTEND_REDIRECT", "").strip()
+        if explicit:
+            return explicit
+        return f"{MetaConfig.get_public_base_url()}/settings/integrations/meta"
+
+    @staticmethod
+    def get_oauth_scopes() -> str:
+        """Comma separated OAuth scopes. Override with META_OAUTH_SCOPES."""
+        explicit = os.getenv("META_OAUTH_SCOPES", "").strip()
+        if explicit:
+            return explicit
+        return ",".join([
+            "pages_show_list",
+            "pages_read_engagement",
+            "pages_manage_metadata",
+            "leads_retrieval",
+            "ads_read",
+            "instagram_basic",
+        ])
+
+    @staticmethod
+    def get_webhook_url() -> str:
+        explicit = os.getenv("META_WEBHOOK_URL", "").strip()
+        if explicit:
+            return explicit
+        return f"{MetaConfig.get_public_base_url()}/api/integrations/meta/webhook"
+
+    @staticmethod
+    def signature_verification_configured() -> bool:
+        return bool(MetaConfig.get_app_secret())
+
+    @staticmethod
+    def oauth_configured() -> bool:
+        return bool(MetaConfig.get_app_id() and MetaConfig.get_app_secret())
+
+    @staticmethod
     def is_configured() -> bool:
         token = MetaConfig.get_access_token()
         page_id = MetaConfig.get_page_id()

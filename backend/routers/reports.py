@@ -639,7 +639,12 @@ def dashboard_stats(
 
     # Real Recent Meta Leads (same authorized Sales lead scope as the KPIs)
     raw_meta_leads = lead_query.filter(
-        or_(Lead.source.ilike("%META%"), Lead.source == "Meta Ads")
+        or_(
+            Lead.source.ilike("%META%"),
+            Lead.source == "Meta Ads",
+            Lead.source == "INSTAGRAM",
+            Lead.source == "Instagram",
+        )
     ).order_by(desc(Lead.id)).limit(5).all()
 
     recent_meta_leads = []
@@ -726,7 +731,9 @@ def dashboard_stats(
         lead_query.filter(or_(
             Lead.source == "META",
             Lead.source == "Meta Ads",
-            Lead.source.ilike("%meta%")
+            Lead.source.ilike("%meta%"),
+            Lead.source == "INSTAGRAM",
+            Lead.source == "Instagram",
         ))
         .with_entities(Lead.status, func.count(Lead.id))
         .group_by(Lead.status)
@@ -1640,7 +1647,7 @@ def sales_revenue_report(
             src = "Excel"
         elif src.lower() in ["ivr", "doocti", "doocti_inbound"]:
             src = "IVR / Phone"
-        elif "meta" in src.lower():
+        elif "meta" in src.lower() or "instagram" in src.lower():
             src = "Meta Ads"
         elif "google" in src.lower():
             src = "Google Ads"
@@ -1655,7 +1662,7 @@ def sales_revenue_report(
         src_raw = (t.get("source") or "Direct").lower()
         if "website" in src_raw:
             src = "Website"
-        elif "meta" in src_raw:
+        elif "meta" in src_raw or "instagram" in src_raw:
             src = "Meta Ads"
         elif "ivr" in src_raw or "doocti" in src_raw:
             src = "IVR / Phone"

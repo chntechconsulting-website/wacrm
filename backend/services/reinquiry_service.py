@@ -140,6 +140,11 @@ class ReInquiryService:
             src = "WHATSAPP_ADS"
 
         now = get_ist_now()
+        # Historical imports pass the real Meta lead creation time so imported
+        # records keep their original received date instead of appearing today.
+        event_time = enquiry_data.get("created_at")
+        if not isinstance(event_time, datetime):
+            event_time = now
         existing_lead = ReInquiryService.find_existing_lead(
             db,
             phone=raw_phone,
@@ -154,9 +159,9 @@ class ReInquiryService:
             existing_lead.is_reinquiry = True
             existing_lead.reinquiry_count = (existing_lead.reinquiry_count or 0) + 1
             existing_lead.total_enquiries = (existing_lead.total_enquiries or 1) + 1
-            existing_lead.latest_enquiry_date = now
+            existing_lead.latest_enquiry_date = event_time
             if not existing_lead.first_enquiry_date:
-                existing_lead.first_enquiry_date = existing_lead.created_at or now
+                existing_lead.first_enquiry_date = existing_lead.created_at or event_time
 
             # Append source if new to previous sources
             prev_sources = [s.strip().upper() for s in (existing_lead.previous_sources or existing_lead.source or "").split(",") if s.strip()]
@@ -197,6 +202,19 @@ class ReInquiryService:
                 existing_lead.meta_lead_id = enquiry_data["meta_lead_id"]
             if enquiry_data.get("meta_form_id"):
                 existing_lead.meta_form_id = enquiry_data["meta_form_id"]
+            # Fill only missing Page/form/ad attribution; the original values
+            # stay intact while the immutable enquiry row records the new ad.
+            for attr in (
+                "meta_page_id", "meta_page_name", "meta_form_name",
+                "meta_campaign_id", "meta_adset_id", "meta_adset_name",
+                "meta_ad_id", "meta_ad_name", "meta_platform",
+            ):
+                if enquiry_data.get(attr) and not getattr(existing_lead, attr, None):
+                    setattr(existing_lead, attr, enquiry_data[attr])
+            if enquiry_data.get("meta_created_at") and not existing_lead.meta_created_at:
+                existing_lead.meta_created_at = enquiry_data["meta_created_at"]
+            if enquiry_data.get("meta_custom_answers") and not existing_lead.meta_custom_answers:
+                existing_lead.meta_custom_answers = enquiry_data["meta_custom_answers"]
 
             # If lead was previously closed as LOST or NOT_INTERESTED, re-activate
             if existing_lead.status in ["LOST", "NOT_INTERESTED", "NOT INTERESTED"]:
@@ -229,7 +247,14 @@ class ReInquiryService:
                 website_name=enquiry_data.get("website_name") or existing_lead.website_name,
                 landing_page=enquiry_data.get("landing_page") or existing_lead.landing_page,
                 requirement_notes=req_notes,
-                created_at=now
+                meta_lead_id=enquiry_data.get("meta_lead_id"),
+                meta_form_id=enquiry_data.get("meta_form_id"),
+                meta_page_id=enquiry_data.get("meta_page_id"),
+                meta_platform=enquiry_data.get("meta_platform"),
+                meta_campaign_id=enquiry_data.get("meta_campaign_id"),
+                meta_adset_id=enquiry_data.get("meta_adset_id"),
+                meta_ad_id=enquiry_data.get("meta_ad_id"),
+                created_at=event_time
             )
             db.add(enquiry_record)
 
@@ -240,7 +265,7 @@ class ReInquiryService:
                 performed_by=creator_emp_id,
                 activity_type="RE_INQUIRY",
                 description=f"🔁 RE-INQUIRY #{existing_lead.reinquiry_count} received via {src}. Total Enquiries: {existing_lead.total_enquiries}{msg_snippet}",
-                created_at=now
+                created_at=event_time
             )
             db.add(activity)
 
@@ -289,6 +314,17 @@ class ReInquiryService:
             landing_page=enquiry_data.get("landing_page"),
             meta_lead_id=enquiry_data.get("meta_lead_id"),
             meta_form_id=enquiry_data.get("meta_form_id"),
+            meta_page_id=enquiry_data.get("meta_page_id"),
+            meta_page_name=enquiry_data.get("meta_page_name"),
+            meta_form_name=enquiry_data.get("meta_form_name"),
+            meta_campaign_id=enquiry_data.get("meta_campaign_id"),
+            meta_adset_id=enquiry_data.get("meta_adset_id"),
+            meta_adset_name=enquiry_data.get("meta_adset_name"),
+            meta_ad_id=enquiry_data.get("meta_ad_id"),
+            meta_ad_name=enquiry_data.get("meta_ad_name"),
+            meta_platform=enquiry_data.get("meta_platform"),
+            meta_created_at=enquiry_data.get("meta_created_at"),
+            meta_custom_answers=enquiry_data.get("meta_custom_answers"),
             rating=enquiry_data.get("rating") or "Warm",
             priority=enquiry_data.get("priority") or "MEDIUM",
             requirement_notes=req_notes,
@@ -301,11 +337,11 @@ class ReInquiryService:
             is_reinquiry=False,
             reinquiry_count=0,
             total_enquiries=1,
-            first_enquiry_date=now,
-            latest_enquiry_date=now,
+            first_enquiry_date=event_time,
+            latest_enquiry_date=event_time,
             previous_sources=src,
             latest_source=src,
-            created_at=now,
+            created_at=event_time,
             updated_at=now
         )
         db.add(new_lead)
@@ -321,7 +357,14 @@ class ReInquiryService:
             website_name=enquiry_data.get("website_name"),
             landing_page=enquiry_data.get("landing_page"),
             requirement_notes=req_notes,
-            created_at=now
+            meta_lead_id=enquiry_data.get("meta_lead_id"),
+            meta_form_id=enquiry_data.get("meta_form_id"),
+            meta_page_id=enquiry_data.get("meta_page_id"),
+            meta_platform=enquiry_data.get("meta_platform"),
+            meta_campaign_id=enquiry_data.get("meta_campaign_id"),
+            meta_adset_id=enquiry_data.get("meta_adset_id"),
+            meta_ad_id=enquiry_data.get("meta_ad_id"),
+            created_at=event_time
         )
         db.add(enquiry_record)
 
@@ -331,7 +374,7 @@ class ReInquiryService:
             performed_by=creator_emp_id,
             activity_type="CREATED",
             description=f"New enquiry created from {src}" + (f" by {creator_name}" if creator_name else "") + (f": {req_notes}" if req_notes else "."),
-            created_at=now
+            created_at=event_time
         )
         db.add(activity)
 
@@ -340,7 +383,7 @@ class ReInquiryService:
                 lead_id=new_lead.id,
                 assigned_to=assigned_to_id,
                 assigned_by=creator_emp_id,
-                assigned_at=now,
+                assigned_at=event_time,
                 assignment_method="MANUAL" if creator_emp_id else "AUTOMATIC",
                 notes="Initial assignment upon creation"
             )

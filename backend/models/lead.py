@@ -28,6 +28,19 @@ class Lead(Base):
 
     meta_lead_id = Column(String(100), unique=True, index=True, nullable=True)
     meta_form_id = Column(String(100), nullable=True)
+    # Additive Facebook / Instagram Lead Ads attribution. Existing Meta Ads
+    # columns and the whatsapp_ads attribution tables are untouched.
+    meta_page_id = Column(String(100), index=True, nullable=True)
+    meta_page_name = Column(String(255), nullable=True)
+    meta_form_name = Column(String(255), nullable=True)
+    meta_campaign_id = Column(String(100), index=True, nullable=True)
+    meta_adset_id = Column(String(100), index=True, nullable=True)
+    meta_adset_name = Column(String(255), nullable=True)
+    meta_ad_id = Column(String(100), index=True, nullable=True)
+    meta_ad_name = Column(String(255), nullable=True)
+    meta_platform = Column(String(20), index=True, nullable=True)  # facebook / instagram
+    meta_created_at = Column(DateTime, nullable=True)
+    meta_custom_answers = Column(Text, nullable=True)
 
     website_id = Column(String(50), nullable=True, index=True)
     website_name = Column(String(100), nullable=True)
@@ -88,11 +101,19 @@ class LeadEnquiry(Base):
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False, index=True)
     enquiry_number = Column(Integer, default=1, nullable=False)
     enquiry_type = Column(String(50), default="INITIAL", nullable=False)  # INITIAL or RE-INQUIRY
-    source = Column(String(50), nullable=False)  # META, WEBSITE, EXCEL, MANUAL
+    source = Column(String(50), nullable=False)  # META, INSTAGRAM, WEBSITE, EXCEL, MANUAL
     campaign_name = Column(String(100), nullable=True)
     website_name = Column(String(100), nullable=True)
     landing_page = Column(String(255), nullable=True)
     requirement_notes = Column(Text, nullable=True)
+    # Per-enquiry Meta Lead Ads attribution (a lead can re-inquire via another ad).
+    meta_lead_id = Column(String(100), nullable=True, index=True)
+    meta_form_id = Column(String(100), nullable=True)
+    meta_page_id = Column(String(100), nullable=True)
+    meta_platform = Column(String(20), nullable=True)
+    meta_campaign_id = Column(String(100), nullable=True)
+    meta_adset_id = Column(String(100), nullable=True)
+    meta_ad_id = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=get_ist_now, nullable=False)
 
     lead = relationship("Lead", back_populates="enquiries")

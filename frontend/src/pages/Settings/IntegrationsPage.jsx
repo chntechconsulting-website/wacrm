@@ -749,7 +749,7 @@ const IntegrationsPage = () => {
             <Link to="/dashboard">Dashboard</Link> / <Link to="/settings">Settings</Link> / <span>Integration Hub</span>
           </div>
           <h1 className="integrations-title">CRM Integration Hub</h1>
-          <p className="integrations-subtitle">Centralized hub for managing Meta Ads, WhatsApp Cloud API, IVR Telephony, and Website Ingestion.</p>
+          <p className="integrations-subtitle">Centralized hub for managing Facebook &amp; Instagram Lead Ads, WhatsApp Cloud API, IVR Telephony, and Website Ingestion.</p>
         </div>
 
         <button onClick={fetchStatus} className="btn-hub btn-hub-outline" disabled={loading}>
@@ -860,7 +860,7 @@ const IntegrationsPage = () => {
                             {metaPages.length} Facebook {metaPages.length === 1 ? 'Page' : 'Pages'} Connected
                           </div>
                           <div style={{ fontSize: '0.74rem', color: '#7c3aed' }}>
-                            Per-page encrypted credentials & independent sync
+                            Official Meta OAuth · encrypted tokens · Instant Form lead sync
                           </div>
                         </div>
                       </div>
@@ -881,7 +881,7 @@ const IntegrationsPage = () => {
                           whiteSpace: 'nowrap'
                         }}
                       >
-                        <span>Manage Pages</span>
+                        <span>Manage Connection</span>
                         <ExternalLink size={13} />
                       </Link>
                     </div>
@@ -941,7 +941,7 @@ const IntegrationsPage = () => {
                       {item.last_tested_at ? new Date(item.last_tested_at).toLocaleString() : 'Never'}
                     </span>
                     <span>
-                      <strong>Auth Mode:</strong> {item.integration_type === 'META' ? 'Per-Page Encrypted Tokens' : 'Secured API Keys'}
+                      <strong>Auth Mode:</strong> {item.integration_type === 'META' ? 'Official OAuth · Encrypted Tokens' : 'Secured API Keys'}
                     </span>
                   </div>
                 </div>
@@ -952,11 +952,11 @@ const IntegrationsPage = () => {
                     <Link 
                       to="/settings/integrations/meta"
                       className="btn-hub btn-hub-primary"
-                      title="Open dedicated Meta Ads & Pages Hub"
+                      title="Open the Facebook & Instagram Lead Ads integration"
                       style={{ textDecoration: 'none' }}
                     >
                       <Share2 size={15} />
-                      <span>Manage Pages</span>
+                      <span>Open Integration</span>
                     </Link>
                   ) : (
                     <button 
@@ -1006,7 +1006,7 @@ const IntegrationsPage = () => {
               className="logs-select"
             >
               <option value="ALL">All Integrations</option>
-              <option value="META">Meta Ads</option>
+              <option value="META">Facebook &amp; Instagram</option>
               <option value="WHATSAPP">WhatsApp</option>
               <option value="IVR">IVR Telephony</option>
               <option value="WEBSITE">Website Leads</option>

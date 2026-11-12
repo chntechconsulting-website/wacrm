@@ -160,6 +160,13 @@ def build_lead_out(
             website_name=enq.website_name,
             landing_page=enq.landing_page,
             requirement_notes=enq.requirement_notes,
+            meta_lead_id=getattr(enq, "meta_lead_id", None),
+            meta_form_id=getattr(enq, "meta_form_id", None),
+            meta_page_id=getattr(enq, "meta_page_id", None),
+            meta_platform=getattr(enq, "meta_platform", None),
+            meta_campaign_id=getattr(enq, "meta_campaign_id", None),
+            meta_adset_id=getattr(enq, "meta_adset_id", None),
+            meta_ad_id=getattr(enq, "meta_ad_id", None),
             created_at=enq.created_at
         ))
 
@@ -211,6 +218,19 @@ def build_lead_out(
         latest_enquiry_date=getattr(lead, "latest_enquiry_date", None) or lead.created_at,
         previous_sources=getattr(lead, "previous_sources", None) or lead.source,
         latest_source=getattr(lead, "latest_source", None) or lead.source,
+        # Facebook / Instagram Lead Ads attribution
+        meta_lead_id=getattr(lead, "meta_lead_id", None),
+        meta_form_id=getattr(lead, "meta_form_id", None),
+        meta_form_name=getattr(lead, "meta_form_name", None),
+        meta_page_id=getattr(lead, "meta_page_id", None),
+        meta_page_name=getattr(lead, "meta_page_name", None),
+        meta_campaign_id=getattr(lead, "meta_campaign_id", None),
+        meta_adset_id=getattr(lead, "meta_adset_id", None),
+        meta_adset_name=getattr(lead, "meta_adset_name", None),
+        meta_ad_id=getattr(lead, "meta_ad_id", None),
+        meta_ad_name=getattr(lead, "meta_ad_name", None),
+        meta_platform=getattr(lead, "meta_platform", None),
+        meta_created_at=getattr(lead, "meta_created_at", None),
         # QuoteTask Integration Mapping Fields
         quotetask_quotation_id=lead.quotetask_quotation_id,
         quotetask_quotation_number=lead.quotetask_quotation_number,
@@ -383,8 +403,8 @@ def list_leads(
     eff_source = source_filter or source
     if eff_source and eff_source.upper() != "ALL":
         src_upper = eff_source.strip().upper()
-        if src_upper in ["META", "META ADS", "META_ADS"]:
-            query = query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta"))
+        if src_upper in ["META", "META ADS", "META_ADS", "INSTAGRAM", "IG"]:
+            query = query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta", Lead.source == "INSTAGRAM", Lead.source == "Instagram"))
         elif src_upper in ["WEBSITE", "WEB"]:
             query = query.filter(or_(Lead.source == "WEBSITE", Lead.source == "Website"))
         elif src_upper in ["MANUAL"]:
@@ -483,7 +503,7 @@ def get_leads_stats(
         base_query = base_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
 
     all_count = base_query.count()
-    meta_count = base_query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta")).count()
+    meta_count = base_query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta", Lead.source == "INSTAGRAM", Lead.source == "Instagram")).count()
     website_count = base_query.filter(or_(Lead.source == "WEBSITE", Lead.source == "Website")).count()
     manual_count = base_query.filter(or_(Lead.source == "MANUAL", Lead.source == "Manual")).count()
     excel_count = base_query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel")).count()
@@ -580,8 +600,8 @@ def list_my_leads(
 
     if source_filter:
         src_upper = source_filter.strip().upper()
-        if src_upper in ["META", "META ADS", "META_ADS"]:
-            query = query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta"))
+        if src_upper in ["META", "META ADS", "META_ADS", "INSTAGRAM", "IG"]:
+            query = query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta", Lead.source == "INSTAGRAM", Lead.source == "Instagram"))
         elif src_upper in ["WEBSITE", "WEB"]:
             query = query.filter(or_(Lead.source == "WEBSITE", Lead.source == "Website"))
         elif src_upper in ["MANUAL"]:
