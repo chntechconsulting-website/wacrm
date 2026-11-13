@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, or_
+from sqlalchemy import func, desc, or_, case
 from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
 
@@ -62,7 +62,7 @@ from utils.support_status import (
     normalize_support_status,
     support_status_storage_values,
 )
-from services.purchase_details_service import build_support_purchase_details
+from utils.lead_status import CONVERTED_TO_SUPPORT_STATUSES
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -223,10 +223,24 @@ def _scoped_support_handoff_query(
         team_ids = get_team_employee_ids_from_user(user, db)
         if employee.id not in team_ids:
             team_ids.append(employee.id)
+        converted_lead_ids = (
+            db.query(Lead.id)
+            .filter(
+                func.upper(func.trim(Lead.status)).in_(
+                    sorted(CONVERTED_TO_SUPPORT_STATUSES)
+                )
+            )
+        )
         return query.filter(
             or_(
                 SupportHandoff.support_manager_id == employee.id,
                 SupportHandoff.assigned_agent_id.in_(team_ids),
+                # Converted-but-unassigned handoffs are visible so the
+                # Support Manager can complete the explicit assignment.
+                (
+                    SupportHandoff.assigned_agent_id.is_(None)
+                    & SupportHandoff.lead_id.in_(converted_lead_ids)
+                ),
             )
         )
 
@@ -434,7 +448,10 @@ def build_support_dashboard_payload(
             ),
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "completed_at": record.completed_at.isoformat() if record.completed_at else None,
-            "purchase_details": build_support_purchase_details(db, record),
+            # The customer drawer lazy-loads this projection from
+            # /leads/{id}/purchase-details. Building it for six dashboard rows
+            # issued roughly 30 extra queries on every dashboard refresh.
+            "purchase_details": None,
         })
 
     # Customer follow-ups use the same authorized follow-up scope as the
@@ -567,25 +584,64 @@ def dashboard_stats(
     else:
         call_query = call_query.filter(CallLog.id == -1)
 
-    total_leads = lead_query.count()
-    new_leads = lead_query.filter(or_(
-        Lead.status == "NEW",
-        Lead.status == "NEW LEAD",
-        Lead.status == "New",
-        Lead.status.ilike("NEW%")
-    )).count()
-    assigned_leads = lead_query.filter(or_(Lead.status == "ASSIGNED", Lead.status.ilike("%ASSIGN%"))).count()
-    contacted_leads = lead_query.filter(or_(Lead.status == "CONTACTED", Lead.status.ilike("%contact%"))).count()
-    followup_leads = lead_query.filter(or_(Lead.status == "FOLLOW_UP", Lead.status == "FOLLOW-UP", Lead.status.ilike("%FOLLOW%"))).count()
-    qualified_leads = lead_query.filter(or_(Lead.status == "QUALIFIED", Lead.status == "INTERESTED")).count()
+    # One conditional aggregate replaces eight sequential COUNT(*) round-trips.
+    lead_metrics = lead_query.with_entities(
+        func.count(Lead.id).label("total_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "NEW",
+            Lead.status == "NEW LEAD",
+            Lead.status == "New",
+            Lead.status.ilike("NEW%"),
+        ), 1), else_=0)), 0).label("new_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "ASSIGNED", Lead.status.ilike("%ASSIGN%")
+        ), 1), else_=0)), 0).label("assigned_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "CONTACTED", Lead.status.ilike("%contact%")
+        ), 1), else_=0)), 0).label("contacted_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "FOLLOW_UP",
+            Lead.status == "FOLLOW-UP",
+            Lead.status.ilike("%FOLLOW%"),
+        ), 1), else_=0)), 0).label("followup_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "QUALIFIED",
+            Lead.status == "INTERESTED",
+            Lead.status == "TRIAL",
+        ), 1), else_=0)), 0).label("qualified_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "LOST",
+            Lead.status == "NOT_INTERESTED",
+            Lead.status == "LOST_LEAD",
+            Lead.status.ilike("%LOST%"),
+        ), 1), else_=0)), 0).label("lost_leads"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "PROPOSAL SENT",
+            Lead.status == "DEMO / MEETING",
+            Lead.status.ilike("%PROPOSAL%"),
+        ), 1), else_=0)), 0).label("proposal_leads"),
+    ).one()
+
+    total_leads = int(lead_metrics.total_leads or 0)
+    new_leads = int(lead_metrics.new_leads or 0)
+    assigned_leads = int(lead_metrics.assigned_leads or 0)
+    contacted_leads = int(lead_metrics.contacted_leads or 0)
+    followup_leads = int(lead_metrics.followup_leads or 0)
+    qualified_leads = int(lead_metrics.qualified_leads or 0)
     converted_leads = dashboard_sales["converted_count"]
-    lost_leads = lead_query.filter(or_(Lead.status == "LOST", Lead.status == "NOT_INTERESTED", Lead.status == "LOST_LEAD", Lead.status.ilike("%LOST%"))).count()
-    proposal_leads = lead_query.filter(or_(Lead.status == "PROPOSAL SENT", Lead.status == "DEMO / MEETING", Lead.status.ilike("%PROPOSAL%"))).count()
+    lost_leads = int(lead_metrics.lost_leads or 0)
+    proposal_leads = int(lead_metrics.proposal_leads or 0)
 
     total_customers = db.query(Customer).count()
 
-    connected_calls = call_query.filter(CallLog.call_status.in_(["ANSWERED", "COMPLETED"])).count()
-    total_calls = call_query.count()
+    call_metrics = call_query.with_entities(
+        func.count(CallLog.id).label("total_calls"),
+        func.coalesce(func.sum(case((CallLog.call_status.in_([
+            "ANSWERED", "COMPLETED",
+        ]), 1), else_=0)), 0).label("connected_calls"),
+    ).one()
+    connected_calls = int(call_metrics.connected_calls or 0)
+    total_calls = int(call_metrics.total_calls or 0)
 
     # Real Top Performing Team (calculated live from DB and scoped)
     if call_scope_ids:
@@ -617,9 +673,6 @@ def dashboard_stats(
             bucket["revenue"] += float(transaction.get("amount") or 0.0)
 
     for emp in active_employees:
-        emp_leads = db.query(Lead).filter(Lead.assigned_to == emp.id).count()
-        emp_calls = db.query(CallLog).filter(CallLog.employee_id == emp.id).count()
-        emp_followups = db.query(Followup).filter(Followup.assigned_to == emp.id).count()
         emp_stats = emp_sales_stats.get(emp.id, {})
         emp_converted = emp_stats.get("converted", 0)
         emp_revenue = emp_stats.get("revenue", 0.0)
@@ -627,13 +680,40 @@ def dashboard_stats(
             "id": emp.id,
             "name": emp.name,
             "avatar": emp.name[0].upper() if emp.name else "E",
-            "leads": emp_leads,
-            "calls": emp_calls,
-            "followups": emp_followups,
+            "leads": 0,
+            "calls": 0,
+            "followups": 0,
             "converted": emp_converted,
             "revenue": emp_revenue,
             "revenue_formatted": f"₹{int(emp_revenue):,}" if emp_revenue < 100000 else f"₹{round(emp_revenue/100000.0, 2)} L"
         })
+
+    # Batch the per-employee counts. The previous loop issued three COUNT(*)
+    # queries per employee, which dominated dashboard latency on large teams.
+    active_employee_ids = [emp.id for emp in active_employees]
+    if active_employee_ids:
+        lead_counts = dict(
+            db.query(Lead.assigned_to, func.count(Lead.id))
+            .filter(Lead.assigned_to.in_(active_employee_ids))
+            .group_by(Lead.assigned_to)
+            .all()
+        )
+        call_counts = dict(
+            db.query(CallLog.employee_id, func.count(CallLog.id))
+            .filter(CallLog.employee_id.in_(active_employee_ids))
+            .group_by(CallLog.employee_id)
+            .all()
+        )
+        followup_counts = dict(
+            db.query(Followup.assigned_to, func.count(Followup.id))
+            .filter(Followup.assigned_to.in_(active_employee_ids))
+            .group_by(Followup.assigned_to)
+            .all()
+        )
+        for row in team_performance:
+            row["leads"] = int(lead_counts.get(row["id"], 0))
+            row["calls"] = int(call_counts.get(row["id"], 0))
+            row["followups"] = int(followup_counts.get(row["id"], 0))
     # Sort by revenue desc, converted desc, assigned leads desc
     team_performance.sort(key=lambda x: (x["revenue"], x["converted"], x["leads"]), reverse=True)
 
@@ -914,11 +994,11 @@ def sales_overview_report(
     # Active DB Counts
     db_total_leads = lead_query.count()
     db_contacted = lead_query.filter(or_(
-        Lead.status.in_(["ASSIGNED", "CONTACTED", "QUALIFIED", "INTERESTED", "CONVERTED", "WON"]),
+        Lead.status.in_(["ASSIGNED", "CONTACTED", "QUALIFIED", "INTERESTED", "TRIAL", "CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"]),
         Lead.id.in_(db.query(CallLog.lead_id).filter(CallLog.lead_id.isnot(None)))
     )).count()
-    db_interested = lead_query.filter(Lead.status.in_(["INTERESTED", "QUALIFIED", "CONVERTED", "WON"])).count()
-    db_qualified = lead_query.filter(Lead.status.in_(["QUALIFIED", "CONVERTED", "WON"])).count()
+    db_interested = lead_query.filter(Lead.status.in_(["INTERESTED", "QUALIFIED", "TRIAL", "CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"])).count()
+    db_qualified = lead_query.filter(Lead.status.in_(["QUALIFIED", "TRIAL", "CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"])).count()
     db_won = len(overview_converted_transactions)
     db_lost = lead_query.filter(Lead.status.in_(["LOST", "NOT_INTERESTED", "LOST_LEAD"])).count()
 
@@ -1005,8 +1085,8 @@ def sales_overview_report(
         trend_labels.append(d_point.strftime("%b %d"))
         d_end = d_point + timedelta(days=5)
         c_nl = lead_query.filter(Lead.created_at <= d_end).count()
-        c_int = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["INTERESTED", "QUALIFIED", "CONVERTED", "WON"])).count()
-        c_qual = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["QUALIFIED", "CONVERTED", "WON"])).count()
+        c_int = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["INTERESTED", "QUALIFIED", "TRIAL", "CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"])).count()
+        c_qual = lead_query.filter(Lead.created_at <= d_end, Lead.status.in_(["QUALIFIED", "TRIAL", "CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"])).count()
         c_won = sum(
             1
             for transaction in overview_converted_transactions
@@ -1107,12 +1187,14 @@ def sales_overview_report(
         "CONTACTED": "#0284c7",
         "INTERESTED": "#10b981",
         "QUALIFIED": "#f59e0b",
+        "TRIAL": "#0ea5e9",
         "FOLLOW_UP": "#8b5cf6",
         "FOLLOW-UP": "#8b5cf6",
         "NOT_INTERESTED": "#475569",
         "LOST": "#ef4444",
         "WON": "#10b981",
-        "CONVERTED": "#059669"
+        "CONVERTED": "#059669",
+        "CONVERTED_TO_SUPPORT": "#0f766e"
     }
     leads_by_status = []
     for s_name, cnt in status_counts_db:
@@ -1176,8 +1258,8 @@ def sales_overview_report(
         emp_leads = db.query(Lead).filter(Lead.assigned_to == emp.id).count()
         emp_stats = overview_emp_sales.get(emp.id, {})
         emp_won = emp_stats.get("won_deals", 0)
-        emp_qual = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["QUALIFIED", "WON", "CONVERTED"])).count()
-        emp_contacted = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["ASSIGNED", "CONTACTED", "QUALIFIED", "WON", "CONVERTED"])).count()
+        emp_qual = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["QUALIFIED", "TRIAL", "WON", "CONVERTED", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"])).count()
+        emp_contacted = db.query(Lead).filter(Lead.assigned_to == emp.id, Lead.status.in_(["ASSIGNED", "CONTACTED", "QUALIFIED", "TRIAL", "WON", "CONVERTED", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"])).count()
         emp_rev = emp_stats.get("revenue", 0.0)
 
         rate = f"{round((emp_won / emp_leads * 100), 1)}%" if emp_leads > 0 else "0.0%"

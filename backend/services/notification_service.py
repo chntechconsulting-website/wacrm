@@ -153,7 +153,9 @@ def sync_notifications_from_real_data(db: Session, user_id: Optional[int] = None
             db.add(notif)
 
     # 4. Sync from Real Conversions (Leads with CONVERTED / WON)
-    converted_leads = db.query(Lead).filter(Lead.status.in_(["CONVERTED", "WON"])).order_by(desc(Lead.id)).limit(5).all()
+    converted_leads = db.query(Lead).filter(Lead.status.in_([
+        "CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"
+    ])).order_by(desc(Lead.id)).limit(5).all()
     for lead in converted_leads:
         lead_name = lead.name or f"Lead #{lead.id}"
         title = f"Lead Converted: {lead_name}"

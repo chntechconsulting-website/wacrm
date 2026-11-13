@@ -7,7 +7,7 @@ from sqlalchemy import desc, or_
 
 from models.user import User
 from models.employee import Employee
-from models.lead import Lead
+from models.lead import Lead, LeadStatusHistory
 from models.customer import Customer
 from models.quotation import Quotation
 from models.notification import Notification
@@ -30,6 +30,11 @@ from utils.support_status import (
     normalize_support_status,
     require_support_status,
     support_status_label,
+)
+from utils.lead_status import (
+    STATUS_CONVERTED_TO_SUPPORT,
+    is_converted_to_support_status,
+    is_won_status,
 )
 
 
@@ -1006,46 +1011,29 @@ class WorkflowService:
     ) -> Dict[str, Any]:
         """
         Executes the Proforma-Driven Deal WON Handoff workflow:
-        1. Validates that support_manager_id is provided and active.
-        2. Validates that a Proforma Invoice is selected and belongs to the customer/deal.
-        3. Parses purchased products, bundle, add-ons, and licence count from the proforma.
-        4. Preserves exact Customer ID, Lead ID, Deal ID without creating duplicates.
-        5. Sets default deal amount from proforma, recording any adjustments and reasons.
-        6. Preserves payment status and payment records.
-        7. Creates or updates Finance and Support handoffs with the complete proforma snapshot.
-        8. Records timeline & audit events with IST timestamp.
-        9. Sends notifications to the assigned Support Manager and Finance.
+        1. Validates that a Proforma Invoice is selected and belongs to the customer/deal.
+        2. Parses purchased products, bundle, add-ons, and licence count from the proforma.
+        3. Preserves exact Customer ID, Lead ID, Deal ID without creating duplicates.
+        4. Sets default deal amount from proforma, recording any adjustments and reasons.
+        5. Preserves payment status and payment records.
+        6. Creates or updates Finance and Support handoff snapshots.
+        7. Records timeline & audit events with IST timestamp.
+
+        Won is a Sales-only milestone. It deliberately leaves the Support handoff
+        unassigned and does not notify Support. A Support Manager/Executive can
+        only be assigned after an explicit Converted to Support transition.
         """
-        support_manager_id = won_data.get("support_manager_id")
-        if not support_manager_id:
-            raise ValueError("Please assign a Support Manager before marking this deal as WON.")
-
-        # Validate support manager
-        manager_emp = db.query(Employee).filter(
-            Employee.id == support_manager_id,
-            Employee.status == "ACTIVE"
-        ).first()
-
-        manager_user = None
-        if manager_emp and manager_emp.user_id:
-            manager_user = db.query(User).filter(User.id == manager_emp.user_id, User.is_active == True).first()
-        elif not manager_emp:
-            manager_user = db.query(User).filter(User.id == support_manager_id, User.is_active == True).first()
-            if manager_user:
-                manager_emp = db.query(Employee).filter(Employee.user_id == manager_user.id).first()
-
-        if not manager_emp and not manager_user:
-            raise ValueError("Please assign an active Support Manager before marking this deal as WON.")
-
-        manager_name = manager_emp.name if manager_emp else (manager_user.username if manager_user else "Support Manager")
-        manager_emp_id = manager_emp.id if manager_emp else None
-        manager_user_id = manager_user.id if manager_user else (manager_emp.user_id if manager_emp else None)
-
         lead = db.query(Lead).filter(Lead.id == lead_id).first()
         if not lead:
             raise ValueError(f"Lead #{lead_id} not found.")
 
         old_status = lead.status
+
+        # Won never auto-assigns Support. Existing handoff assignment (if any)
+        # is preserved; a new handoff is created unassigned.
+        manager_emp_id = None
+        manager_name = None
+        manager_user_id = None
 
         # 1. Ensure Customer record exists with converted_from_lead = lead.id (Same Customer ID)
         customer = db.query(Customer).filter(Customer.converted_from_lead == lead.id).first()
@@ -1104,11 +1092,13 @@ class WorkflowService:
                 doc_number=f"PI-{datetime.utcnow().strftime('%y%m')}-{lead.id:04d}",
                 status="issued",
                 payment_status=normalize_payment_status(won_data.get("payment_status")),
+                customer_name=lead.name,
+                company_name=lead.company,
+                phone=lead.phone,
+                email=lead.email,
                 grand_total=deal_amt,
-                total_amount=deal_amt,
-                product_summary=prod_summary,
+                notes=prod_summary,
                 product_category=won_data.get("product_category") or "WAHRMS",
-                licence_count=int(won_data.get("customer_users_count") or 1),
                 line_items=[
                     {
                         "description": prod_summary,
@@ -1284,8 +1274,6 @@ class WorkflowService:
                 sales_employee_id=sales_emp_id,
                 sales_employee_name=sales_emp_name,
                 customer_requirements=won_data.get("customer_requirements") or lead.requirement_notes,
-                support_manager_id=manager_emp_id,
-                support_manager_name=manager_name,
                 won_at=now_utc,
                 onboarding_status=SUPPORT_STATUS_NEW,
                 created_at=now_utc
@@ -1313,10 +1301,10 @@ class WorkflowService:
             support_handoff.paid_amount = paid_amount
             support_handoff.sales_employee_id = sales_emp_id
             support_handoff.sales_employee_name = sales_emp_name
-            support_handoff.support_manager_id = manager_emp_id
-            support_handoff.support_manager_name = manager_name
             support_handoff.customer_requirements = won_data.get("customer_requirements") or lead.requirement_notes
             support_handoff.won_at = now_utc
+            # Never auto-assign Support on Won, and never clear an explicit
+            # assignment made later by a Support Manager.
 
         # Capture the immutable purchase snapshot on first handover only. A
         # later catalogue/document revision must not rewrite what the customer
@@ -1339,8 +1327,8 @@ class WorkflowService:
             customer_id=customer.id,
             employee_id=cur_emp_id or sales_emp_id,
             performed_by=cur_emp_id,
-            activity_type="DEAL_WON_SUPPORT_ASSIGNED",
-            description=f"Deal WON from Proforma #{proforma_number} and assigned to Support Manager – {manager_name} on {ist_str}."
+            activity_type="DEAL_WON",
+            description=f"Deal WON from Proforma #{proforma_number} on {ist_str}. Awaiting explicit conversion to Support."
         )
         db.add(activity)
 
@@ -1354,8 +1342,8 @@ class WorkflowService:
             performed_by_id=current_user.id,
             performed_by_name=current_user.username,
             role=current_user.role,
-            title=f"Deal WON from Proforma #{proforma_number} -> Assigned to Support Manager {manager_name}",
-            description=f"Deal #{lead.id} closed WON using Proforma #{proforma_number}. Product: {product_service}, Licences: {customer_users_count} users, Amount: ₹{total_deal_amount:,.2f}, Payment: {payment_status}."
+            title=f"Deal WON from Proforma #{proforma_number}",
+            description=f"Deal #{lead.id} closed WON using Proforma #{proforma_number}. Product: {product_service}, Licences: {customer_users_count} users, Amount: ₹{total_deal_amount:,.2f}, Payment: {payment_status}. Support remains unassigned until conversion."
         )
         db.add(timeline_event)
 
@@ -1364,24 +1352,13 @@ class WorkflowService:
         audit = AuditLog(
             user_id=current_user.id,
             username=current_user.username,
-            action="DEAL_WON_SUPPORT_ASSIGNED",
+            action="DEAL_WON",
             entity_type="LEAD",
             entity_id=str(lead.id),
-            details=f"Deal WON from Proforma #{proforma_number} and assigned to Support Manager – {manager_name} on {ist_str}."
+            details=f"Deal WON from Proforma #{proforma_number} on {ist_str}. Support assignment pending explicit conversion."
         )
         db.add(audit)
         db.commit()
-
-        # 8. Notify Assigned Support Manager
-        if manager_user_id:
-            WorkflowService.notify_user(
-                db=db,
-                user_id=manager_user_id,
-                title=f"New Onboarding Assigned: {customer.company_name or lead.name}",
-                message=f"Deal #{lead.id} ({product_service}) was marked WON from Proforma #{proforma_number} by {sales_emp_name} and assigned to you. Users: {customer_users_count}, Amount: ₹{total_deal_amount:,.2f}.",
-                notification_type="SUPPORT_ASSIGNMENT",
-                link_url=f"/support?onboarding_id={support_handoff.id}"
-            )
 
         return {
             "success": True,
@@ -1389,12 +1366,183 @@ class WorkflowService:
             "customer_id": customer.id,
             "deal_id": lead.id,
             "support_handoff_id": support_handoff.id,
-            "support_manager_name": manager_name,
+            "support_manager_name": None,
+            "converted_to_support": False,
             "proforma_number": proforma_number,
             "total_deal_amount": total_deal_amount,
             "customer_users_count": customer_users_count,
             "payment_status": payment_status,
             "won_at": ist_str
+        }
+
+    @staticmethod
+    def convert_to_support(
+        db: Session,
+        lead_id: int,
+        current_user: User,
+        note: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Explicitly converts a WON Sales deal into the Support onboarding queue.
+
+        This is the only transition that enables Support assignment. It never
+        assigns a Support Manager or Executive; that remains a separate,
+        auditable Support Manager/Admin action. Duplicate conversions are
+        rejected and the converter is recorded on LeadStatusHistory, the
+        workflow timeline and the audit log.
+        """
+        from services.hierarchy_service import (
+            normalize_role,
+            ROLE_ADMIN,
+            ROLE_SALES_MANAGER,
+        )
+
+        role = normalize_role(current_user.role)
+        if role not in [ROLE_ADMIN, ROLE_SALES_MANAGER]:
+            raise PermissionError(
+                "Only Admin and Sales Managers can convert a won deal to Support."
+            )
+
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if not lead:
+            raise ValueError(f"Lead #{lead_id} not found.")
+
+        if is_converted_to_support_status(lead.status):
+            raise ValueError("This deal has already been converted to Support.")
+
+        if not is_won_status(lead.status):
+            raise ValueError(
+                "Only a WON deal can be converted to Support. Mark the deal WON first."
+            )
+
+        old_status = lead.status
+        now_utc = datetime.utcnow()
+        emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        emp_id = emp.id if emp else None
+
+        customer = db.query(Customer).filter(Customer.converted_from_lead == lead.id).first()
+        if not customer and lead.phone:
+            customer = db.query(Customer).filter(Customer.phone == lead.phone).first()
+        if not customer:
+            customer = Customer(
+                company_name=lead.company or lead.name,
+                contact_name=lead.name,
+                phone=lead.phone or "",
+                email=lead.email,
+                location=lead.location or lead.city,
+                converted_from_lead=lead.id,
+                created_at=now_utc,
+            )
+            db.add(customer)
+            db.flush()
+
+        finance_handoff = (
+            db.query(FinanceHandoff)
+            .filter(FinanceHandoff.lead_id == lead.id)
+            .order_by(desc(FinanceHandoff.id))
+            .first()
+        )
+
+        support_handoff = (
+            db.query(SupportHandoff)
+            .filter(SupportHandoff.lead_id == lead.id)
+            .order_by(desc(SupportHandoff.id))
+            .first()
+        )
+        if not support_handoff:
+            support_handoff = SupportHandoff(
+                finance_handoff_id=finance_handoff.id if finance_handoff else None,
+                lead_id=lead.id,
+                customer_id=customer.id,
+                deal_id=lead.id,
+                customer_name=lead.name,
+                company_name=lead.company or customer.company_name,
+                phone=lead.phone,
+                email=lead.email,
+                product_service=lead.requirement_notes or "Support & Services",
+                purchase_snapshot=None,
+                sales_employee_id=lead.assigned_to,
+                sales_employee_name=lead.assigned_employee.name if lead.assigned_employee else None,
+                customer_requirements=lead.requirement_notes,
+                won_at=lead.updated_at or now_utc,
+                onboarding_status=SUPPORT_STATUS_NEW,
+                created_at=now_utc,
+            )
+            db.add(support_handoff)
+            db.flush()
+
+        # Keep the Support queue clean: conversion itself never assigns a
+        # Support Manager or Executive.
+        lead.status = STATUS_CONVERTED_TO_SUPPORT
+        lead.updated_at = now_utc
+
+        db.add(LeadStatusHistory(
+            lead_id=lead.id,
+            old_status=old_status,
+            new_status=STATUS_CONVERTED_TO_SUPPORT,
+            changed_by=emp_id,
+            changed_at=now_utc,
+        ))
+
+        db.add(LeadActivity(
+            lead_id=lead.id,
+            customer_id=customer.id,
+            employee_id=emp_id,
+            performed_by=emp_id,
+            activity_type="CONVERTED_TO_SUPPORT",
+            description=(
+                f"Deal converted from {old_status} to Converted to Support by "
+                f"{current_user.username}."
+                + (f" Note: {note}" if note else "")
+            ),
+        ))
+
+        db.add(WorkflowTimelineEvent(
+            lead_id=lead.id,
+            customer_id=customer.id,
+            stage="SALES",
+            previous_status=old_status,
+            new_status=STATUS_CONVERTED_TO_SUPPORT,
+            performed_by_id=current_user.id,
+            performed_by_name=current_user.username,
+            role=current_user.role,
+            title="Deal Converted to Support",
+            description=(
+                f"Deal #{lead.id} was explicitly converted to Support by "
+                f"{current_user.username}. Support assignment is now enabled."
+                + (f" Note: {note}" if note else "")
+            ),
+        ))
+
+        db.add(AuditLog(
+            user_id=current_user.id,
+            username=current_user.username,
+            action="CONVERT_TO_SUPPORT",
+            entity_type="LEAD",
+            entity_id=str(lead.id),
+            details=(
+                f"Lead #{lead.id} converted from {old_status} to "
+                f"{STATUS_CONVERTED_TO_SUPPORT} by {current_user.username}."
+                + (f" Note: {note}" if note else "")
+            ),
+        ))
+
+        db.commit()
+        db.refresh(lead)
+        db.refresh(support_handoff)
+
+        return {
+            "success": True,
+            "lead_id": lead.id,
+            "status": lead.status,
+            "sales_status": lead.status,
+            "support_handoff_id": support_handoff.id,
+            "converted_to_support_at": now_utc.isoformat(),
+            "converted_by": emp_id,
+            "converted_by_name": emp.name if emp else current_user.username,
+            "support_assigned": bool(support_handoff.assigned_agent_id),
+            "support_assigned_to": support_handoff.assigned_agent_id,
+            "support_assigned_to_name": support_handoff.assigned_agent_name,
         }
 
     @staticmethod

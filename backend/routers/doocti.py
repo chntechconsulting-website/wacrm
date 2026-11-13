@@ -584,9 +584,12 @@ def get_lead_statuses(module: Optional[str] = None):
         {"label": "Assigned", "value": "ASSIGNED", "code": "ASSIGNED", "name": "Assigned"},
         {"label": "Contacted", "value": "CONTACTED", "code": "CONTACTED", "name": "Contacted"},
         {"label": "Interested", "value": "INTERESTED", "code": "INTERESTED", "name": "Interested"},
+        {"label": "Trial", "value": "TRIAL", "code": "TRIAL", "name": "Trial"},
         {"label": "Follow Up", "value": "FOLLOW_UP", "code": "FOLLOW_UP", "name": "Follow Up"},
         {"label": "RNR", "value": "RNR", "code": "RNR", "name": "RNR"},
         {"label": "Junk", "value": "JUNK", "code": "JUNK", "name": "Junk"},
+        {"label": "Won", "value": "WON", "code": "WON", "name": "Won"},
+        {"label": "Converted to Support", "value": "CONVERTED_TO_SUPPORT", "code": "CONVERTED_TO_SUPPORT", "name": "Converted to Support"},
         {"label": "Converted", "value": "CONVERTED", "code": "CONVERTED", "name": "Converted"},
         {"label": "Not Interested", "value": "NOT_INTERESTED", "code": "NOT_INTERESTED", "name": "Not Interested"},
         {"label": "Lost", "value": "LOST", "code": "LOST", "name": "Lost"}

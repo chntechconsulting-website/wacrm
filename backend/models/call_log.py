@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -6,6 +6,9 @@ from utils.timezone import get_ist_now
 
 class CallLog(Base):
     __tablename__ = "call_logs"
+    __table_args__ = (
+        Index("ix_call_logs_lead_created", "lead_id", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)

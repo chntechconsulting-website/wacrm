@@ -46,9 +46,8 @@ import {
 } from 'lucide-react';
 import WhatsAppChatPanel from '../../components/WhatsApp/WhatsAppChatPanel';
 import IVRCallModal from '../../components/IVR/IVRCallModal';
-import QuotationModal from '../../components/Billing/QuotationModal';
-import DealWonModal from './DealWonModal';
-import PingoEmptyState from '../../components/Common/PingoEmptyState';
+const QuotationModal = React.lazy(() => import('../../components/Billing/QuotationModal'));
+import DealWonModal from './DealWonModal';import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import { 
   formatDateDDMMYYYY, 
   formatTime12Hour,
@@ -63,12 +62,14 @@ const STATUS_OPTIONS = [
   'RE-INQUIRY',
   'CONTACTED',
   'INTERESTED',
+  'TRIAL',
   'RNR',
   'DEMO / MEETING',
   'PROPOSAL SENT',
   'NEGOTIATION',
   'FOLLOW-UP',
   'WON',
+  'CONVERTED_TO_SUPPORT',
   'LOST',
   'JUNK'
 ];
@@ -76,6 +77,9 @@ const STATUS_OPTIONS = [
 const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'];
 const RATING_OPTIONS = ['Hot', 'Warm', 'Cold'];
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
+
+const normalizeLeadStatusValue = (value) =>
+  String(value || '').trim().toUpperCase().replace(/-/g, '_').replace(/\s+/g, '_');
 
 // Server-side pagination window for the Leads table
 const LEADS_PAGE_SIZE = 150;
@@ -104,6 +108,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const canEditLead = currentUser?.role === 'ADMIN' || Boolean(currentUser?.permissions?.leads?.can_edit);
   const canCallLead = currentUser?.role === 'ADMIN' || Boolean(currentUser?.permissions?.leads?.can_call);
   const canWhatsAppLead = currentUser?.role === 'ADMIN' || Boolean(currentUser?.permissions?.leads?.can_whatsapp);
+  const normalizedRole = (currentUser?.role || '').toUpperCase();
+  const canConvertToSupport = ['ADMIN', 'SALES_MANAGER', 'MANAGER'].includes(normalizedRole);
+  const canAssignSupport = ['ADMIN', 'SUPPORT_MANAGER'].includes(normalizedRole);
   const [leads, setLeads] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -119,6 +126,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
   // Filters & Search
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(initialStatusFromUrl);
   const [sourceFilter, setSourceFilter] = useState(initialSourceFromUrl);
   const [productFilter, setProductFilter] = useState('');
@@ -143,7 +151,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
   // Synchronize ref on every render so intervals and callbacks always read active filters
   filtersRef.current = {
-    search,
+    search: debouncedSearch,
     statusFilter,
     sourceFilter,
     productFilter,
@@ -157,10 +165,16 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     pageSize: LEADS_PAGE_SIZE
   };
 
+  // Debounce typing so a search term issues one request instead of one per key.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   // Stable signature of the active search / filter / sort context.
   // Used to detect filter changes so pagination can restart at page 1 exactly once.
   const filtersKey = JSON.stringify([
-    search,
+    debouncedSearch,
     statusFilter,
     sourceFilter,
     productFilter,
@@ -276,6 +290,17 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [showDealWonModal, setShowDealWonModal] = useState(false);
   const [pendingDealWonLead, setPendingDealWonLead] = useState(null);
 
+  // Explicit Support Assignment modal (opened immediately after conversion or
+  // later from a converted lead drawer).
+  const [showSupportAssignModal, setShowSupportAssignModal] = useState(false);
+  const [supportAssignLead, setSupportAssignLead] = useState(null);
+  const [supportTeamMembers, setSupportTeamMembers] = useState([]);
+  const [supportMembersLoading, setSupportMembersLoading] = useState(false);
+  const [supportAgentId, setSupportAgentId] = useState('');
+  const [supportRemarks, setSupportRemarks] = useState('');
+  const [supportAssignError, setSupportAssignError] = useState('');
+  const [assigningSupport, setAssigningSupport] = useState(false);
+
   const handleCreateQuoteTaskQuotation = async (lead) => {
     if (!lead) return;
     try {
@@ -288,7 +313,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       });
       if (res.data) {
         setQuotationMessage(`Quotation #${res.data.quotation_number} created successfully in QuoteTask!`);
-        fetchLeads();
+        fetchLeads(true);
         setSelectedLead(prev => prev ? ({ ...prev, ...res.data }) : null);
         setTimeout(() => setQuotationMessage(''), 5000);
       }
@@ -309,7 +334,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       const res = await API.post(`/leads/${lead.id}/quotetask/sync`);
       if (res.data) {
         setQuotationMessage(`Synced status: ${res.data.quotation_status}`);
-        fetchLeads();
+        fetchLeads(true);
         setSelectedLead(prev => prev ? ({ ...prev, ...res.data }) : null);
         setTimeout(() => setQuotationMessage(''), 4000);
       }
@@ -342,21 +367,19 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   };
 
   const handleBillingSuccess = (newDoc) => {
-    fetchLeads();
     const docStatus = String(newDoc?.status || '').toLowerCase();
     const docType = String(newDoc?.docType || 'quotation').toUpperCase();
     const isDraft = docStatus === 'draft';
     const amount = Number(newDoc?.grandTotal || 0);
 
     // Drafts must never overwrite the lead's official issued-quotation reference.
-    if (selectedLead && !isDraft) {
-      setSelectedLead(prev => prev ? ({
-        ...prev,
+    if (selectedLead && !isDraft && newDoc?.id) {
+      patchLeadRow(selectedLead.id, {
         quotetask_quotation_id: String(newDoc.id),
         quotetask_quotation_number: newDoc.number,
         quotetask_quotation_status: newDoc.status,
         quotetask_quotation_amount: newDoc.grandTotal
-      }) : null);
+      });
     }
 
     setQuotationMessage(
@@ -446,6 +469,28 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
   const [assigneeId, setAssigneeId] = useState('');
   const [noteText, setNoteText] = useState('');
+  const [savingLeadId, setSavingLeadId] = useState(null);
+
+  // Update only the affected row + an already-open drawer. This keeps filters,
+  // search, pagination and scroll position untouched after a save.
+  const patchLeadRow = (leadId, updates) => {
+    setLeads(prev => prev.map(lead => (
+      lead.id === leadId ? { ...lead, ...updates } : lead
+    )));
+    setSelectedLead(prev => (
+      prev && prev.id === leadId ? { ...prev, ...updates } : prev
+    ));
+  };
+
+  const removeLeadRow = (leadId) => {
+    setLeads(prev => prev.filter(lead => lead.id !== leadId));
+    const nextTotal = Math.max(0, total - 1);
+    setTotal(nextTotal);
+    setTotalPages(Math.max(1, Math.ceil(nextTotal / LEADS_PAGE_SIZE)));
+    if (leads.length <= 1 && page > 1) {
+      setPage(prevPage => Math.max(1, prevPage - 1));
+    }
+  };
 
   const fetchLeads = async (silent = false) => {
     const reqId = ++latestLeadReqIdRef.current;
@@ -518,7 +563,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
   const fetchEmployees = async () => {
     try {
-      const res = await API.get('/employees/?status_filter=ACTIVE');
+      const res = await API.get('/leads/sales-managers');
       setEmployees(res.data);
     } catch (err) {
       console.error(err);
@@ -536,12 +581,15 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
-  // Employee list + source stats only depend on the active filter context,
-  // so they are not refetched while paging through the results.
+  // Employee list and source counters are independent of search/status/source
+  // filters, so they must not be refetched on every filter change.
   useEffect(() => {
     fetchEmployees();
+  }, []);
+
+  useEffect(() => {
     fetchSourceCounts();
-  }, [filtersKey]);
+  }, [defaultFilter]);
 
   // Fetch the requested page. Any search/filter/sort change restarts pagination
   // at page 1, and the guard below guarantees a single request per change.
@@ -557,13 +605,15 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     fetchLeads();
   }, [filtersKey, page]);
 
-  // Real-time automatic lead synchronization: poll quietly every 5 seconds so new Meta leads appear automatically
-  // Uses filtersRef.current so polling ALWAYS preserves the user's active filter values!
+  // Quiet background sync for newly arrived Meta/website leads. Polling is
+  // paused while the tab is hidden and no longer runs every 5 seconds, which
+  // previously produced ~24 list+stats requests per minute per open CRM tab.
   useEffect(() => {
     const syncInterval = setInterval(() => {
+      if (document.hidden) return;
       fetchLeads(true);
       fetchSourceCounts();
-    }, 5000);
+    }, 30000);
 
     return () => clearInterval(syncInterval);
   }, []);
@@ -812,9 +862,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null
       };
       await API.put(`/leads/${selectedLead.id}`, payload);
+      const assignedEmployee = employees.find(emp => String(emp.id) === String(payload.assigned_to));
+      patchLeadRow(selectedLead.id, {
+        ...payload,
+        assigned_employee_name: assignedEmployee?.name ?? (payload.assigned_to ? selectedLead.assigned_employee_name : null)
+      });
       setSuccess('Lead updated successfully!');
       setShowEditModal(false);
-      fetchLeads();
       if (formData.status?.toUpperCase() === 'PROPOSAL SENT') {
         navigate(`/waquotes?create=quotation&leadId=${selectedLead.id}`);
       }
@@ -839,9 +893,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     try {
       setSubmitting(true);
       await API.put(`/leads/${selectedLead.id}/assign`, { assigned_to: parseInt(assigneeId) });
+      const assignedEmployee = employees.find(emp => String(emp.id) === String(assigneeId));
+      patchLeadRow(selectedLead.id, {
+        assigned_to: parseInt(assigneeId, 10),
+        assigned_employee_name: assignedEmployee?.name || null
+      });
       setSuccess('Lead assigned successfully!');
       setShowAssignModal(false);
-      fetchLeads();
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || 'Failed to assign lead.');
@@ -850,12 +908,193 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
+  const loadSupportTeamMembers = async () => {
+    if (!canAssignSupport) return;
+    setSupportMembersLoading(true);
+    try {
+      const res = await API.get('/leads/support/team-members');
+      setSupportTeamMembers(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Failed to load active Support Team members:', err);
+      setSupportTeamMembers([]);
+      setSupportAssignError(
+        err.response?.data?.detail || 'Failed to load active Support Team employees.'
+      );
+    } finally {
+      setSupportMembersLoading(false);
+    }
+  };
+
+  const openSupportAssignModal = (lead, overrides = {}) => {
+    if (!lead?.id) return;
+    const convertedLead = {
+      ...lead,
+      ...overrides,
+      converted_to_support_at:
+        overrides.converted_to_support_at ||
+        lead.converted_to_support_at ||
+        new Date().toISOString()
+    };
+    setSupportAssignLead(convertedLead);
+    setSupportAgentId(
+      convertedLead.support_assigned_to ? String(convertedLead.support_assigned_to) : ''
+    );
+    setSupportRemarks('');
+    setSupportAssignError('');
+    setSupportTeamMembers([]);
+    setShowSupportAssignModal(true);
+    if (canAssignSupport) {
+      loadSupportTeamMembers();
+    }
+  };
+
+  const closeSupportAssignModal = () => {
+    setShowSupportAssignModal(false);
+    setSupportAssignLead(null);
+    setSupportAgentId('');
+    setSupportRemarks('');
+    setSupportAssignError('');
+  };
+
+  const handleAssignSupport = async (e) => {
+    if (e) e.preventDefault();
+    if (!supportAssignLead) return;
+
+    const currentStatus = normalizeLeadStatusValue(supportAssignLead.status);
+    if (currentStatus !== 'CONVERTED_TO_SUPPORT') {
+      setSupportAssignError(
+        'Support assignment is available only after the deal is explicitly converted to Support.'
+      );
+      return;
+    }
+    if (!supportAgentId) {
+      setSupportAssignError('Please select an active Support Team employee.');
+      return;
+    }
+
+    setAssigningSupport(true);
+    setSupportAssignError('');
+    try {
+      const payload = { assigned_agent_id: parseInt(supportAgentId, 10) };
+      if (supportRemarks.trim()) payload.remarks = supportRemarks.trim();
+      const res = await API.put(`/leads/${supportAssignLead.id}/support-assign`, payload);
+
+      const updatedLead = {
+        support_assigned_to: res.data?.assigned_agent_id,
+        support_assigned_to_name: res.data?.assigned_agent_name,
+        support_assigned_at: res.data?.support_assigned_at,
+        support_manager_id: res.data?.support_manager_id,
+        support_manager_name: res.data?.support_manager_name,
+        support_assignment_status: 'ASSIGNED'
+      };
+      patchLeadRow(supportAssignLead.id, updatedLead);
+      setSuccess(
+        res.data?.already_assigned
+          ? `Lead #${supportAssignLead.id} is already assigned to ${updatedLead.support_assigned_to_name || 'this Support Executive'}.`
+          : `Lead #${supportAssignLead.id} assigned to Support Executive ${updatedLead.support_assigned_to_name || ''} successfully.`
+      );
+      closeSupportAssignModal();
+      window.dispatchEvent(new Event('leadStatsUpdated'));
+    } catch (err) {
+      console.error('Failed to assign Support Executive:', err);
+      setSupportAssignError(
+        err.response?.data?.detail || 'Failed to assign the Support Executive. Please try again.'
+      );
+    } finally {
+      setAssigningSupport(false);
+    }
+  };
+
   const handleStatusChange = async (leadId, newStatus) => {
-    // If status is changed to WON, prompt for Support Manager assignment via DealWonModal
+    // Won is a Sales-only milestone. The DealWonModal captures the proforma
+    // snapshot; Support assignment remains blocked until conversion.
     if (newStatus === 'WON') {
       const targetLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
       setPendingDealWonLead(targetLead || { id: leadId, name: `Lead #${leadId}` });
       setShowDealWonModal(true);
+      return;
+    }
+
+    // Explicit Won -> Converted to Support transition (Admin / Sales Manager).
+    if (newStatus === 'CONVERTED_TO_SUPPORT') {
+      const targetLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
+      if (!canConvertToSupport) {
+        setError('Only Admin and Sales Managers can convert a won deal to Support.');
+        return;
+      }
+      const currentStatus = (targetLead?.status || '').toUpperCase();
+      if (currentStatus !== 'WON' && currentStatus !== 'CONVERTED') {
+        setError('Only a WON deal can be converted to Support. Mark the deal WON first.');
+        return;
+      }
+      try {
+        const res = await API.post(`/leads/${leadId}/convert-to-support`, {});
+
+        // Ensure the assignment form always has the full lead projection even
+        // when the status was changed from a table row that is not open in
+        // the detail drawer.
+        let baseLead = targetLead;
+        if (!baseLead) {
+          try {
+            const detailRes = await API.get(`/leads/${leadId}`);
+            baseLead = detailRes.data;
+          } catch (detailErr) {
+            console.error('Failed to load converted lead details:', detailErr);
+          }
+        }
+
+        const convertedLead = {
+          ...(baseLead || { id: leadId, name: `Lead #${leadId}` }),
+          status: res.data?.status || 'CONVERTED_TO_SUPPORT',
+          is_converted_to_support: true,
+          converted_to_support_at:
+            res.data?.converted_to_support_at || new Date().toISOString(),
+          converted_to_support_by: res.data?.converted_by,
+          converted_to_support_by_name: res.data?.converted_by_name,
+          support_handoff_id:
+            res.data?.support_handoff_id || baseLead?.support_handoff_id,
+          support_assigned_to:
+            res.data?.support_assigned_to || baseLead?.support_assigned_to,
+          support_assigned_to_name:
+            res.data?.support_assigned_to_name || baseLead?.support_assigned_to_name,
+          support_assignment_status: res.data?.support_assigned
+            ? 'ASSIGNED'
+            : 'NOT_ASSIGNED'
+        };
+
+        PingoPopupService.triggerStatusUpdate({
+          module: 'Lead',
+          status: 'CONVERTED TO SUPPORT',
+          reference: `Lead #${leadId}`
+        });
+        setSuccess(
+          canAssignSupport
+            ? `Lead #${leadId} converted to Support. Complete the Support assignment below.`
+            : `Lead #${leadId} converted to Support. It is now Pending Support Assignment.`
+        );
+        patchLeadRow(leadId, {
+          status: convertedLead.status,
+          is_converted_to_support: true,
+          converted_to_support_at: convertedLead.converted_to_support_at,
+          converted_to_support_by: convertedLead.converted_to_support_by,
+          converted_to_support_by_name: convertedLead.converted_to_support_by_name,
+          support_handoff_id: convertedLead.support_handoff_id,
+          support_assigned_to: convertedLead.support_assigned_to,
+          support_assigned_to_name: convertedLead.support_assigned_to_name,
+          support_assignment_status: convertedLead.support_assignment_status
+        });
+
+        // Open the Support Assignment form immediately after the status save.
+        openSupportAssignModal(convertedLead);
+
+        window.dispatchEvent(new CustomEvent('revenueUpdated', {
+          detail: { lead_id: leadId, status: 'CONVERTED_TO_SUPPORT' }
+        }));
+        window.dispatchEvent(new Event('leadStatsUpdated'));
+      } catch (err) {
+        console.error(err);
+        setError(err.response?.data?.detail || 'Failed to convert the deal to Support.');
+      }
       return;
     }
 
@@ -885,10 +1124,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
           reference: `Lead #${leadId}`
         });
         setSuccess(`Lead #${leadId} status changed to PROPOSAL SENT. Opening Quotation Creation...`);
-        fetchLeads();
-        if (selectedLead && selectedLead.id === leadId) {
-          setSelectedLead(prev => ({ ...prev, status: 'PROPOSAL SENT' }));
-        }
+        patchLeadRow(leadId, { status: 'PROPOSAL SENT' });
         navigate(`/waquotes?create=quotation&leadId=${leadId}`);
         return;
       } catch (err) {
@@ -899,6 +1135,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
 
     try {
+      setSavingLeadId(leadId);
       await API.put(`/leads/${leadId}/status`, { status: newStatus });
       PingoPopupService.triggerStatusUpdate({
         module: 'Lead',
@@ -906,10 +1143,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         reference: `Lead #${leadId}`
       });
       setSuccess(`Lead #${leadId} status changed to ${newStatus}`);
-      fetchLeads();
-      if (selectedLead && selectedLead.id === leadId) {
-        setSelectedLead(prev => ({ ...prev, status: newStatus }));
-      }
+      patchLeadRow(leadId, { status: newStatus });
       // Notify revenue dashboard and targets
       window.dispatchEvent(new CustomEvent('revenueUpdated', {
         detail: { lead_id: leadId, status: newStatus }
@@ -918,6 +1152,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || 'Failed to update status.');
+    } finally {
+      setSavingLeadId(current => (current === leadId ? null : current));
     }
   };
 
@@ -964,15 +1200,11 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setSuccess(`Lead status changed to FOLLOW-UP & follow-up scheduled for ${formatDateDDMMYYYY(pendingFollowupData.followup_date)} at ${formatTime12Hour(pendingFollowupData.followup_time)}!`);
       setShowFollowupPromptModal(false);
       setPendingFollowupLead(null);
-      fetchLeads();
-      if (selectedLead && selectedLead.id === leadId) {
-        setSelectedLead(prev => ({ 
-          ...prev, 
-          status: 'FOLLOW-UP', 
-          followup_date: pendingFollowupData.followup_date,
-          followup_time: pendingFollowupData.followup_time 
-        }));
-      }
+      patchLeadRow(leadId, {
+        status: 'FOLLOW-UP',
+        followup_date: pendingFollowupData.followup_date,
+        followup_time: pendingFollowupData.followup_time
+      });
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.detail || 'Failed to schedule follow-up.');
@@ -987,22 +1219,26 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     setShowDealWonModal(true);
   };
 
-  const handleDealWonSuccess = (data, managerName) => {
-    setSuccess(`Deal WON and assigned to Support Manager – ${managerName}!`);
-    fetchLeads();
-    if (selectedLead && (selectedLead.id === data?.lead_id || selectedLead.id === pendingDealWonLead?.id)) {
-      setSelectedLead(prev => prev ? ({ ...prev, status: 'WON' }) : null);
+  const handleConvertToSupport = (leadId) => {
+    handleStatusChange(leadId, 'CONVERTED_TO_SUPPORT');
+  };
+
+  const handleDealWonSuccess = (data) => {
+    setSuccess('Deal marked WON. Support assignment stays disabled until the deal is explicitly converted to Support.');
+    const wonLeadId = data?.lead_id || pendingDealWonLead?.id;
+    if (wonLeadId) {
+      patchLeadRow(wonLeadId, { status: 'WON', support_assignment_status: 'AWAITING_CONVERSION' });
     }
     // Notify revenue dashboard and targets
     window.dispatchEvent(new CustomEvent('revenueUpdated', {
-      detail: { lead_id: data?.lead_id || pendingDealWonLead?.id, status: 'WON' }
+      detail: { lead_id: wonLeadId, status: 'WON' }
     }));
     window.dispatchEvent(new Event('leadStatsUpdated'));
   };
 
   const handleAddNote = async (e) => {
     e.preventDefault();
-    if (!noteText.trim()) return;
+    if (!noteText.trim() || submitting) return;
 
     try {
       setSubmitting(true);
@@ -1016,7 +1252,6 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setSelectedLead(leadData);
       setNoteText('');
       setSuccess('Note added to timeline!');
-      fetchLeads();
     } catch (err) {
       console.error(err);
       setError('Failed to add note.');
@@ -1039,8 +1274,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         setSuccess(res.data.message || 'Deletion request submitted to Admin for approval.');
       } else {
         setSuccess(res.data?.message || 'Lead deleted successfully.');
+        removeLeadRow(leadId);
+        fetchSourceCounts();
+        window.dispatchEvent(new Event('leadStatsUpdated'));
       }
-      fetchLeads();
       if (selectedLead?.id === leadId) {
         setShowDetailDrawer(false);
         setSelectedLead(null);
@@ -1122,6 +1359,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const getStatusBadgeStyle = (status) => {
     const s = (status || '').toUpperCase();
     if (s.includes('RE-INQUIRY') || s.includes('REINQUIRY')) return { bg: 'rgba(124, 58, 237, 0.14)', color: '#7c3aed' };
+    if (s.includes('CONVERTED') && s.includes('SUPPORT')) return { bg: 'rgba(13, 148, 136, 0.14)', color: '#0f766e' };
+    if (s === 'TRIAL' || s.includes('TRIAL')) return { bg: 'rgba(14, 165, 233, 0.14)', color: '#0369a1' };
     if (s.includes('NEW') || s === 'ASSIGNED') return { bg: 'rgba(59, 130, 246, 0.12)', color: '#2563eb' };
     if (s.includes('CONTACTED')) return { bg: 'rgba(14, 165, 233, 0.12)', color: '#0284c7' };
     if (s.includes('INTERESTED') && !s.includes('NOT')) return { bg: 'rgba(245, 158, 11, 0.12)', color: '#d97706' };
@@ -1561,6 +1800,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 <th style={{ minWidth: '130px' }}>Product</th>
                 <th style={{ minWidth: '140px' }}>Status</th>
                 <th>Assigned To</th>
+                <th style={{ minWidth: '145px' }}>Support Assigned To</th>
                 <th 
                   onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
                   style={{ cursor: 'pointer', userSelect: 'none', minWidth: '165px' }}
@@ -1585,13 +1825,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="9" className="text-center py-4 text-muted">
+                  <td colSpan="10" className="text-center py-4 text-muted">
                     Loading leads data...
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan="9" style={{ padding: '36px 16px', background: '#f8fafc' }}>
+                  <td colSpan="10" style={{ padding: '36px 16px', background: '#f8fafc' }}>
                     <PingoEmptyState
                       pose="playful"
                       height={120}
@@ -1731,6 +1971,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         <select
                           value={lead.status}
                           onChange={(e) => handleStatusChange(lead.id, e.target.value)}
+                          disabled={savingLeadId === lead.id}
+                          aria-busy={savingLeadId === lead.id}
+                          title={savingLeadId === lead.id ? 'Saving status...' : 'Change lead status'}
                           style={{
                             padding: '5px 22px 5px 10px',
                             borderRadius: '16px',
@@ -1739,12 +1982,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                             backgroundColor: badgeStyle.bg,
                             color: badgeStyle.color,
                             border: '1px solid rgba(0, 0, 0, 0.08)',
-                            cursor: 'pointer',
+                            cursor: savingLeadId === lead.id ? 'wait' : 'pointer',
                             minWidth: '130px',
                             width: '100%',
                             outline: 'none',
                             appearance: 'auto',
-                            boxSizing: 'border-box'
+                            boxSizing: 'border-box',
+                            opacity: savingLeadId === lead.id ? 0.6 : 1
                           }}
                         >
                           {STATUS_OPTIONS.map(st => (
@@ -1753,6 +1997,11 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                             </option>
                           ))}
                         </select>
+                        {savingLeadId === lead.id && (
+                          <span style={{ display: 'block', marginTop: 2, fontSize: '0.65rem', fontWeight: 600, color: '#64748b' }}>
+                            Saving…
+                          </span>
+                        )}
                       </td>
                       <td>
                         {lead.assigned_employee_name ? (
@@ -1770,6 +2019,27 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                             gap: '4px'
                           }}>
                             <Clock size={12} /> Unassigned (1h Timeout)
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {lead.support_assigned_to_name ? (
+                          <span style={{ fontSize: '0.82rem', fontWeight: '600', color: '#0f766e' }}>
+                            {lead.support_assigned_to_name}
+                          </span>
+                        ) : (
+                          <span style={{
+                            fontSize: '0.76rem',
+                            padding: '3px 8px',
+                            borderRadius: '12px',
+                            backgroundColor: lead.is_converted_to_support ? '#fef3c7' : '#f1f5f9',
+                            color: lead.is_converted_to_support ? '#92400e' : '#64748b',
+                            fontWeight: '600',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}>
+                            {lead.is_converted_to_support ? 'Pending Support Assignment' : 'Not Assigned'}
                           </span>
                         )}
                       </td>
@@ -2193,8 +2463,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                                   const newCat = e.target.value;
                                   try {
                                     await API.put(`/leads/${selectedLead.id}`, { product_category: newCat });
-                                    setSelectedLead(prev => ({ ...prev, product_category: newCat, product_category_confirmed: true }));
-                                    fetchLeads();
+                                    patchLeadRow(selectedLead.id, { product_category: newCat, product_category_confirmed: true });
                                   } catch (err) {
                                     console.error('Failed to update product category:', err);
                                   }
@@ -2227,6 +2496,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           <select
                             value={selectedLead.status}
                             onChange={(e) => handleStatusChange(selectedLead.id, e.target.value)}
+                            disabled={savingLeadId === selectedLead.id}
+                            aria-busy={savingLeadId === selectedLead.id}
+                            title={savingLeadId === selectedLead.id ? 'Saving status...' : 'Change Lead Status'}
                             style={{
                               appearance: 'none',
                               WebkitAppearance: 'none',
@@ -2237,8 +2509,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                               backgroundColor: getStatusBadgeStyle(selectedLead.status).bg,
                               color: getStatusBadgeStyle(selectedLead.status).color,
                               border: `1.5px solid ${getStatusBadgeStyle(selectedLead.status).color}40`,
-                              cursor: 'pointer',
-                              outline: 'none'
+                              cursor: savingLeadId === selectedLead.id ? 'wait' : 'pointer',
+                              outline: 'none',
+                              opacity: savingLeadId === selectedLead.id ? 0.6 : 1
                             }}
                           >
                             {STATUS_OPTIONS.map(st => (
@@ -2502,22 +2775,46 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                       </button>
                     </div>
 
-                    {/* Row 3: Conversion & Delete Actions (Balanced 2 Columns - 50% each) */}
-                    <div style={{ 
-                      display: 'grid', 
-                      gridTemplateColumns: canDeleteLead && (selectedLead.status !== 'WON' && selectedLead.status !== 'CONVERTED') ? '1fr 1fr' : '1fr', 
-                      gap: '8px', 
-                      marginTop: '8px' 
+                    {/* Row 3: Conversion & Delete Actions */}
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                      gap: '8px',
+                      marginTop: '8px'
                     }}>
-                      {selectedLead.status !== 'WON' && selectedLead.status !== 'CONVERTED' && (
+                      {selectedLead.status !== 'WON' && selectedLead.status !== 'CONVERTED' && selectedLead.status !== 'CONVERTED_TO_SUPPORT' && selectedLead.status !== 'CONVERTED TO SUPPORT' && (
                         <button
                           type="button"
                           onClick={() => handleConvertLead(selectedLead.id)}
                           className="btn btn-outline"
                           style={{ fontSize: '0.8rem', fontWeight: '600', padding: '8px 12px', color: '#16a34a', borderColor: '#bbf7d0', backgroundColor: '#f0fdf4', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-                          title="Mark as Won and Convert to Customer"
+                          title="Mark as Won and prepare the Support handoff snapshot"
                         >
                           <Check size={14} /> Mark Won
+                        </button>
+                      )}
+
+                      {canConvertToSupport && (selectedLead.status === 'WON' || selectedLead.status === 'CONVERTED') && (
+                        <button
+                          type="button"
+                          onClick={() => handleConvertToSupport(selectedLead.id)}
+                          className="btn btn-outline"
+                          style={{ fontSize: '0.8rem', fontWeight: '600', padding: '8px 12px', color: '#0f766e', borderColor: '#99f6e4', backgroundColor: '#f0fdfa', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                          title="Explicitly convert this won deal to the Support onboarding queue"
+                        >
+                          <UserCheck size={14} /> Convert to Support
+                        </button>
+                      )}
+
+                      {canAssignSupport && ['CONVERTED_TO_SUPPORT', 'CONVERTED TO SUPPORT'].includes((selectedLead.status || '').toUpperCase()) && (
+                        <button
+                          type="button"
+                          onClick={() => openSupportAssignModal(selectedLead)}
+                          className="btn btn-outline"
+                          style={{ fontSize: '0.8rem', fontWeight: '600', padding: '8px 12px', color: '#7c3aed', borderColor: '#ddd6fe', backgroundColor: '#f5f3ff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                          title={selectedLead.support_assigned_to ? 'Review or change the Support Executive' : 'Assign an active Support Executive'}
+                        >
+                          <UserCheck size={14} /> {selectedLead.support_assigned_to ? 'Manage Support' : 'Assign Support'}
                         </button>
                       )}
 
@@ -2594,6 +2891,28 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           <div><strong>Source:</strong> <span style={{ fontWeight: '700', color: selectedLead.source === 'WEBSITE' ? '#047857' : '#1d4ed8' }}>{selectedLead.source}</span></div>
                           <div><strong>Rating / Priority:</strong> {selectedLead.rating} / {selectedLead.priority}</div>
                           <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
+                          <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
+                          <div style={{ gridColumn: 'span 2', background: '#f0fdfa', padding: '8px 12px', borderRadius: '6px', border: '1px solid #ccfbf1', color: '#0f766e' }}>
+                            <strong>Support Assigned To:</strong>{' '}
+                            <span style={{ fontWeight: 700 }}>
+                              {selectedLead.support_assigned_to_name || 'Not Assigned'}
+                            </span>
+                            {selectedLead.is_converted_to_support ? (
+                              <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 700, color: selectedLead.support_assigned_to_name ? '#047857' : '#b45309' }}>
+                                {selectedLead.support_assigned_to_name ? '• Support assignment active' : '• Pending Support Assignment'}
+                              </span>
+                            ) : (
+                              <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>
+                                • Available after Won → Converted to Support
+                              </span>
+                            )}
+                          </div>
+                          {selectedLead.is_converted_to_support && (
+                            <div style={{ gridColumn: 'span 2', fontSize: '0.8rem', color: '#475569' }}>
+                              Converted to Support by <strong>{selectedLead.converted_to_support_by_name || 'Unknown'}</strong>
+                              {selectedLead.converted_to_support_at ? ` on ${formatLeadReceived(selectedLead.converted_to_support_at).full}` : ''}
+                            </div>
+                          )}
                           <div><strong>Lead ID:</strong> #{selectedLead.id}</div>
                           {selectedLead.followup_date && (
                             <div style={{ gridColumn: 'span 2', background: '#fffbeb', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fef3c7', color: '#92400e' }}>
@@ -2768,6 +3087,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                               <div><strong>Source:</strong> <span style={{ fontWeight: '700', color: selectedLead.source === 'WEBSITE' ? '#047857' : '#1d4ed8' }}>{selectedLead.source}</span></div>
                               <div><strong>Rating / Priority:</strong> {selectedLead.rating} / {selectedLead.priority}</div>
                               <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
+                              <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
+                              <div><strong>Support Assigned To:</strong> {selectedLead.support_assigned_to_name || 'Not Assigned'}</div>
                               <div><strong>Lead ID:</strong> #{selectedLead.id}</div>
                               {selectedLead.followup_date && (
                                 <div style={{ gridColumn: 'span 2', background: '#fffbeb', padding: '6px 10px', borderRadius: '6px', border: '1px solid #fef3c7', color: '#92400e' }}>
@@ -3405,7 +3726,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             zIndex: 100000
           }}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--text-main, #0f172a)' }}>Assign Lead #{selectedLead?.id}</h3>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--text-main, #0f172a)' }}>Assign Sales Manager &middot; Lead #{selectedLead?.id}</h3>
               <button onClick={() => setShowAssignModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
                 <X size={20} />
               </button>
@@ -3413,17 +3734,20 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
             <form onSubmit={handleAssignLead}>
               <div className="form-group" style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)' }}>Select Sales Representative</label>
+                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)' }}>Select Active Sales Manager</label>
                 <select 
                   value={assigneeId} 
                   onChange={(e) => setAssigneeId(e.target.value)}
                   style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-color)' }}
                 >
-                  <option value="">Select Employee...</option>
+                  <option value="">Select Sales Manager...</option>
                   {employees.map(emp => (
                     <option key={emp.id} value={emp.id}>{emp.name} ({emp.role})</option>
                   ))}
                 </select>
+                <small style={{ color: '#64748b', fontSize: '0.74rem', marginTop: '4px', display: 'block' }}>
+                  Only active Sales Managers are eligible. Sales Executives, Support users and inactive employees are excluded.
+                </small>
               </div>
 
               <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
@@ -3431,10 +3755,206 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={submitting || !assigneeId}>
-                  {submitting ? 'Assigning...' : 'Assign Lead'}
+                  {submitting ? 'Assigning...' : 'Assign Sales Manager'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* SUPPORT ASSIGNMENT MODAL - opens immediately after conversion */}
+      {showSupportAssignModal && supportAssignLead && (
+        <div
+          className="modal-backdrop"
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100001, padding: '16px'
+          }}
+          onClick={closeSupportAssignModal}
+        >
+          <div
+            className="modal-content"
+            style={{
+              backgroundColor: 'var(--bg-card, #ffffff)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '16px',
+              width: '100%', maxWidth: '620px',
+              maxHeight: '90vh', overflowY: 'auto',
+              padding: '24px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+              position: 'relative', zIndex: 100002
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.18rem', fontWeight: 800, color: 'var(--text-main, #0f172a)', margin: 0 }}>
+                  Support Assignment &middot; Lead #{supportAssignLead.id}
+                </h3>
+                <div style={{ marginTop: '7px' }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '5px',
+                    fontSize: '0.73rem', fontWeight: 800,
+                    padding: '4px 9px', borderRadius: '12px',
+                    backgroundColor: supportAssignLead.support_assigned_to ? '#dcfce7' : '#fef3c7',
+                    color: supportAssignLead.support_assigned_to ? '#166534' : '#92400e'
+                  }}>
+                    {supportAssignLead.support_assigned_to ? 'Support Assigned' : 'Pending Support Assignment'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeSupportAssignModal}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                aria-label="Close Support Assignment form"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+              gap: '10px',
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '10px',
+              padding: '14px',
+              marginBottom: '18px'
+            }}>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Lead Name</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                  {supportAssignLead.name || [supportAssignLead.first_name, supportAssignLead.last_name].filter(Boolean).join(' ') || '—'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Company Name</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                  {supportAssignLead.company || supportAssignLead.company_name || '—'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Lead ID</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>#{supportAssignLead.id}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Current Sales Manager</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                  {supportAssignLead.sales_manager_name || 'Not Assigned'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Conversion Date</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                  {formatLeadReceived(supportAssignLead.converted_to_support_at).full}
+                </div>
+              </div>
+              {supportAssignLead.converted_to_support_by_name && (
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Converted By</div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                    {supportAssignLead.converted_to_support_by_name}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!canAssignSupport ? (
+              <div style={{
+                background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
+                borderRadius: '9px', padding: '12px 14px', fontSize: '0.84rem', fontWeight: 600
+              }}>
+                The conversion is saved and this lead is now <strong>Pending Support Assignment</strong>.
+                Only an Admin or Support Manager can assign an active Support Team employee.
+              </div>
+            ) : (
+              <form onSubmit={handleAssignSupport}>
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
+                    Support Team Employee *
+                  </label>
+                  <select
+                    value={supportAgentId}
+                    onChange={(e) => {
+                      setSupportAgentId(e.target.value);
+                      if (supportAssignError) setSupportAssignError('');
+                    }}
+                    disabled={supportMembersLoading || assigningSupport}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff' }}
+                  >
+                    <option value="">
+                      {supportMembersLoading ? 'Loading active Support employees...' : 'Select an active Support Team employee...'}
+                    </option>
+                    {supportTeamMembers.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}{member.role ? ` (${member.role})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <small style={{ color: '#64748b', fontSize: '0.73rem', marginTop: '5px', display: 'block' }}>
+                    Only active Support Team employees are listed. Sales employees, managers/admins, inactive users and other departments are excluded.
+                  </small>
+                  {!supportMembersLoading && supportTeamMembers.length === 0 && (
+                    <small style={{ color: '#b45309', fontSize: '0.73rem', marginTop: '4px', display: 'block', fontWeight: 600 }}>
+                      No active Support Team employee is available. Please ask an Admin to activate a Support Executive.
+                    </small>
+                  )}
+                </div>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
+                    Conversion Remarks <span style={{ color: '#94a3b8', fontWeight: 500 }}>(optional)</span>
+                  </label>
+                  <textarea
+                    value={supportRemarks}
+                    onChange={(e) => setSupportRemarks(e.target.value)}
+                    rows={3}
+                    maxLength={2000}
+                    placeholder="Add handover notes for the Support team..."
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </div>
+
+                {supportAssignError && (
+                  <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '7px',
+                    background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c',
+                    borderRadius: '8px', padding: '10px 12px', fontSize: '0.82rem', fontWeight: 600,
+                    marginBottom: '14px'
+                  }}>
+                    <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
+                    <span>{supportAssignError}</span>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap', marginTop: '20px' }}>
+                  <button type="button" className="btn btn-outline" onClick={closeSupportAssignModal} disabled={assigningSupport}>
+                    {supportAssignLead.support_assigned_to ? 'Close' : 'Assign Later'}
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={assigningSupport || supportMembersLoading || !supportAgentId}
+                  >
+                    {assigningSupport ? 'Assigning...' : 'Assign to Support'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {!canAssignSupport && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                <button type="button" className="btn btn-primary" onClick={closeSupportAssignModal}>
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3445,18 +3965,22 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         lead={selectedCallLead}
         onClose={() => setShowCallModal(false)}
         onCallComplete={() => {
-          fetchLeads();
+          fetchLeads(true);
           if (selectedLead) fetchLeadCallLogs(selectedLead.id);
         }}
       />
 
-      {/* Native Quotation Studio Modal */}
-      <QuotationModal
-        isOpen={showBillingModal}
-        onClose={() => setShowBillingModal(false)}
-        initialData={billingInitialData}
-        onSuccess={handleBillingSuccess}
-      />
+      {/* Native Quotation Studio Modal (loaded on first use: pdfmake is heavy) */}
+      {showBillingModal && (
+        <React.Suspense fallback={null}>
+          <QuotationModal
+            isOpen={showBillingModal}
+            onClose={() => setShowBillingModal(false)}
+            initialData={billingInitialData}
+            onSuccess={handleBillingSuccess}
+          />
+        </React.Suspense>
+      )}
 
       {/* Deal WON & Support Manager Assignment Modal */}
       <DealWonModal

@@ -86,6 +86,7 @@ class PingoPopupService {
     customPose = null
   }) {
     const normStatus = String(status || '').toUpperCase().trim();
+    const statusKey = normStatus.replace(/[\s-]+/g, '_');
     let pose = customPose || PINGO_POSES.ACTION;
     let title = `${module} Status Updated`;
     let subtitle = customMessage || `Successfully marked as ${normStatus}`;
@@ -96,9 +97,21 @@ class PingoPopupService {
     if (normStatus === 'WON' || normStatus === 'DEAL WON') {
       pose = PINGO_POSES.CELEBRATE;
       title = '🏆 Deal Marked as WON!';
-      subtitle = customMessage || `${reference || 'Deal'} successfully closed and handed off!`;
+      subtitle = customMessage || `${reference || 'Deal'} successfully closed. Support assignment follows after conversion.`;
       badge = 'DEAL WON';
       theme = 'celebrate';
+    } else if (statusKey === 'CONVERTED_TO_SUPPORT') {
+      pose = PINGO_POSES.VICTORY;
+      title = '🤝 Converted to Support!';
+      subtitle = customMessage || `${reference || 'Deal'} is now ready for Support assignment.`;
+      badge = 'CONVERTED TO SUPPORT';
+      theme = 'celebrate';
+    } else if (normStatus === 'TRIAL' || normStatus === 'TRIAL LEAD') {
+      pose = PINGO_POSES.IDEA;
+      title = '🧪 Trial Started';
+      subtitle = customMessage || `${reference || 'Lead'} moved to Trial.`;
+      badge = 'TRIAL';
+      theme = 'primary';
     } else if (normStatus === 'LOST') {
       pose = PINGO_POSES.KICK;
       title = `${module} Marked as Lost`;

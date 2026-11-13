@@ -21,7 +21,7 @@ class LeadBase(BaseModel):
     location: Optional[str] = None
 
     source: str = "Manual"  # Meta Ads, Excel, Manual, Website, Referral
-    status: str = "NEW"     # NEW, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, CONVERTED, NOT_INTERESTED, LOST
+    status: str = "NEW"     # NEW, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, CONVERTED, WON, CONVERTED_TO_SUPPORT, NOT_INTERESTED, LOST
     campaign_name: Optional[str] = None
     website_id: Optional[str] = None
     website_name: Optional[str] = None
@@ -180,6 +180,30 @@ class LeadOut(LeadBase):
     assigned_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+    # Sales Manager ownership (derived from the assigned Sales employee's
+    # reporting manager; no new database column is required).
+    sales_manager_id: Optional[int] = None
+    sales_manager_name: Optional[str] = None
+
+    # Read-only Support assignment projection. `assigned_to` always remains the
+    # Sales owner; Support assignment is stored on the Support handoff and in
+    # LeadAssignment rows using the MANUAL_SUPPORT method.
+    support_assigned_to: Optional[int] = None
+    support_assigned_to_name: Optional[str] = None
+    support_assigned_at: Optional[datetime] = None
+    support_manager_id: Optional[int] = None
+    support_manager_name: Optional[str] = None
+    support_assignment_status: Optional[str] = None
+
+    # Explicit Won -> Converted to Support conversion audit fields. These are
+    # read from LeadStatusHistory and are therefore preserved without adding
+    # columns to the leads table.
+    is_converted_to_support: bool = False
+    converted_to_support_at: Optional[datetime] = None
+    converted_to_support_by: Optional[int] = None
+    converted_to_support_by_name: Optional[str] = None
+    support_handoff_id: Optional[int] = None
 
     # Lead Received Time Fields (Strictly backend/database generated)
     lead_received_at: Optional[datetime] = None

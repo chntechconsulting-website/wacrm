@@ -1,10 +1,15 @@
-from sqlalchemy import Column, Integer, String, Text, Date, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Date, DateTime, Boolean, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
 
 class Followup(Base):
     __tablename__ = "followups"
+    __table_args__ = (
+        Index("ix_followups_lead_status_date", "lead_id", "status", "followup_date"),
+        Index("ix_followups_status_date", "status", "followup_date"),
+        Index("ix_followups_assigned_status_date", "assigned_to", "status", "followup_date"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False)

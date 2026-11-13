@@ -24,12 +24,14 @@ const LEAD_STATUS_OPTIONS = [
   'NEW',
   'CONTACTED',
   'INTERESTED',
+  'TRIAL',
   'RNR',
   'DEMO / MEETING',
   'PROPOSAL SENT',
   'NEGOTIATION',
   'FOLLOW-UP',
   'WON',
+  'CONVERTED_TO_SUPPORT',
   'LOST',
   'JUNK'
 ];

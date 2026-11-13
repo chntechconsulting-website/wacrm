@@ -304,7 +304,7 @@ class QuoteTaskService:
         lead.quotetask_synced_at = now
 
         # Update Lead CRM Status if QuoteTask quotation is Approved / PO Issued / Won
-        if new_status in ["APPROVED", "ACCEPTED", "PO_ISSUED"] and lead.status not in ["WON", "CONVERTED"]:
+        if new_status in ["APPROVED", "ACCEPTED", "PO_ISSUED"] and lead.status not in ["WON", "CONVERTED", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"]:
             lead.status = "NEGOTIATION"
 
         # Add Event to Lead Activity Timeline

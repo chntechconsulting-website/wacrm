@@ -228,7 +228,7 @@ class WAQuoteService:
         lead.quotetask_synced_at = now
 
         # If quotation converted/paid, advance lead status if appropriate
-        if payment_status == "PAID" and lead.status not in ["CONVERTED", "WON"]:
+        if payment_status == "PAID" and lead.status not in ["CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"]:
             lead.status = "CONVERTED"
 
         activity = LeadActivity(

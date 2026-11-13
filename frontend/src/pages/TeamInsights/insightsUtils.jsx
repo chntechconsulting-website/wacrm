@@ -135,7 +135,7 @@ const CONNECTED_STATUSES = new Set(['ANSWERED', 'COMPLETED', 'CONNECTED']);
 const MISSED_STATUSES = new Set(['MISSED', 'NO_ANSWER', 'NOANSWER', 'UNANSWERED', 'MISSED_CALL']);
 const FAILED_STATUSES = new Set(['FAILED', 'BUSY', 'CANCEL', 'CANCELLED', 'ERROR', 'REJECTED', 'ABORTED']);
 const CONVERTED_STATUSES = new Set([
-  'WON', 'CONVERTED', 'CLOSED_WON', 'PENDING_ONBOARDING',
+  'WON', 'CONVERTED', 'CLOSED_WON', 'CONVERTED_TO_SUPPORT', 'PENDING_ONBOARDING',
   'ONBOARDING_IN_PROGRESS', 'COMPLETED_ONBOARDING',
 ]);
 const LOST_STATUSES = new Set(['LOST', 'LOST_LEAD', 'NOT_INTERESTED', 'JUNK', 'SPAM', 'INVALID']);
@@ -148,6 +148,7 @@ export const statusTone = (status) => {
   if (MISSED_STATUSES.has(token)) return 'amber';
   if (FAILED_STATUSES.has(token) || LOST_STATUSES.has(token)) return 'red';
   if (['NO_ANSWER', 'RINGING', 'PENDING'].includes(token)) return 'amber';
+  if (token === 'TRIAL') return 'violet';
   if (['INBOUND'].includes(token)) return 'violet';
   if (['OUTBOUND'].includes(token)) return 'blue';
   if (['MOBILE', 'MOBILE_SIM', 'DIRECT_DIAL', 'SIM', 'DEVICE'].includes(token)) return 'green';

@@ -4,13 +4,13 @@ Uses an isolated in-memory SQLite database. It never connects to the live MySQL
 database and never mutates real CRM records.
 
 Workflow verified:
-1. Sales marks the lead WON.
-2. Deal/customer is handed over to Support.
-3. Sales status remains WON.
+1. Sales marks the lead WON. Support is not assigned or notified.
+2. Sales explicitly converts the won deal to Support.
+3. The converted Sales status remains CONVERTED_TO_SUPPORT.
 4. Support sets Onboarding.
-5. Sales status remains WON.
+5. Sales status remains CONVERTED_TO_SUPPORT.
 6. Support sets Active.
-7. Sales status remains WON.
+7. Sales status remains CONVERTED_TO_SUPPORT.
 8. Admin sees both statuses independently.
 """
 
@@ -55,6 +55,9 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
 
         self.admin_user, self.admin_emp = self._make_person(
             "status_admin", "ADMIN", "ADMINISTRATION"
+        )
+        self.sales_manager_user, self.sales_manager_emp = self._make_person(
+            "status_sales_mgr", "SALES_MANAGER", "SALES"
         )
         self.sales_user, self.sales_emp = self._make_person(
             "status_sales", "SALES_EXECUTIVE", "SALES"
@@ -176,7 +179,14 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
             .one()
         )
         self.assertEqual(handoff.customer_id, result["customer_id"])
-        self.assertEqual(handoff.support_manager_id, self.support_manager_emp.id)
+        self.assertIsNone(
+            handoff.support_manager_id,
+            "Won must not auto-assign a Support Manager",
+        )
+        self.assertIsNone(
+            handoff.assigned_agent_id,
+            "Won must not auto-assign a Support Executive",
+        )
         self.assertEqual(
             self.db.query(SupportHandoff)
             .filter(SupportHandoff.lead_id == self.lead.id)
@@ -189,6 +199,36 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
         self.db.refresh(self.lead)
         self.assertEqual(self.lead.status, "WON", "Step 3: Sales status must stay WON")
 
+        # 3b. Support cannot pick up the deal until Sales explicitly converts it.
+        with self.assertRaises(HTTPException) as blocked:
+            update_support_lead_status(
+                lead_id=self.lead.id,
+                payload=SupportStatusUpdateRequest(support_status="ONBOARDING"),
+                db=self.db,
+                current_user=self.support_manager_user,
+            )
+        self.assertEqual(blocked.exception.status_code, 403)
+
+        # 3c. An explicit conversion by a Sales Manager enables Support work.
+        converted = WorkflowService.convert_to_support(
+            db=self.db,
+            lead_id=self.lead.id,
+            current_user=self.sales_manager_user,
+        )
+        self.assertTrue(converted["success"])
+        self.db.refresh(self.lead)
+        self.assertEqual(self.lead.status, "CONVERTED_TO_SUPPORT")
+        self.db.refresh(handoff)
+        self.assertIsNone(handoff.support_manager_id)
+        self.assertIsNone(handoff.assigned_agent_id)
+
+        conversion_rows = (
+            self.db.query(LeadStatusHistory)
+            .filter(LeadStatusHistory.lead_id == self.lead.id)
+            .filter(LeadStatusHistory.new_status == "CONVERTED_TO_SUPPORT")
+            .count()
+        )
+        self.assertEqual(conversion_rows, 1)
         history_before = (
             self.db.query(LeadStatusHistory)
             .filter(LeadStatusHistory.lead_id == self.lead.id)
@@ -205,9 +245,13 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
         self.assertEqual(updated.support_status, "ONBOARDING")
         self.assertEqual(updated.onboarding_status, "ONBOARDING")
 
-        # 5. Sales still displays WON.
+        # 5. Sales still displays CONVERTED_TO_SUPPORT.
         self.db.refresh(self.lead)
-        self.assertEqual(self.lead.status, "WON", "Step 5: Sales status must stay WON")
+        self.assertEqual(
+            self.lead.status,
+            "CONVERTED_TO_SUPPORT",
+            "Step 5: Sales status must stay CONVERTED_TO_SUPPORT",
+        )
 
         # 6. Support employee changes Support status to Active.
         handoff.assigned_agent_id = self.support_exec_emp.id
@@ -221,9 +265,13 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
         )
         self.assertEqual(updated.support_status, "ACTIVE")
 
-        # 7. Sales still displays WON.
+        # 7. Sales still displays CONVERTED_TO_SUPPORT.
         self.db.refresh(self.lead)
-        self.assertEqual(self.lead.status, "WON", "Step 7: Sales status must stay WON")
+        self.assertEqual(
+            self.lead.status,
+            "CONVERTED_TO_SUPPORT",
+            "Step 7: Sales status must stay CONVERTED_TO_SUPPORT",
+        )
         self.assertEqual(
             self.db.query(LeadStatusHistory)
             .filter(LeadStatusHistory.lead_id == self.lead.id)
@@ -234,7 +282,7 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
 
         # The Support queue API payload exposes both statuses explicitly.
         serialized = SupportHandoffOut.model_validate(handoff)
-        self.assertEqual(serialized.sales_status, "WON")
+        self.assertEqual(serialized.sales_status, "CONVERTED_TO_SUPPORT")
         self.assertEqual(serialized.support_status, "ACTIVE")
         self.assertEqual(serialized.onboarding_status, "ACTIVE")
 
@@ -250,7 +298,7 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
         self.assertEqual(admin_view["total"], 1)
         row = admin_view["items"][0]
         self.assertEqual(row["lead_id"], self.lead.id)
-        self.assertEqual(row["sales_status"], "WON")
+        self.assertEqual(row["sales_status"], "CONVERTED_TO_SUPPORT")
         self.assertEqual(row["support_status"], "ACTIVE")
         self.assertEqual(admin_view["status_counts"].get("ACTIVE"), 1)
 
@@ -275,7 +323,7 @@ class SalesSupportStatusSeparationTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 403)
         self.db.refresh(self.lead)
-        self.assertEqual(self.lead.status, "WON")
+        self.assertEqual(self.lead.status, "CONVERTED_TO_SUPPORT")
 
 
 if __name__ == "__main__":

@@ -957,7 +957,7 @@ def create_document(
             lead.quotetask_quotation_number = new_doc.doc_number
             lead.quotetask_quotation_status = new_doc.status
             lead.quotetask_quotation_amount = new_doc.grand_total
-            if lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED"]:
+            if lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"]:
                 lead.status = "PROPOSAL SENT"
             
             # Log lead activity
@@ -1218,7 +1218,7 @@ def update_waquote_document(
             lead.quotetask_quotation_number = r.doc_number
             lead.quotetask_quotation_status = r.status
             lead.quotetask_quotation_amount = r.grand_total
-            if previous_status != "issued" and lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED"]:
+            if previous_status != "issued" and lead.status not in ["PROPOSAL SENT", "NEGOTIATION", "WON", "CONVERTED", "CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT"]:
                 lead.status = "PROPOSAL SENT"
             db.commit()
 

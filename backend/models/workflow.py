@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Boolean
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Boolean, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -69,6 +69,9 @@ class FinanceHandoff(Base):
 
 class SupportHandoff(Base):
     __tablename__ = "support_handoffs"
+    __table_args__ = (
+        Index("ix_support_handoffs_onboarding_status", "onboarding_status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     finance_handoff_id = Column(Integer, ForeignKey("finance_handoffs.id"), unique=True, index=True, nullable=True)
@@ -112,7 +115,7 @@ class SupportHandoff(Base):
     sales_employee_name = Column(String(100), nullable=True)
     customer_requirements = Column(Text, nullable=True)
     
-    # Assigned Support Manager (Required on Deal WON)
+    # Assigned Support Manager (set only by the explicit Support assignment step)
     support_manager_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
     support_manager_name = Column(String(100), nullable=True)
     won_at = Column(DateTime, nullable=True)

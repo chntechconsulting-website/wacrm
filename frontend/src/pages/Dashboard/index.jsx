@@ -76,9 +76,9 @@ const Dashboard = () => {
     }
   };
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setDashboardError(null);
 
       const statsRes = await API.get('/reports/dashboard');
@@ -111,26 +111,37 @@ const Dashboard = () => {
       }
     } catch (err) {
       console.error("Dashboard data fetch error:", err);
-      setStats(null);
-      setDashboardType(null);
-      setDashboardError('Unable to load your dashboard. Please refresh and try again.');
+      // A background refresh failure must not blank an already rendered
+      // dashboard. Keep the last known values until a real load succeeds.
+      if (!silent) {
+        setStats(null);
+        setDashboardType(null);
+        setDashboardError('Unable to load your dashboard. Please refresh and try again.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchDashboardData();
 
+    let refreshTimer = null;
     const handleUpdates = () => {
-      fetchDashboardData();
-      setTargetRefreshKey((key) => key + 1);
+      // Each lead action dispatches both events; debounce them into one
+      // silent refresh so counters update without a loading state.
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        fetchDashboardData(true);
+        setTargetRefreshKey((key) => key + 1);
+      }, 500);
     };
 
     window.addEventListener('revenueUpdated', handleUpdates);
     window.addEventListener('leadStatsUpdated', handleUpdates);
 
     return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
       window.removeEventListener('revenueUpdated', handleUpdates);
       window.removeEventListener('leadStatsUpdated', handleUpdates);
     };
@@ -224,7 +235,7 @@ const Dashboard = () => {
     : followupsCount;
 
   const funnelConvertedCount = funnelFilter === 'Meta Leads'
-    ? getStatusSum(s => s === 'CONVERTED' || s === 'WON')
+    ? getStatusSum(s => s === 'CONVERTED' || s === 'WON' || s === 'CONVERTED_TO_SUPPORT' || s === 'CONVERTED TO SUPPORT')
     : convertedCount;
 
   const funnelTotalDenominator = funnelFilter === 'Meta Leads'
@@ -268,6 +279,8 @@ const Dashboard = () => {
 
   const getStatusBadgeColor = (st) => {
     const s = (st || '').toUpperCase();
+    if (s.includes('CONVERTED') && s.includes('SUPPORT')) return { bg: '#ccfbf1', color: '#0f766e' };
+    if (s === 'TRIAL' || s.includes('TRIAL')) return { bg: '#e0f2fe', color: '#0369a1' };
     if (s.includes('NEW')) return { bg: '#eff6ff', color: '#2563eb' };
     if (s.includes('FOLLOW')) return { bg: '#fef3c7', color: '#d97706' };
     if (s.includes('INTERESTED')) return { bg: '#ecfdf5', color: '#059669' };

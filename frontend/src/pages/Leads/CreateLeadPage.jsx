@@ -21,6 +21,7 @@ const STATUS_OPTIONS = [
   'NEW LEAD',
   'CONTACTED',
   'INTERESTED',
+  'TRIAL',
   'RNR',
   'DEMO / MEETING',
   'PROPOSAL SENT',
@@ -206,9 +207,17 @@ const CreateLeadPage = () => {
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
-        const res = await API.get('/employees/?status_filter=ACTIVE');
-        setEmployees(res.data);
-        if (currentUser?.employee_id) {
+        let availableManagers = [];
+        try {
+          const managerRes = await API.get('/leads/sales-managers');
+          availableManagers = Array.isArray(managerRes.data) ? managerRes.data : [];
+        } catch (managerErr) {
+          console.error('Failed to load active Sales Managers:', managerErr);
+        }
+        setEmployees(availableManagers);
+        const currentRole = (currentUser?.role || '').toUpperCase();
+        const currentIsManager = ['ADMIN', 'SALES_MANAGER', 'MANAGER'].includes(currentRole);
+        if (currentIsManager && currentUser?.employee_id) {
           setFormData(prev => ({ ...prev, assigned_to: currentUser.employee_id }));
         }
       } catch (err) {
@@ -740,7 +749,7 @@ const CreateLeadPage = () => {
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
                 <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Assign To</label>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Assign Sales Manager</label>
                   <select 
                     value={formData.assigned_to} 
                     onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
@@ -748,7 +757,7 @@ const CreateLeadPage = () => {
                     <option value="">-- Unassigned --</option>
                     {employees.map(emp => (
                       <option key={emp.id} value={emp.id}>
-                        {emp.name} ({emp.designation || 'Sales Rep'})
+                        {emp.name} ({emp.role || 'Sales Manager'})
                       </option>
                     ))}
                   </select>

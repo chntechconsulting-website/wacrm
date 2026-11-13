@@ -83,6 +83,10 @@ def normalize_status(raw_s: str, assigned_to_id: int = None) -> str:
         return "ASSIGNED" if assigned_to_id else "NEW"
     if ("NOT" in s or "NO " in s or "ISNT" in s or "ISN'T" in s) and any(w in s for w in ["INTREST", "INTEREST", "INTERST", "SUITABLE", "WANT", "NEED"]):
         return "NOT_INTERESTED"
+    if "CONVERT" in s and "SUPPORT" in s:
+        return "CONVERTED_TO_SUPPORT"
+    if s in ["TRIAL", "TRIAL LEAD", "TRAIL"]:
+        return "TRIAL"
     if any(w in s for w in ["PURCHASE", "BUY", "BOUGHT", "CONVERT", "WON", "PAID", "DONE", "CLOSED"]):
         return "CONVERTED"
     if any(w in s for w in ["QUOTE", "QUOTATION", "PROPOSAL", "ESTIMATE"]):
@@ -95,7 +99,7 @@ def normalize_status(raw_s: str, assigned_to_id: int = None) -> str:
         return "CONTACTED"
     if any(w in s for w in ["LOST", "DROP", "REJECT", "CANCEL"]):
         return "LOST"
-    if s in ["NEW", "ASSIGNED", "CONTACTED", "INTERESTED", "FOLLOW_UP", "QUALIFIED", "CONVERTED", "NOT_INTERESTED", "LOST"]:
+    if s in ["NEW", "ASSIGNED", "CONTACTED", "INTERESTED", "FOLLOW_UP", "QUALIFIED", "TRIAL", "CONVERTED", "CONVERTED_TO_SUPPORT", "NOT_INTERESTED", "LOST"]:
         return s
     return "ASSIGNED" if assigned_to_id else "NEW"
 

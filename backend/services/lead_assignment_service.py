@@ -13,7 +13,7 @@ from models.activity import LeadActivity
 
 logger = logging.getLogger("lead_assignment")
 
-TERMINAL_STATUSES = ["CONVERTED", "WON", "LOST", "NOT_INTERESTED"]
+TERMINAL_STATUSES = ["CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "LOST", "NOT_INTERESTED"]
 
 def get_or_create_auto_assign_config(db: Session) -> AutoAssignConfig:
     """

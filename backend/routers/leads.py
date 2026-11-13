@@ -1,9 +1,10 @@
 import logging
 import math
+from types import SimpleNamespace
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, status
 from fastapi.responses import StreamingResponse, Response
-from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc, asc, func
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import or_, desc, asc, func, select, case
 from typing import List, Optional
 from datetime import datetime
 
@@ -71,6 +72,14 @@ from utils.support_status import (
     require_support_status,
     support_status_storage_values,
 )
+from utils.lead_status import (
+    STATUS_CONVERTED_TO_SUPPORT,
+    STATUS_TRIAL,
+    is_converted_to_support_status,
+    is_won_or_converted_status,
+    is_won_status,
+    normalize_lead_status,
+)
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
@@ -92,6 +101,201 @@ def get_team_employee_ids(manager_emp_id: int, db: Session) -> List[int]:
     team = db.query(Employee).filter(Employee.manager_id == manager_emp_id).all()
     return [e.id for e in team] + [manager_emp_id]
 
+
+def _employee_user_is_active(emp: Employee, db: Session) -> bool:
+    """Employees without a linked user are allowed only when the employee
+    record itself is active. A linked inactive user always disqualifies."""
+    if not emp or (emp.status or "").strip().upper() != "ACTIVE":
+        return False
+    if not emp.user_id:
+        return True
+    user = db.query(User).filter(User.id == emp.user_id).first()
+    return bool(user and user.is_active)
+
+
+def is_active_sales_manager(emp: Optional[Employee], db: Session) -> bool:
+    """Manual Sales assignment targets must be active Sales Managers.
+
+    Sales Executives, Support Managers/Executives, Admins and inactive
+    employees are not valid Sales owners for the manual assignment workflow.
+    """
+    if not emp:
+        return False
+    if normalize_role(emp.role) != ROLE_SALES_MANAGER:
+        return False
+    if not _employee_user_is_active(emp, db):
+        return False
+    dept = (emp.department or "").strip().upper()
+    return dept in ("", "SALES", "SALE")
+
+
+def is_active_support_executive(emp: Optional[Employee], db: Session) -> bool:
+    """Support assignment targets must be active Support Executives.
+
+    Support Managers, Admins, Sales employees, inactive users and employees
+    from other departments are intentionally rejected.
+    """
+    if not emp:
+        return False
+    if normalize_role(emp.role) != ROLE_SUPPORT_EXECUTIVE:
+        return False
+    if not _employee_user_is_active(emp, db):
+        return False
+    return (emp.department or "").strip().upper() == "SUPPORT"
+
+
+def _resolve_employee_manager(emp: Employee, db: Session) -> Optional[Employee]:
+    """Resolve the reporting manager of an employee without assuming whether
+    the manager_id/reporting_manager_id points at employees or users."""
+    if not emp:
+        return None
+
+    if emp.manager_id:
+        manager = db.query(Employee).filter(Employee.id == emp.manager_id).first()
+        if manager:
+            return manager
+
+    if emp.reporting_manager_id:
+        manager = db.query(Employee).filter(Employee.id == emp.reporting_manager_id).first()
+        if manager:
+            return manager
+        manager_user = db.query(User).filter(User.id == emp.reporting_manager_id).first()
+        if manager_user:
+            manager = db.query(Employee).filter(Employee.user_id == manager_user.id).first()
+            if manager:
+                return manager
+            # Fall back to a synthetic employee-shaped object so the caller can
+            # still display the username as the manager name.
+            if manager_user.username:
+                return Employee(id=manager_user.id, name=manager_user.username,
+                                email="", username=manager_user.username,
+                                role=manager_user.role or "")
+
+    return None
+
+
+def resolve_sales_manager(lead: Lead, db: Session) -> Optional[Employee]:
+    """Return the Sales Manager responsible for a lead's Sales owner."""
+    assigned = lead.assigned_employee
+    if assigned:
+        if normalize_role(assigned.role) == ROLE_SALES_MANAGER:
+            return assigned
+        manager = _resolve_employee_manager(assigned, db)
+        if manager:
+            return manager
+
+    # Preserve attribution when the lead was assigned by a Sales Manager even
+    # if the current owner no longer has a reporting manager configured.
+    assigner = lead.assigned_by_employee
+    if assigner and normalize_role(assigner.role) == ROLE_SALES_MANAGER:
+        return assigner
+    return None
+
+
+def get_latest_support_handoff(db: Session, lead_id: int):
+    from models.workflow import SupportHandoff
+    return (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id == lead_id)
+        .order_by(desc(SupportHandoff.id))
+        .first()
+    )
+
+
+def build_support_handoff_map(db: Session, lead_ids: List[int]) -> dict:
+    """Fetch the latest Support handoff for many leads in one query."""
+    if not lead_ids:
+        return {}
+    from models.workflow import SupportHandoff
+
+    handoffs = (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id.in_(lead_ids))
+        .order_by(desc(SupportHandoff.id))
+        .all()
+    )
+    latest = {}
+    for handoff in handoffs:
+        latest.setdefault(handoff.lead_id, handoff)
+    return latest
+
+
+def build_sales_manager_map(db: Session, leads: List[Lead]) -> dict:
+    """Batch-resolve Sales Managers for a page of leads.
+
+    Mirrors ``resolve_sales_manager`` exactly but replaces the per-row
+    employee/user lookups with a handful of set-based queries.
+    """
+    if not leads:
+        return {}
+
+    employee_ids = set()
+    user_fallback_ids = set()
+    for lead in leads:
+        assigned = lead.assigned_employee
+        if assigned:
+            if normalize_role(assigned.role) == ROLE_SALES_MANAGER:
+                continue
+            if assigned.manager_id:
+                employee_ids.add(assigned.manager_id)
+            if assigned.reporting_manager_id:
+                employee_ids.add(assigned.reporting_manager_id)
+                user_fallback_ids.add(assigned.reporting_manager_id)
+
+    employees_by_id = {}
+    if employee_ids:
+        employees_by_id = {
+            emp.id: emp
+            for emp in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
+        }
+
+    # reporting_manager_id may point to a User rather than an Employee. Resolve
+    # that legacy shape in two set-based queries instead of per lead.
+    users_by_id = {}
+    if user_fallback_ids:
+        from models.user import User
+
+        users_by_id = {
+            user.id: user
+            for user in db.query(User).filter(User.id.in_(user_fallback_ids)).all()
+        }
+        unresolved_user_ids = [
+            user_id for user_id in user_fallback_ids
+            if user_id not in employees_by_id and user_id in users_by_id
+        ]
+        if unresolved_user_ids:
+            for emp in db.query(Employee).filter(Employee.user_id.in_(unresolved_user_ids)).all():
+                employees_by_id.setdefault(emp.user_id, emp)
+
+    result = {}
+    for lead in leads:
+        manager = None
+        assigned = lead.assigned_employee
+        if assigned:
+            if normalize_role(assigned.role) == ROLE_SALES_MANAGER:
+                manager = assigned
+            else:
+                if assigned.manager_id:
+                    manager = employees_by_id.get(assigned.manager_id)
+                if manager is None and assigned.reporting_manager_id:
+                    manager = employees_by_id.get(assigned.reporting_manager_id)
+                    if manager is None:
+                        manager_user = users_by_id.get(assigned.reporting_manager_id)
+                        if manager_user and manager_user.username:
+                            manager = SimpleNamespace(
+                                id=manager_user.id,
+                                name=manager_user.username,
+                            )
+
+        if manager is None:
+            assigner = lead.assigned_by_employee
+            if assigner and normalize_role(assigner.role) == ROLE_SALES_MANAGER:
+                manager = assigner
+
+        result[lead.id] = manager
+    return result
+
+
 def log_lead_activity(db: Session, lead_id: int, performed_by_id: Optional[int], activity_type: str, description: str):
     activity = LeadActivity(
         lead_id=lead_id,
@@ -105,10 +309,20 @@ def log_lead_activity(db: Session, lead_id: int, performed_by_id: Optional[int],
 def build_lead_out(
     lead: Lead,
     current_user: Optional[User] = None,
-    db: Optional[Session] = None
+    db: Optional[Session] = None,
+    support_handoff=None,
+    sales_manager=None,
+    include_timeline: bool = True
 ) -> LeadOut:
+    """Serialize a lead.
+
+    ``include_timeline=False`` is used by list endpoints. The table only needs
+    the lead row fields, so loading every activity, assignment and enquiry for
+    each row is pure overhead (and the largest source of N+1 queries on the
+    Leads screen). Detail endpoints keep the full timeline.
+    """
     activities_out = []
-    for act in lead.activities:
+    for act in (lead.activities if include_timeline else []):
         # Department isolation is enforced on every embedded activity list, not
         # only on the shared /activities feed. Sales users never receive
         # Support onboarding notes and vice versa.
@@ -125,7 +339,7 @@ def build_lead_out(
         ))
 
     assignments_out = []
-    for asgn in lead.assignments:
+    for asgn in (lead.assignments if include_timeline else []):
         to_name = asgn.assigned_to_employee.name if asgn.assigned_to_employee else f"Employee #{asgn.assigned_to}"
         by_name = asgn.assigned_by_employee.name if asgn.assigned_by_employee else "System (Automatic)"
         assignments_out.append(LeadAssignmentOut(
@@ -149,7 +363,7 @@ def build_lead_out(
         loc = f"{lead.city or ''}, {lead.state or ''}".strip(', ')
 
     enquiries_out = []
-    for enq in (lead.enquiries or []):
+    for enq in ((lead.enquiries if include_timeline else []) or []):
         enquiries_out.append(LeadEnquiryOut(
             id=enq.id,
             lead_id=enq.lead_id,
@@ -162,6 +376,75 @@ def build_lead_out(
             requirement_notes=enq.requirement_notes,
             created_at=enq.created_at
         ))
+
+    # ------------------------------------------------------------------
+    # Sales Manager / Support assignment / conversion projections
+    # ------------------------------------------------------------------
+    if include_timeline:
+        sales_manager = resolve_sales_manager(lead, db) if db else sales_manager
+        if support_handoff is None and db:
+            support_handoff = get_latest_support_handoff(db, lead.id)
+
+    support_assigned_to = None
+    support_assigned_to_name = None
+    support_manager_id = None
+    support_manager_name = None
+    support_assigned_at = None
+    support_handoff_id = None
+
+    if support_handoff:
+        support_handoff_id = support_handoff.id
+        support_assigned_to = support_handoff.assigned_agent_id
+        support_assigned_to_name = support_handoff.assigned_agent_name
+        support_manager_id = support_handoff.support_manager_id
+        support_manager_name = support_handoff.support_manager_name
+
+    # Legacy rows assigned a Support employee directly still display correctly
+    # in the read-only Sales projection. New assignments never overwrite
+    # Lead.assigned_to, so this fallback is strictly backwards compatible.
+    if not support_assigned_to and lead.assigned_employee:
+        legacy_emp = lead.assigned_employee
+        if normalize_role(legacy_emp.role) == ROLE_SUPPORT_EXECUTIVE:
+            support_assigned_to = legacy_emp.id
+            support_assigned_to_name = legacy_emp.name
+            if not support_manager_id:
+                legacy_manager = _resolve_employee_manager(legacy_emp, db) if db else None
+                if legacy_manager:
+                    support_manager_id = legacy_manager.id
+                    support_manager_name = legacy_manager.name
+
+    # Support assignment timestamp is recorded on the auditable LeadAssignment
+    # row, keeping both Sales and Support attribution intact.
+    support_assignment_rows = [
+        a for a in ((lead.assignments if include_timeline else []) or [])
+        if (getattr(a, "assignment_method", "") or "").upper() == "MANUAL_SUPPORT"
+    ]
+    if support_assignment_rows:
+        latest_support_assignment = max(
+            support_assignment_rows,
+            key=lambda a: a.assigned_at or datetime.min
+        )
+        support_assigned_at = latest_support_assignment.assigned_at
+        if not support_assigned_to:
+            support_assigned_to = latest_support_assignment.assigned_to
+            support_assigned_to_name = (
+                latest_support_assignment.assigned_to_employee.name
+                if latest_support_assignment.assigned_to_employee else None
+            )
+    elif support_handoff and support_assigned_to:
+        support_assigned_at = support_handoff.updated_at
+
+    conversion_event = None
+    for history in ((lead.status_history if include_timeline else []) or []):
+        if normalize_lead_status(history.new_status) == STATUS_CONVERTED_TO_SUPPORT:
+            if conversion_event is None or (history.changed_at or datetime.min) > (conversion_event.changed_at or datetime.min):
+                conversion_event = history
+
+    is_converted = normalize_lead_status(lead.status) == STATUS_CONVERTED_TO_SUPPORT
+    if is_converted:
+        support_assignment_status = "ASSIGNED" if support_assigned_to else "NOT_ASSIGNED"
+    else:
+        support_assignment_status = "AWAITING_CONVERSION"
 
     return LeadOut(
         id=lead.id,
@@ -221,6 +504,23 @@ def build_lead_out(
         quotetask_po_number=lead.quotetask_po_number,
         quotetask_po_status=lead.quotetask_po_status,
         quotetask_synced_at=lead.quotetask_synced_at,
+        # Sales Manager / Support assignment / conversion projections
+        sales_manager_id=sales_manager.id if sales_manager else None,
+        sales_manager_name=sales_manager.name if sales_manager else None,
+        support_assigned_to=support_assigned_to,
+        support_assigned_to_name=support_assigned_to_name,
+        support_assigned_at=support_assigned_at,
+        support_manager_id=support_manager_id,
+        support_manager_name=support_manager_name,
+        support_assignment_status=support_assignment_status,
+        is_converted_to_support=is_converted,
+        converted_to_support_at=conversion_event.changed_at if conversion_event else None,
+        converted_to_support_by=conversion_event.changed_by if conversion_event else None,
+        converted_to_support_by_name=(
+            conversion_event.changed_by_employee.name
+            if conversion_event and conversion_event.changed_by_employee else None
+        ),
+        support_handoff_id=support_handoff_id,
         activities=activities_out,
         assignments=assignments_out,
         enquiries=enquiries_out
@@ -364,6 +664,14 @@ def list_leads(
             query = query.filter(or_(Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "NEW_LEAD"))
         elif st_clean in ["IN_PROGRESS", "IN PROGRESS"]:
             query = query.filter(or_(Lead.status == "IN_PROGRESS", Lead.status == "IN PROGRESS", Lead.status == "CONTACTED", Lead.status == "INTERESTED"))
+        elif st_clean in ["TRIAL", "TRIAL_LEAD", "TRIAL LEAD"]:
+            query = query.filter(or_(Lead.status == "TRIAL", Lead.status == "TRIAL LEAD", Lead.status == "TRIAL_LEAD"))
+        elif st_clean in ["CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT", "CONVERTED-TO-SUPPORT"]:
+            query = query.filter(or_(
+                Lead.status == "CONVERTED_TO_SUPPORT",
+                Lead.status == "CONVERTED TO SUPPORT",
+                Lead.status == "CONVERTED-TO-SUPPORT"
+            ))
         elif st_clean in ["WON", "CONVERTED"]:
             query = query.filter(or_(Lead.status == "WON", Lead.status == "CONVERTED"))
         elif st_clean in ["FOLLOW-UP", "FOLLOW_UP"]:
@@ -446,9 +754,34 @@ def list_leads(
     # Dynamic Sorting by Lead Received Date/Time (default desc: latest first)
     is_asc = bool(sort_order and sort_order.lower() == "asc")
     order_clause = asc(Lead.created_at) if is_asc else desc(Lead.created_at)
-    leads = query.order_by(order_clause, desc(Lead.id) if not is_asc else asc(Lead.id)).offset(offset).limit(eff_page_size).all()
+    leads = (
+        query
+        .options(
+            selectinload(Lead.assigned_employee),
+            selectinload(Lead.assigned_by_employee),
+        )
+        .order_by(order_clause, desc(Lead.id) if not is_asc else asc(Lead.id))
+        .offset(offset)
+        .limit(eff_page_size)
+        .all()
+    )
 
-    items = [build_lead_out(l, current_user, db) for l in leads]
+    # List rows do not need embedded timelines. Batch the two projections that
+    # would otherwise issue per-lead queries, and return a compact payload.
+    lead_ids = [lead.id for lead in leads]
+    support_handoffs = build_support_handoff_map(db, lead_ids)
+    sales_managers = build_sales_manager_map(db, leads)
+    items = [
+        build_lead_out(
+            lead,
+            current_user,
+            db,
+            support_handoff=support_handoffs.get(lead.id),
+            sales_manager=sales_managers.get(lead.id),
+            include_timeline=False,
+        )
+        for lead in leads
+    ]
     return leads_page_response(total, items, eff_page, eff_page_size)
 
 @router.get("/stats")
@@ -482,20 +815,71 @@ def get_leads_stats(
         team_ids = get_team_employee_ids_from_user(current_user, db)
         base_query = base_query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
 
-    all_count = base_query.count()
-    meta_count = base_query.filter(or_(Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta")).count()
-    website_count = base_query.filter(or_(Lead.source == "WEBSITE", Lead.source == "Website")).count()
-    manual_count = base_query.filter(or_(Lead.source == "MANUAL", Lead.source == "Manual")).count()
-    excel_count = base_query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel")).count()
-    reinquiry_count = base_query.filter(Lead.is_reinquiry == True).count()
-    new_count = base_query.filter(or_(Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "New")).count()
-    in_progress_count = base_query.filter(or_(Lead.status == "IN_PROGRESS", Lead.status == "IN PROGRESS", Lead.status == "CONTACTED", Lead.status == "INTERESTED")).count()
-    hot_count = base_query.filter(or_(Lead.rating.ilike("Hot"), Lead.priority.ilike("High"), Lead.priority.ilike("Hot"))).count()
-    won_count = base_query.filter(or_(Lead.status == "WON", Lead.status == "CONVERTED", Lead.status == "Won")).count()
+    # One aggregate query replaces twelve sequential COUNT(*) round-trips.
+    # The Leads screen polls these counters, so keeping this endpoint cheap is
+    # important for both the API and the database.
+    my_count_case = (
+        case((Lead.assigned_to == current_emp.id, 1), else_=0)
+        if current_emp else case((False, 1), else_=0)
+    )
+    metrics = base_query.with_entities(
+        func.count(Lead.id).label("all_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.source == "META", Lead.source == "Meta Ads", Lead.source == "Meta"
+        ), 1), else_=0)), 0).label("meta_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.source == "WEBSITE", Lead.source == "Website"
+        ), 1), else_=0)), 0).label("website_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.source == "MANUAL", Lead.source == "Manual"
+        ), 1), else_=0)), 0).label("manual_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.source == "EXCEL", Lead.source == "Excel"
+        ), 1), else_=0)), 0).label("excel_count"),
+        func.coalesce(func.sum(case((Lead.is_reinquiry.is_(True), 1), else_=0)), 0).label("reinquiry_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "New"
+        ), 1), else_=0)), 0).label("new_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "IN_PROGRESS",
+            Lead.status == "IN PROGRESS",
+            Lead.status == "CONTACTED",
+            Lead.status == "INTERESTED",
+        ), 1), else_=0)), 0).label("in_progress_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.rating.ilike("Hot"),
+            Lead.priority.ilike("High"),
+            Lead.priority.ilike("Hot"),
+        ), 1), else_=0)), 0).label("hot_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "TRIAL", Lead.status == "Trial", Lead.status == "TRIAL LEAD"
+        ), 1), else_=0)), 0).label("trial_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "CONVERTED_TO_SUPPORT",
+            Lead.status == "CONVERTED TO SUPPORT",
+            Lead.status == "CONVERTED-TO-SUPPORT",
+        ), 1), else_=0)), 0).label("converted_to_support_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.status == "WON", Lead.status == "CONVERTED", Lead.status == "Won",
+            Lead.status == "CONVERTED_TO_SUPPORT", Lead.status == "CONVERTED TO SUPPORT",
+            Lead.status == "CONVERTED-TO-SUPPORT",
+        ), 1), else_=0)), 0).label("won_count"),
+        func.coalesce(func.sum(my_count_case), 0).label("my_count"),
+    ).one()
 
-    my_count = 0
-    if current_emp:
-        my_count = db.query(Lead).filter(Lead.assigned_to == current_emp.id).count()
+    all_count = int(metrics.all_count or 0)
+    meta_count = int(metrics.meta_count or 0)
+    website_count = int(metrics.website_count or 0)
+    manual_count = int(metrics.manual_count or 0)
+    excel_count = int(metrics.excel_count or 0)
+    reinquiry_count = int(metrics.reinquiry_count or 0)
+    new_count = int(metrics.new_count or 0)
+    in_progress_count = int(metrics.in_progress_count or 0)
+    hot_count = int(metrics.hot_count or 0)
+    trial_count = int(metrics.trial_count or 0)
+    converted_to_support_count = int(metrics.converted_to_support_count or 0)
+    won_count = int(metrics.won_count or 0)
+    my_count = int(metrics.my_count or 0)
 
     # Calculate call logs count strictly scoped by user call permissions
     authorized_call_emps = get_authorized_call_employee_ids(current_user, db)
@@ -531,6 +915,8 @@ def get_leads_stats(
         "newLeads": new_count,
         "inProgressLeads": in_progress_count,
         "hotLeads": hot_count,
+        "trialLeads": trial_count,
+        "convertedToSupportLeads": converted_to_support_count,
         "wonLeads": won_count,
         "myLeads": my_count,
         "callLogs": call_logs_count,
@@ -595,9 +981,32 @@ def list_my_leads(
 
     # Server-side pagination window (page/page_size, or legacy skip/limit)
     eff_page, eff_page_size, offset = resolve_leads_pagination(page, page_size, skip, limit)
-    leads = query.order_by(desc(Lead.created_at)).offset(offset).limit(eff_page_size).all()
+    leads = (
+        query
+        .options(
+            selectinload(Lead.assigned_employee),
+            selectinload(Lead.assigned_by_employee),
+        )
+        .order_by(desc(Lead.created_at))
+        .offset(offset)
+        .limit(eff_page_size)
+        .all()
+    )
 
-    items = [build_lead_out(l, current_user, db) for l in leads]
+    lead_ids = [lead.id for lead in leads]
+    support_handoffs = build_support_handoff_map(db, lead_ids)
+    sales_managers = build_sales_manager_map(db, leads)
+    items = [
+        build_lead_out(
+            lead,
+            current_user,
+            db,
+            support_handoff=support_handoffs.get(lead.id),
+            sales_manager=sales_managers.get(lead.id),
+            include_timeline=False,
+        )
+        for lead in leads
+    ]
     return leads_page_response(total, items, eff_page, eff_page_size)
 
 @router.get("/export/template")
@@ -725,8 +1134,26 @@ def create_lead(
 
     lead_data = lead_in.dict()
     # Users without assign permission can only assign to themselves on creation
-    if not user_has_permission(current_user, "leads", "assign", db):
+    has_assign_permission = user_has_permission(current_user, "leads", "assign", db)
+    if not has_assign_permission:
         lead_data["assigned_to"] = creator_emp_id
+    else:
+        # Manual Sales assignment is Manager-only. Reject Sales Executives,
+        # Support users, Admins and inactive employees explicitly.
+        target_id = lead_data.get("assigned_to")
+        if target_id:
+            target_emp = db.query(Employee).filter(Employee.id == target_id).first()
+            if not target_emp:
+                raise HTTPException(status_code=404, detail="Target employee not found")
+            if not is_active_sales_manager(target_emp, db):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Manual Sales assignment allows only active Sales Managers. "
+                        "Sales Executives, Support users, Managers/Admins and inactive "
+                        "employees are not eligible."
+                    )
+                )
 
     lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
         db=db,
@@ -803,10 +1230,15 @@ def get_support_assigned_leads(
         query = query.filter(Lead.id.in_(authorized_lead_ids))
     else:
         # Admin: Show leads with SupportHandoff OR assigned to a Support department employee
-        support_emp_ids = [e.id for e in db.query(Employee.id).filter(
-            or_(Employee.department == 'SUPPORT', Employee.role.in_(['SUPPORT_EXECUTIVE', 'SUPPORT_MANAGER', 'SUPPORT']))
-        ).all()]
-        handoff_lead_ids = [h[0] for h in db.query(SupportHandoff.lead_id).all() if h[0]]
+        support_emp_ids = select(Employee.id).where(
+            or_(
+                Employee.department == 'SUPPORT',
+                Employee.role.in_(['SUPPORT_EXECUTIVE', 'SUPPORT_MANAGER', 'SUPPORT']),
+            )
+        )
+        handoff_lead_ids = select(SupportHandoff.lead_id).where(
+            SupportHandoff.lead_id.is_not(None)
+        )
         query = query.filter(
             or_(
                 Lead.id.in_(handoff_lead_ids),
@@ -816,9 +1248,9 @@ def get_support_assigned_leads(
 
     # Optional filter by assigned_agent_id (for Manager/Admin)
     if assigned_agent_id:
-        handoff_leads_for_agent = [
-            h[0] for h in db.query(SupportHandoff.lead_id).filter(SupportHandoff.assigned_agent_id == assigned_agent_id).all() if h[0]
-        ]
+        handoff_leads_for_agent = select(SupportHandoff.lead_id).where(
+            SupportHandoff.assigned_agent_id == assigned_agent_id
+        )
         query = query.filter(
             or_(
                 Lead.assigned_to == assigned_agent_id,
@@ -834,13 +1266,9 @@ def get_support_assigned_leads(
         except InvalidSupportStatusError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         storage_values = support_status_storage_values(canonical_status)
-        handoffs_with_st = [
-            h[0]
-            for h in db.query(SupportHandoff.lead_id)
-            .filter(func.upper(SupportHandoff.onboarding_status).in_(storage_values))
-            .all()
-            if h[0]
-        ]
+        handoffs_with_st = select(SupportHandoff.lead_id).where(
+            func.upper(SupportHandoff.onboarding_status).in_(storage_values)
+        )
         query = query.filter(Lead.id.in_(handoffs_with_st))
 
     # Priority filter
@@ -854,18 +1282,16 @@ def get_support_assigned_leads(
     # Search filter
     if search and search.strip():
         term = f"%{search.strip()}%"
-        handoff_matches = [
-            h[0] for h in db.query(SupportHandoff.lead_id).filter(
-                or_(
-                    SupportHandoff.customer_name.ilike(term),
-                    SupportHandoff.company_name.ilike(term),
-                    SupportHandoff.product_service.ilike(term),
-                    SupportHandoff.customer_requirements.ilike(term),
-                    SupportHandoff.phone.ilike(term),
-                    SupportHandoff.email.ilike(term),
-                )
-            ).all() if h[0]
-        ]
+        handoff_matches = select(SupportHandoff.lead_id).where(
+            or_(
+                SupportHandoff.customer_name.ilike(term),
+                SupportHandoff.company_name.ilike(term),
+                SupportHandoff.product_service.ilike(term),
+                SupportHandoff.customer_requirements.ilike(term),
+                SupportHandoff.phone.ilike(term),
+                SupportHandoff.email.ilike(term),
+            )
+        )
         query = query.filter(
             or_(
                 Lead.name.ilike(term),
@@ -883,15 +1309,57 @@ def get_support_assigned_leads(
         )
 
     total = query.count()
-    leads = query.order_by(desc(Lead.updated_at)).offset(skip).limit(limit).all()
+    leads = (
+        query
+        .options(selectinload(Lead.assigned_employee))
+        .order_by(desc(Lead.updated_at))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
-    # Pre-fetch handoffs for these leads in bulk
     lead_ids_list = [l.id for l in leads]
-    handoffs_map = {}
+
+    # Latest handoff per lead in one query (a lead can have re-inquiry handovers).
+    handoffs_map = build_support_handoff_map(db, lead_ids_list)
+
+    # Batch activity counts instead of lazy-loading every activity row per lead.
+    activity_counts = {}
     if lead_ids_list:
-        handoff_objs = db.query(SupportHandoff).filter(SupportHandoff.lead_id.in_(lead_ids_list)).all()
-        for h in handoff_objs:
-            handoffs_map[h.lead_id] = h
+        activity_counts = dict(
+            db.query(LeadActivity.lead_id, func.count(LeadActivity.id))
+            .filter(LeadActivity.lead_id.in_(lead_ids_list))
+            .group_by(LeadActivity.lead_id)
+            .all()
+        )
+
+    # Batch-resolve support managers for the visible page.
+    exec_ids = set()
+    for l in leads:
+        h = handoffs_map.get(l.id)
+        if h and h.assigned_agent_id:
+            exec_ids.add(h.assigned_agent_id)
+        elif l.assigned_employee and (
+            l.assigned_employee.department == 'SUPPORT'
+            or 'SUPPORT' in (l.assigned_employee.role or '')
+        ):
+            exec_ids.add(l.assigned_to)
+
+    execs_by_id = {}
+    if exec_ids:
+        execs_by_id = {
+            emp.id: emp
+            for emp in db.query(Employee).filter(Employee.id.in_(exec_ids)).all()
+        }
+    manager_ids = {
+        emp.manager_id for emp in execs_by_id.values() if emp and emp.manager_id
+    }
+    managers_by_id = {}
+    if manager_ids:
+        managers_by_id = {
+            emp.id: emp
+            for emp in db.query(Employee).filter(Employee.id.in_(manager_ids)).all()
+        }
 
     items = []
     for l in leads:
@@ -909,9 +1377,9 @@ def get_support_assigned_leads(
         assigned_mgr_id = h.support_manager_id if h else None
         assigned_mgr_name = h.support_manager_name if h else None
         if not assigned_mgr_name and assigned_exec_id:
-            exec_emp = l.assigned_employee or db.query(Employee).filter(Employee.id == assigned_exec_id).first()
+            exec_emp = l.assigned_employee or execs_by_id.get(assigned_exec_id)
             if exec_emp and exec_emp.manager_id:
-                mgr = db.query(Employee).filter(Employee.id == exec_emp.manager_id).first()
+                mgr = managers_by_id.get(exec_emp.manager_id)
                 if mgr:
                     assigned_mgr_id = mgr.id
                     assigned_mgr_name = mgr.name
@@ -970,8 +1438,11 @@ def get_support_assigned_leads(
             "next_followup_date": l.followup_date.isoformat() if l.followup_date else None,
             "next_followup_time": l.followup_time,
             "notes": (h.support_notes if h else None) or l.requirement_notes,
-            "purchase_details": build_support_purchase_details(db, h) if h else None,
-            "activities_count": len(l.activities) if l.activities else 0
+            # The drawer lazy-loads the purchase projection from
+            # /leads/{id}/purchase-details. Building it for every list row
+            # issued up to five extra queries per handover.
+            "purchase_details": None,
+            "activities_count": int(activity_counts.get(l.id, 0))
         })
 
     return {
@@ -1044,7 +1515,12 @@ def get_support_team_members(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Returns list of support employees for assignment and filtering.
+    Returns the assignable Support team members.
+
+    Only active Support Executives are assignable. Support Managers, Admins,
+    Sales employees and inactive users are deliberately excluded so that the
+    Support assignment dropdown and API cannot hand a customer to the wrong
+    department.
     """
     norm_role = normalize_role(current_user.role)
     if norm_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
@@ -1054,11 +1530,10 @@ def get_support_team_members(
         )
 
     support_emps = db.query(Employee).filter(
-        or_(
-            Employee.department == "SUPPORT",
-            Employee.role.in_(["SUPPORT_EXECUTIVE", "SUPPORT_MANAGER", "SUPPORT"])
-        )
-    ).all()
+        Employee.department == "SUPPORT",
+        Employee.status == "ACTIVE",
+        Employee.role.in_(["SUPPORT_EXECUTIVE", "SUPPORT"])
+    ).order_by(Employee.name.asc()).all()
 
     return [
         {
@@ -1066,10 +1541,41 @@ def get_support_team_members(
             "name": e.name,
             "role": e.role,
             "department": e.department,
-            "manager_id": e.manager_id
+            "manager_id": e.manager_id,
+            "status": e.status
         }
         for e in support_emps
+        if is_active_support_executive(e, db)
     ]
+
+
+@router.get("/sales-managers")
+def get_sales_managers(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns the assignable Sales Managers for the manual Sales assignment
+    dropdown. Only active Manager-level Sales employees are returned.
+    """
+    managers = db.query(Employee).filter(
+        Employee.role.in_(["SALES_MANAGER", "MANAGER"]),
+        Employee.status == "ACTIVE"
+    ).order_by(Employee.name.asc()).all()
+
+    result = []
+    for emp in managers:
+        if not is_active_sales_manager(emp, db):
+            continue
+        result.append({
+            "id": emp.id,
+            "name": emp.name,
+            "role": emp.role,
+            "department": emp.department,
+            "manager_id": emp.manager_id,
+            "status": emp.status
+        })
+    return result
 
 
 @router.put("/{lead_id}/support-assign")
@@ -1080,8 +1586,12 @@ def assign_support_lead(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Assign a Support Executive to a lead / support handoff.
-    Allowed for Support Managers and Admin.
+    Assign a Support Executive to a lead that has explicitly been converted to
+    Support. Allowed for Support Managers and Admin only.
+
+    The Sales owner (``Lead.assigned_to``) is never overwritten. Support
+    assignment is written to the Support handoff and to an auditable
+    ``LeadAssignment`` row using the ``MANUAL_SUPPORT`` method.
     """
     norm_role = normalize_role(current_user.role)
     if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER]:
@@ -1094,30 +1604,96 @@ def assign_support_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
+    if normalize_lead_status(lead.status) != STATUS_CONVERTED_TO_SUPPORT:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Support assignment is available only after the deal is marked "
+                "Won and then explicitly converted to Support."
+            )
+        )
+
     new_agent_id = payload.get("assigned_agent_id")
     if not new_agent_id:
         raise HTTPException(status_code=400, detail="assigned_agent_id is required")
 
+    try:
+        new_agent_id = int(new_agent_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="assigned_agent_id must be an integer")
+
+    # Optional conversion remarks entered on the Support Assignment form.
+    # They are stored on the existing Support handoff notes and the auditable
+    # LeadAssignment row, so no schema change is required.
+    raw_remarks = payload.get("remarks") or payload.get("conversion_remarks") or ""
+    remarks = str(raw_remarks).strip()[:2000]
+
     agent = db.query(Employee).filter(Employee.id == new_agent_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Support Executive not found")
+    if not is_active_support_executive(agent, db):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only an active Support Executive can be assigned. Sales employees, "
+                "Managers/Admins, inactive users and other departments are not allowed."
+            )
+        )
 
     from models.workflow import SupportHandoff
-    handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
-    if handoff:
-        handoff.assigned_agent_id = agent.id
-        handoff.assigned_agent_name = agent.name
-        if not handoff.support_manager_id and agent.manager_id:
-            mgr = db.query(Employee).filter(Employee.id == agent.manager_id).first()
-            if mgr:
-                handoff.support_manager_id = mgr.id
-                handoff.support_manager_name = mgr.name
-
-    lead.assigned_to = agent.id
-    lead.assigned_at = datetime.utcnow()
+    handoff = (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id == lead.id)
+        .order_by(desc(SupportHandoff.id))
+        .first()
+    )
+    if not handoff:
+        raise HTTPException(
+            status_code=409,
+            detail="No Support handoff exists for this lead. Convert the won deal to Support first."
+        )
 
     current_emp = get_employee_for_user(current_user, db)
     assigner_id = current_emp.id if current_emp else None
+
+    # Idempotency: re-submitting the same Support Executive must not create a
+    # duplicate assignment history row or a second notification.
+    if handoff.assigned_agent_id == agent.id:
+        return {
+            "success": True,
+            "already_assigned": True,
+            "lead_id": lead.id,
+            "support_handoff_id": handoff.id,
+            "assigned_agent_id": agent.id,
+            "assigned_agent_name": agent.name,
+            "support_assigned_at": handoff.updated_at.isoformat() if handoff.updated_at else None,
+            "sales_owner_id": lead.assigned_to,
+            "support_manager_id": handoff.support_manager_id,
+            "support_manager_name": handoff.support_manager_name,
+        }
+
+    handoff.assigned_agent_id = agent.id
+    handoff.assigned_agent_name = agent.name
+
+    if remarks:
+        existing_notes = (handoff.support_notes or "").strip()
+        if remarks not in existing_notes:
+            handoff.support_notes = (
+                f"{existing_notes}\n{remarks}".strip() if existing_notes else remarks
+            )
+
+    # Support Manager ownership must be recorded exactly once. Prefer the
+    # Support Manager performing the assignment, otherwise fall back to the
+    # agent's reporting manager.
+    if not handoff.support_manager_id:
+        if norm_role == ROLE_SUPPORT_MANAGER and current_emp:
+            handoff.support_manager_id = current_emp.id
+            handoff.support_manager_name = current_emp.name
+        else:
+            mgr = _resolve_employee_manager(agent, db)
+            if mgr:
+                handoff.support_manager_id = mgr.id
+                handoff.support_manager_name = mgr.name
 
     assignment = LeadAssignment(
         lead_id=lead.id,
@@ -1125,7 +1701,11 @@ def assign_support_lead(
         assigned_by=assigner_id,
         assigned_at=datetime.utcnow(),
         assignment_method="MANUAL_SUPPORT",
-        notes=f"Assigned to Support Executive {agent.name} by {current_user.username}"
+        notes=(
+            f"Assigned to Support Executive {agent.name} by {current_user.username} "
+            f"after conversion to Support."
+            + (f" Conversion remarks: {remarks}" if remarks else "")
+        )
     )
     db.add(assignment)
 
@@ -1134,13 +1714,43 @@ def assign_support_lead(
         lead_id=lead.id,
         performed_by_id=assigner_id,
         activity_type="ASSIGNED_TO_SUPPORT",
-        description=f"Assigned to Support Executive {agent.name} by {current_user.username}"
+        description=(
+            f"Assigned to Support Executive {agent.name} by {current_user.username} "
+            f"after conversion to Support."
+            + (f" Conversion remarks: {remarks}" if remarks else "")
+        )
     )
 
     db.commit()
     db.refresh(lead)
 
-    return {"success": True, "lead_id": lead.id, "assigned_to": agent.id, "assigned_to_name": agent.name}
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="SUPPORT_ASSIGN",
+        entity_type="LEAD",
+        entity_id=lead.id,
+        details=(
+            f"Support Executive {agent.name} assigned to converted Lead #{lead.id} "
+            f"by {current_user.username}."
+            + (f" Conversion remarks: {remarks}" if remarks else "")
+        )
+    )
+
+    return {
+        "success": True,
+        "already_assigned": False,
+        "lead_id": lead.id,
+        "support_handoff_id": handoff.id,
+        "assigned_agent_id": agent.id,
+        "assigned_agent_name": agent.name,
+        "support_assigned_at": assignment.assigned_at.isoformat(),
+        "conversion_remarks": remarks or None,
+        "sales_owner_id": lead.assigned_to,
+        "support_manager_id": handoff.support_manager_id,
+        "support_manager_name": handoff.support_manager_name,
+    }
 
 
 @router.put("/{lead_id}/support-status", response_model=SupportHandoffOut)
@@ -1325,22 +1935,28 @@ def update_lead(
     if lead_in.state is not None: lead.state = lead_in.state
     if hasattr(lead_in, 'country') and lead_in.country is not None: lead.country = lead_in.country
     old_status = lead.status
-    if lead_in.status is not None:
+    conversion_requested = (
+        lead_in.status is not None
+        and normalize_lead_status(lead_in.status) == STATUS_CONVERTED_TO_SUPPORT
+    )
+    if lead_in.status is not None and not conversion_requested:
         lead.status = lead_in.status
-        if lead_in.status in ["CONVERTED", "WON"] and old_status != lead_in.status:
-            from models.workflow import SupportHandoff
-            existing_handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
-            if not existing_handoff or not existing_handoff.support_manager_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Please assign a Support Manager before marking this deal as WON."
+        if lead_in.status != old_status:
+            db.add(LeadStatusHistory(
+                lead_id=lead.id,
+                old_status=old_status,
+                new_status=lead_in.status,
+                changed_by=emp_id,
+                changed_at=datetime.utcnow()
+            ))
+        if normalize_lead_status(lead_in.status) == "WON" or normalize_lead_status(lead_in.status) == "CONVERTED":
+            if old_status != lead_in.status:
+                from services.workflow_service import WorkflowService
+                WorkflowService.trigger_finance_handoff_on_won(
+                    db=db,
+                    lead=lead,
+                    performed_by_user=current_user
                 )
-            from services.workflow_service import WorkflowService
-            WorkflowService.trigger_finance_handoff_on_won(
-                db=db,
-                lead=lead,
-                performed_by_user=current_user
-            )
     if lead_in.campaign_name is not None: lead.campaign_name = lead_in.campaign_name
     if lead_in.rating is not None: lead.rating = lead_in.rating
     if lead_in.priority is not None: lead.priority = lead_in.priority
@@ -1369,6 +1985,29 @@ def update_lead(
 
     if lead_in.product_category_confirmed is not None:
         lead.product_category_confirmed = lead_in.product_category_confirmed
+
+    if conversion_requested:
+        from services.workflow_service import WorkflowService
+        try:
+            WorkflowService.convert_to_support(
+                db=db,
+                lead_id=lead.id,
+                current_user=current_user
+            )
+        except PermissionError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc)
+            )
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc)
+            )
+        db.refresh(lead)
+        return build_lead_out(lead, current_user, db)
 
     log_lead_activity(
         db=db,
@@ -1410,6 +2049,15 @@ def assign_lead(
     target_emp = db.query(Employee).filter(Employee.id == assign_req.assigned_to).first()
     if not target_emp:
         raise HTTPException(status_code=404, detail="Target employee not found")
+    if not is_active_sales_manager(target_emp, db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Manual Sales assignment allows only active Sales Managers. "
+                "Sales Executives, Support users, Managers/Admins and inactive "
+                "employees are not eligible."
+            )
+        )
 
     current_emp = get_employee_for_user(current_user, db)
     assigner_id = current_emp.id if current_emp else None
@@ -1492,6 +2140,27 @@ def change_lead_status(
     old_status = lead.status
     new_status = status_req.status
 
+    if normalize_lead_status(new_status) == STATUS_CONVERTED_TO_SUPPORT:
+        from services.workflow_service import WorkflowService
+        try:
+            WorkflowService.convert_to_support(
+                db=db,
+                lead_id=lead.id,
+                current_user=current_user
+            )
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc)
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc)
+            )
+        db.refresh(lead)
+        return build_lead_out(lead, current_user, db)
+
     lead.status = new_status
 
     history = LeadStatusHistory(
@@ -1511,14 +2180,7 @@ def change_lead_status(
         description=f"{emp_name} changed status {old_status} -> {new_status}"
     )
 
-    if new_status in ["CONVERTED", "WON"]:
-        from models.workflow import SupportHandoff
-        existing_handoff = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
-        if not existing_handoff or not existing_handoff.support_manager_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Please assign a Support Manager before marking this deal as WON."
-            )
+    if normalize_lead_status(new_status) in {"CONVERTED", "WON"}:
         from services.workflow_service import WorkflowService
         WorkflowService.trigger_finance_handoff_on_won(
             db=db,
@@ -1566,8 +2228,11 @@ def mark_deal_won_with_support_manager(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Sales closes a Deal as WON with required Support Manager assignment.
-    Validates permissions and enforces mandatory Support Manager selection.
+    Sales closes a Deal as WON.
+
+    Won remains a Sales milestone: the Support handoff snapshot is prepared but
+    Support is neither assigned nor notified. Support assignment only becomes
+    available after an explicit Converted to Support transition.
     """
     if _is_support_actor(current_user):
         raise HTTPException(
@@ -1578,12 +2243,6 @@ def mark_deal_won_with_support_manager(
     can_edit = user_has_permission(current_user, "leads", "edit", db) or current_user.role in ["ADMIN", "MANAGER", "SALES"]
     if not can_edit:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to mark this deal as WON.")
-
-    if not payload.support_manager_id or payload.support_manager_id <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Please assign a Support Manager before marking this deal as WON."
-        )
 
     try:
         from services.workflow_service import WorkflowService
@@ -1599,6 +2258,43 @@ def mark_deal_won_with_support_manager(
     except Exception as e:
         logger.error(f"Error completing deal won workflow: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process deal WON: {str(e)}")
+
+@router.post("/{lead_id}/convert-to-support")
+def convert_deal_to_support(
+    lead_id: int,
+    payload: Optional[dict] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Explicitly convert a WON deal to the Support onboarding queue.
+
+    Restricted to Admin and Sales Managers. The conversion records the
+    converter and timestamp but never assigns Support; a Support Manager/Admin
+    performs that as a separate step.
+    """
+    if _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Support team cannot modify the Sales lead status.",
+        )
+
+    note = (payload or {}).get("note") if isinstance(payload, dict) else None
+    from services.workflow_service import WorkflowService
+    try:
+        return WorkflowService.convert_to_support(
+            db=db,
+            lead_id=lead_id,
+            current_user=current_user,
+            note=note
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Error converting deal to Support: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to convert deal to Support: {str(exc)}")
 
 @router.put("/{lead_id}/won-amount")
 def update_won_deal_amount(

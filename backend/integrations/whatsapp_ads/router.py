@@ -170,6 +170,10 @@ def _apply_filters(
             query = query.filter(Lead.status == "ASSIGNED")
         elif st in {"WON", "CONVERTED"}:
             query = query.filter(Lead.status.in_(["WON", "CONVERTED"]))
+        elif st in {"TRIAL", "TRIAL_LEAD", "TRIAL LEAD"}:
+            query = query.filter(Lead.status.in_(["TRIAL", "TRIAL LEAD", "TRIAL_LEAD"]))
+        elif st in {"CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT", "CONVERTED-TO-SUPPORT"}:
+            query = query.filter(Lead.status.in_(["CONVERTED_TO_SUPPORT", "CONVERTED TO SUPPORT", "CONVERTED-TO-SUPPORT"]))
         elif st in {"LOST", "NOT_INTERESTED", "NOT INTERESTED"}:
             query = query.filter(
                 Lead.status.in_(["LOST", "NOT_INTERESTED", "NOT INTERESTED"])

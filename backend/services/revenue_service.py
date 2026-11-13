@@ -30,7 +30,15 @@ from models.sales_target import SalesTarget
 from utils.document_status import invoice_document_status
 
 
-WON_LEAD_STATUSES = {"WON", "CONVERTED", "CLOSED WON", "CLOSED_WON"}
+WON_LEAD_STATUSES = {
+    "WON",
+    "CONVERTED",
+    "CLOSED WON",
+    "CLOSED_WON",
+    "CONVERTED_TO_SUPPORT",
+    "CONVERTED TO SUPPORT",
+    "CONVERTED-TO-SUPPORT",
+}
 
 
 def is_lead_won(status_str: Optional[str]) -> bool:
@@ -91,6 +99,31 @@ class RevenueService:
         all_custs = {c.id: c for c in db.query(Customer).all()}
         handoff_by_lead = {h.lead_id: h for h in handoffs if h.lead_id}
 
+        # Batch-load leads referenced by invoices. The previous loop issued one
+        # SELECT per invoice, which made dashboard/report latency grow with the
+        # number of confirmed invoices.
+        invoice_lead_ids = {inv.lead_id for inv in invoices if inv.lead_id}
+        invoice_lead_map = {}
+        if invoice_lead_ids:
+            invoice_lead_map = {
+                lead.id: lead
+                for lead in db.query(Lead).filter(Lead.id.in_(invoice_lead_ids)).all()
+            }
+
+        # Batch-load support handoffs for won leads. They are only consulted
+        # when the finance handoff and lead carry no known amount, but loading
+        # them once avoids a query per such lead.
+        won_lead_ids = [lead.id for lead in won_leads]
+        support_handoff_by_lead = {}
+        if won_lead_ids:
+            for sup in (
+                db.query(SupportHandoff)
+                .filter(SupportHandoff.lead_id.in_(won_lead_ids))
+                .order_by(SupportHandoff.id.desc())
+                .all()
+            ):
+                support_handoff_by_lead.setdefault(sup.lead_id, sup)
+
         transactions: List[Dict[str, Any]] = []
         seen_lead_ids: Set[int] = set()
 
@@ -102,7 +135,7 @@ class RevenueService:
 
             lead_id = inv.lead_id
             customer_id = inv.customer_id
-            lead_obj = db.query(Lead).filter(Lead.id == lead_id).first() if lead_id else None
+            lead_obj = invoice_lead_map.get(lead_id) if lead_id else None
             # A won deal is often handed to Support for onboarding, which moves
             # the lead's current owner out of Sales. The finance handoff keeps
             # the salesperson who actually closed the deal, so use that for
@@ -210,7 +243,7 @@ class RevenueService:
 
             # If amount is still 0, check linked support handoff
             if amt <= 0:
-                sup = db.query(SupportHandoff).filter(SupportHandoff.lead_id == lead.id).first()
+                sup = support_handoff_by_lead.get(lead.id)
                 if sup and sup.total_deal_amount:
                     amt = float(sup.total_deal_amount)
 

@@ -44,6 +44,10 @@ from utils.support_status import (
     require_support_status,
     support_status_storage_values,
 )
+from utils.lead_status import (
+    CONVERTED_TO_SUPPORT_STATUSES,
+    is_converted_to_support_status,
+)
 
 logger = logging.getLogger("workflow_router")
 
@@ -394,10 +398,24 @@ def list_support_handoffs(
         if not current_emp:
             return []
         team_emp_ids = get_team_employee_ids_from_user(current_user, db)
+        converted_lead_ids = (
+            db.query(Lead.id)
+            .filter(
+                func.upper(func.trim(Lead.status)).in_(
+                    sorted(CONVERTED_TO_SUPPORT_STATUSES)
+                )
+            )
+        )
         q = q.filter(
             or_(
                 SupportHandoff.support_manager_id == current_emp.id,
-                SupportHandoff.assigned_agent_id.in_(team_emp_ids)
+                SupportHandoff.assigned_agent_id.in_(team_emp_ids),
+                # Converted-but-unassigned handoffs must be visible so the
+                # Support Manager can perform the explicit Support assignment.
+                (
+                    SupportHandoff.assigned_agent_id.is_(None)
+                    & SupportHandoff.lead_id.in_(converted_lead_ids)
+                ),
             )
         )
     elif norm_role != ROLE_ADMIN:
@@ -475,7 +493,16 @@ def get_support_handoff_detail(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only view assignments given to you.")
     elif norm_role == ROLE_SUPPORT_MANAGER:
         team_emp_ids = get_team_employee_ids_from_user(current_user, db)
-        if not current_emp or (record.support_manager_id != current_emp.id and record.assigned_agent_id not in team_emp_ids):
+        converted_unassigned = (
+            record.assigned_agent_id is None
+            and record.lead is not None
+            and is_converted_to_support_status(record.lead.status)
+        )
+        if not current_emp or (
+            record.support_manager_id != current_emp.id
+            and record.assigned_agent_id not in team_emp_ids
+            and not converted_unassigned
+        ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied: You can only view assignments for your support team.")
     elif norm_role != ROLE_ADMIN:
         scope = get_user_view_scope(current_user, "support_tickets", db)
@@ -611,9 +638,9 @@ def mark_deal_won_workflow(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Sales marks a deal as WON and assigns it to a Support Manager.
-    Requires edit permission on leads module.
-    Enforces mandatory Support Manager assignment.
+    Sales marks a deal as WON. Won is a Sales-only milestone; Support is not
+    assigned or notified here. Support assignment becomes available only after
+    an explicit Converted to Support transition.
     """
     if (
         normalize_role(current_user.role)
@@ -628,12 +655,6 @@ def mark_deal_won_workflow(
     can_edit = user_has_permission(current_user, "leads", "edit", db) or current_user.role in ["ADMIN", "MANAGER", "SALES"]
     if not can_edit:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to close deals as WON.")
-
-    if not payload.support_manager_id or payload.support_manager_id <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Please assign a Support Manager before marking this deal as WON."
-        )
 
     try:
         result = WorkflowService.complete_deal_won_workflow(

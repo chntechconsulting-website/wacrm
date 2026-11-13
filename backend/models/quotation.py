@@ -1,10 +1,13 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
 
 class Quotation(Base):
     __tablename__ = "quotations"
+    __table_args__ = (
+        Index("ix_quotations_lead_type_status", "lead_id", "doc_type", "status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     doc_type = Column(String(50), default="quotation", nullable=False)  # quotation, proforma, invoice, po

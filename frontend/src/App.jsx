@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { DialerProvider } from './context/DialerContext';
@@ -8,80 +8,98 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
 
+// Route-level code splitting keeps the initial login/dashboard payload small
+// instead of shipping every CRM module in one 4 MB bundle.
+const lazyPage = (loader) => React.lazy(loader);
+
 // Public Auth & Compliance Pages
-import Login from './pages/Login';
-import PrivacyPolicyPage from './pages/Public/PrivacyPolicyPage';
-import TermsAndConditionsPage from './pages/Public/TermsAndConditionsPage';
-import DataDeletionPage from './pages/Public/DataDeletionPage';
+const Login = lazyPage(() => import('./pages/Login'));
+const PrivacyPolicyPage = lazyPage(() => import('./pages/Public/PrivacyPolicyPage'));
+const TermsAndConditionsPage = lazyPage(() => import('./pages/Public/TermsAndConditionsPage'));
+const DataDeletionPage = lazyPage(() => import('./pages/Public/DataDeletionPage'));
 
 // CRM Module Pages
-import DashboardPage from './pages/Dashboard/DashboardPage';
+const DashboardPage = lazyPage(() => import('./pages/Dashboard/DashboardPage'));
 
 // LEADS Pages
-import LeadsPage from './pages/Leads/LeadsPage';
-import CreateLeadPage from './pages/Leads/CreateLeadPage';
-import ImportLeadsPage from './pages/Leads/ImportLeadsPage';
-import MetaLeadsPage from './pages/Leads/MetaLeadsPage';
-import WhatsAppAdLeadsPage from './pages/Leads/WhatsAppAdLeadsPage';
-import WebsiteLeadsPage from './pages/Leads/WebsiteLeadsPage';
-import ManualLeadsPage from './pages/Leads/ManualLeadsPage';
-import MyLeadsPage from './pages/Leads/MyLeadsPage';
+const LeadsPage = lazyPage(() => import('./pages/Leads/LeadsPage'));
+const CreateLeadPage = lazyPage(() => import('./pages/Leads/CreateLeadPage'));
+const ImportLeadsPage = lazyPage(() => import('./pages/Leads/ImportLeadsPage'));
+const MetaLeadsPage = lazyPage(() => import('./pages/Leads/MetaLeadsPage'));
+const WhatsAppAdLeadsPage = lazyPage(() => import('./pages/Leads/WhatsAppAdLeadsPage'));
+const WebsiteLeadsPage = lazyPage(() => import('./pages/Leads/WebsiteLeadsPage'));
+const ManualLeadsPage = lazyPage(() => import('./pages/Leads/ManualLeadsPage'));
+const MyLeadsPage = lazyPage(() => import('./pages/Leads/MyLeadsPage'));
 
 // WEBSITE ENQUIRIES Pages
-import BrochureDownloadPeoplePage from './pages/WebsiteEnquiries/BrochureDownloadPeoplePage';
+const BrochureDownloadPeoplePage = lazyPage(() => import('./pages/WebsiteEnquiries/BrochureDownloadPeoplePage'));
 
 // COMMUNICATION Pages
-import CallLogsPage from './pages/Communication/CallLogsPage';
-import FollowupsPage from './pages/Communication/FollowupsPage';
-import ActivitiesPage from './pages/Communication/ActivitiesPage';
-import WhatsAppPage from './pages/Communication/WhatsAppPage';
+const CallLogsPage = lazyPage(() => import('./pages/Communication/CallLogsPage'));
+const FollowupsPage = lazyPage(() => import('./pages/Communication/FollowupsPage'));
+const ActivitiesPage = lazyPage(() => import('./pages/Communication/ActivitiesPage'));
+const WhatsAppPage = lazyPage(() => import('./pages/Communication/WhatsAppPage'));
 
 // ORGANIZATION Pages
-import CompaniesPage from './pages/Organization/CompaniesPage';
-import ContactsPage from './pages/Organization/ContactsPage';
+const CompaniesPage = lazyPage(() => import('./pages/Organization/CompaniesPage'));
+const ContactsPage = lazyPage(() => import('./pages/Organization/ContactsPage'));
 
 // REPORTS & ANALYTICS Pages
-import ReportsPage from './pages/Reports/ReportsPage';
-import AnalyticsPage from './pages/Reports/AnalyticsPage';
+const ReportsPage = lazyPage(() => import('./pages/Reports/ReportsPage'));
+const AnalyticsPage = lazyPage(() => import('./pages/Reports/AnalyticsPage'));
 
 // SETTINGS & USERS Pages
-import SettingsPage from './pages/Settings/SettingsPage';
-import IntegrationsPage from './pages/Settings/IntegrationsPage';
-import MetaIntegrationPage from './pages/Settings/MetaIntegrationPage';
-import WhatsAppConnectionPage from './pages/Settings/WhatsAppConnectionPage';
-import UsersRolesPage from './pages/Settings/UsersRolesPage';
-import ProfilePage from './pages/Profile/ProfilePage';
-import NotificationsPage from './pages/Settings/NotificationsPage';
-import DeleteRequestsPage from './pages/Settings/DeleteRequestsPage';
+const SettingsPage = lazyPage(() => import('./pages/Settings/SettingsPage'));
+const IntegrationsPage = lazyPage(() => import('./pages/Settings/IntegrationsPage'));
+const MetaIntegrationPage = lazyPage(() => import('./pages/Settings/MetaIntegrationPage'));
+const WhatsAppConnectionPage = lazyPage(() => import('./pages/Settings/WhatsAppConnectionPage'));
+const UsersRolesPage = lazyPage(() => import('./pages/Settings/UsersRolesPage'));
+const ProfilePage = lazyPage(() => import('./pages/Profile/ProfilePage'));
+const NotificationsPage = lazyPage(() => import('./pages/Settings/NotificationsPage'));
+const DeleteRequestsPage = lazyPage(() => import('./pages/Settings/DeleteRequestsPage'));
 
 // Admin Panel Pages
-import AdminPanelPage from './pages/Admin/AdminPanelPage';
+const AdminPanelPage = lazyPage(() => import('./pages/Admin/AdminPanelPage'));
 
 // TEAM INSIGHTS & EMPLOYEE MONITORING Pages
-import TeamInsightsPage from './pages/TeamInsights/TeamInsightsPage';
-import EmployeeMonitoringPage from './pages/EmployeeMonitoring/index';
-import EmployeeDetailPage from './pages/EmployeeMonitoring/EmployeeDetailPage';
+const TeamInsightsPage = lazyPage(() => import('./pages/TeamInsights/TeamInsightsPage'));
+const EmployeeMonitoringPage = lazyPage(() => import('./pages/EmployeeMonitoring/index'));
+const EmployeeDetailPage = lazyPage(() => import('./pages/EmployeeMonitoring/EmployeeDetailPage'));
 
 // WA QUOTES & INVOICES Pages
-import WAQuotesPage from './pages/WAQuotes/WAQuotesPage';
+const WAQuotesPage = lazyPage(() => import('./pages/WAQuotes/WAQuotesPage'));
 
 // WORKFLOW Pages (Sales -> Finance -> Support)
-import FinanceQueuePage from './pages/Workflow/FinanceQueuePage';
-import SupportQueuePage from './pages/Workflow/SupportQueuePage';
-import SupportAssignedLeadsPage from './pages/Support/SupportAssignedLeadsPage';
-import SupportManagerPage from './pages/Support/SupportManagerPage';
-import BackupCustomersPage from './pages/Support/BackupCustomersPage';
+const FinanceQueuePage = lazyPage(() => import('./pages/Workflow/FinanceQueuePage'));
+const SupportQueuePage = lazyPage(() => import('./pages/Workflow/SupportQueuePage'));
+const SupportAssignedLeadsPage = lazyPage(() => import('./pages/Support/SupportAssignedLeadsPage'));
+const SupportManagerPage = lazyPage(() => import('./pages/Support/SupportManagerPage'));
+const BackupCustomersPage = lazyPage(() => import('./pages/Support/BackupCustomersPage'));
 
 // FINANCE DEPARTMENT Pages
-import InvoicesPage from './pages/Finance/InvoicesPage';
-import PaymentsPage from './pages/Finance/PaymentsPage';
-import CustomerPurchasesPage from './pages/Finance/CustomerPurchasesPage';
-import SubscriptionsPage from './pages/Finance/SubscriptionsPage';
-import RefundsPage from './pages/Finance/RefundsPage';
-import FinancialReportsPage from './pages/Finance/FinancialReportsPage';
+const InvoicesPage = lazyPage(() => import('./pages/Finance/InvoicesPage'));
+const PaymentsPage = lazyPage(() => import('./pages/Finance/PaymentsPage'));
+const CustomerPurchasesPage = lazyPage(() => import('./pages/Finance/CustomerPurchasesPage'));
+const SubscriptionsPage = lazyPage(() => import('./pages/Finance/SubscriptionsPage'));
+const RefundsPage = lazyPage(() => import('./pages/Finance/RefundsPage'));
+const FinancialReportsPage = lazyPage(() => import('./pages/Finance/FinancialReportsPage'));
 
 // 404 Not Found Page
-import NotFoundPage from './pages/NotFound/NotFoundPage';
+const NotFoundPage = lazyPage(() => import('./pages/NotFound/NotFoundPage'));
+
+const RouteFallback = () => (
+  <div style={{
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '40vh',
+    color: '#64748b',
+    fontSize: '0.9rem',
+    fontWeight: 600
+  }}>
+    Loading…
+  </div>
+);
 
 function App() {
   return (
@@ -90,6 +108,7 @@ function App() {
         <Router>
           <FollowupReminderProvider>
             <PingoPopupProvider>
+              <Suspense fallback={<RouteFallback />}>
               <Routes>
           {/* Public Authentication & Meta Compliance Routes */}
           <Route path="/login" element={<Login />} />
@@ -194,6 +213,7 @@ function App() {
             </Route>
           </Route>
         </Routes>
+              </Suspense>
             </PingoPopupProvider>
           </FollowupReminderProvider>
         </Router>

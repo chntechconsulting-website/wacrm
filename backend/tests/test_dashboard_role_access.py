@@ -28,6 +28,7 @@ from utils.support_status import (
     SUPPORT_STATUS_RESOLVED,
     normalize_support_status,
 )
+from utils.lead_status import CONVERTED_TO_SUPPORT_STATUSES
 
 
 class TestDashboardRoleAccess(unittest.TestCase):
@@ -139,10 +140,17 @@ class TestDashboardRoleAccess(unittest.TestCase):
         team_ids = get_team_employee_ids_from_user(self.support_mgr_user, self.db)
         if self.support_mgr_emp.id not in team_ids:
             team_ids.append(self.support_mgr_emp.id)
+        converted_lead_ids = self.db.query(Lead.id).filter(
+            func.upper(func.trim(Lead.status)).in_(sorted(CONVERTED_TO_SUPPORT_STATUSES))
+        )
         return self.db.query(SupportHandoff).filter(
             or_(
                 SupportHandoff.support_manager_id == self.support_mgr_emp.id,
                 SupportHandoff.assigned_agent_id.in_(team_ids),
+                (
+                    SupportHandoff.assigned_agent_id.is_(None)
+                    & SupportHandoff.lead_id.in_(converted_lead_ids)
+                ),
             )
         )
 

@@ -17,10 +17,17 @@ const Layout = () => {
   const [showDispositionModal, setShowDispositionModal] = useState(false);
   const lastCallIdRef = useRef(null);
   const isInitialMount = useRef(true);
+  const incomingAlertRef = useRef(null);
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
   const isMetaReviewer = user?.role === 'META_REVIEWER';
+
+  // Keep the polling closure current without restarting the interval whenever
+  // an alert opens/closes.
+  useEffect(() => {
+    incomingAlertRef.current = incomingAlert;
+  }, [incomingAlert]);
 
   // Real-time Incoming Call Alert & Polling Management
   useEffect(() => {
@@ -149,10 +156,11 @@ const Layout = () => {
           if (isLatestInbound && latestStatus === 'RINGING') {
             setIncomingAlert(latest);
           }
-        } else if (incomingAlert) {
+        } else if (incomingAlertRef.current) {
           // If currently displaying this call, synchronize state transitions
-          const matchesCurrent = (incomingAlert.id && incomingAlert.id === latest.id) || 
-                                 (incomingAlert.provider_call_id && incomingAlert.provider_call_id === latest.provider_call_id);
+          const currentAlert = incomingAlertRef.current;
+          const matchesCurrent = (currentAlert.id && currentAlert.id === latest.id) ||
+                                 (currentAlert.provider_call_id && currentAlert.provider_call_id === latest.provider_call_id);
           if (matchesCurrent) {
             if (['ANSWERED', 'CONNECTED'].includes(latestStatus)) {
               setIncomingAlert(prev => prev ? ({ ...prev, call_status: 'CONNECTED' }) : null);
@@ -168,7 +176,12 @@ const Layout = () => {
     };
 
     checkRecentCalls();
-    const interval = setInterval(checkRecentCalls, 3500);
+    // Backup polling only. Real-time call events arrive through the dialer,
+    // so 10s is sufficient and avoids ~17 requests/minute per open tab.
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      checkRecentCalls();
+    }, 10000);
 
     return () => {
       isMounted = false;
@@ -179,7 +192,7 @@ const Layout = () => {
       window.removeEventListener('crm-call-completed', handleCallEndedEvent);
       window.removeEventListener('crm-call-completed', handleCallCompletedDisposition);
     };
-  }, [incomingAlert, isMetaReviewer]);
+  }, [isMetaReviewer]);
 
   // The reviewer account is restricted to two screens. This is a UX guard;
   // the backend reviewer allowlist remains the security boundary.

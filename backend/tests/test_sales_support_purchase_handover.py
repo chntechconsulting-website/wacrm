@@ -47,6 +47,7 @@ from routers.customers import get_customer, get_customer_purchase_details
 from routers.followups import list_followups
 from routers.ivr import list_call_logs
 from routers.leads import (
+    assign_support_lead,
     build_lead_out,
     get_lead_purchase_details,
     get_support_assigned_leads,
@@ -85,6 +86,9 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
 
         self.admin_user, self.admin_emp = self._make_person(
             "handover_admin", "ADMIN", "ADMINISTRATION"
+        )
+        self.sales_manager_user, self.sales_manager_emp = self._make_person(
+            "handover_sales_mgr", "SALES_MANAGER", "SALES"
         )
         self.sales_user, self.sales_emp = self._make_person(
             "handover_sales", "SALES_EXECUTIVE", "SALES"
@@ -278,6 +282,16 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         self.db.refresh(self.lead)
         return result
 
+    def _convert(self, note=None):
+        result = WorkflowService.convert_to_support(
+            db=self.db,
+            lead_id=self.lead.id,
+            current_user=self.sales_manager_user,
+            note=note,
+        )
+        self.db.refresh(self.lead)
+        return result
+
     def _handoff(self):
         return (
             self.db.query(SupportHandoff)
@@ -296,7 +310,8 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         self.assertEqual(self.lead.status, "WON")
         handoff = self._handoff()
         self.assertEqual(handoff.customer_id, result["customer_id"])
-        self.assertEqual(handoff.support_manager_id, self.support_manager_emp.id)
+        self.assertIsNone(handoff.support_manager_id)
+        self.assertIsNone(handoff.assigned_agent_id)
         self.assertIsNotNone(handoff.purchase_snapshot)
 
         # Scenario 4: Reuses the linked customer and never duplicates it.
@@ -393,6 +408,7 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_03_support_can_read_purchase_details_sales_cannot(self):
         self._run_won()
+        self._convert()
 
         support_details = get_lead_purchase_details(
             lead_id=self.lead.id,
@@ -416,9 +432,12 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         )
         self.assertEqual(queue["total"], 1)
         row = queue["items"][0]
-        self.assertEqual(row["sales_status"], "WON")
+        self.assertEqual(row["sales_status"], "CONVERTED_TO_SUPPORT")
         self.assertEqual(row["support_status"], "NEW")
-        self.assertEqual(row["purchase_details"]["plan"]["code"], "business")
+        # The Support queue row intentionally omits the purchase projection to
+        # keep the list payload small; the drawer loads it through
+        # get_lead_purchase_details (verified above) on demand.
+        self.assertIsNone(row["purchase_details"])
 
         # Workflow Support handoff list/detail also expose purchase details.
         handoffs = list_support_handoffs(
@@ -515,19 +534,20 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         )
         self.assertIsNone(sales_cust.get("purchase_details"))
 
-        # Support Dashboard stats include purchase_details in recent_tickets
+        # Support Dashboard recent tickets stay lightweight; the customer
+        # drawer lazy-loads the purchase projection on demand.
         dash = dashboard_stats(db=self.db, current_user=self.support_manager_user)
         recent = dash.get("recent_tickets") or dash.get("support", {}).get("recent_tickets", [])
         self.assertGreaterEqual(len(recent), 1)
         rt = next(t for t in recent if t["id"] == handoff.id)
-        self.assertIsNotNone(rt["purchase_details"])
-        self.assertEqual(rt["purchase_details"]["employee_quantity"], 25)
+        self.assertIsNone(rt["purchase_details"])
 
     # ------------------------------------------------------------------
     # Scenarios 8-9: activity isolation
     # ------------------------------------------------------------------
     def test_04_sales_and_support_activities_are_department_isolated(self):
         self._run_won()
+        self._convert()
         handoff = self._handoff()
 
         sales_activity = LeadActivity(
@@ -640,6 +660,7 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_05_support_status_updates_preserve_won_and_sales_history(self):
         self._run_won()
+        self._convert()
         history_before = (
             self.db.query(LeadStatusHistory)
             .filter(LeadStatusHistory.lead_id == self.lead.id)
@@ -654,7 +675,7 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         )
         self.assertEqual(first.support_status, "ONBOARDING")
         self.db.refresh(self.lead)
-        self.assertEqual(self.lead.status, "WON")
+        self.assertEqual(self.lead.status, "CONVERTED_TO_SUPPORT")
 
         second = update_support_lead_status(
             lead_id=self.lead.id,
@@ -664,7 +685,7 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         )
         self.assertEqual(second.support_status, "ACTIVE")
         self.db.refresh(self.lead)
-        self.assertEqual(self.lead.status, "WON")
+        self.assertEqual(self.lead.status, "CONVERTED_TO_SUPPORT")
         self.assertEqual(
             self.db.query(LeadStatusHistory)
             .filter(LeadStatusHistory.lead_id == self.lead.id)
@@ -676,7 +697,7 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         # The handoff carries both independent statuses.
         handoff = self._handoff()
         self.assertEqual(handoff.support_status, "ACTIVE")
-        self.assertEqual(handoff.sales_status, "WON")
+        self.assertEqual(handoff.sales_status, "CONVERTED_TO_SUPPORT")
 
         # Finance/Support handover counts remain stable.
         self.assertEqual(self.db.query(FinanceHandoff).count(), 1)
@@ -802,6 +823,7 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_07_call_and_followup_isolation(self):
         self._run_won()
+        self._convert()
 
         # Sales creates a call log
         sales_call = CallLog(
@@ -917,8 +939,16 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
             )
         )
 
-        # Sales marks deal WON and hands over to Support
-        self._run_won(assigned_agent_id=self.support_exec_emp.id)
+        # Sales marks the deal WON, explicitly converts it to Support, and a
+        # Support Manager assigns the Support Executive.
+        self._run_won()
+        self._convert()
+        assign_support_lead(
+            lead_id=self.lead.id,
+            payload={"assigned_agent_id": self.support_exec_emp.id},
+            db=self.db,
+            current_user=self.support_manager_user,
+        )
 
         # After handover: Support Manager and assigned Support Executive CAN view
         can_manager_view = is_user_authorized_for_billing_doc(
@@ -961,7 +991,14 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         when the Support handover references them through the proforma."""
         from services.permission_service import is_user_authorized_for_billing_doc
 
-        self._run_won(assigned_agent_id=self.support_exec_emp.id)
+        self._run_won()
+        self._convert()
+        assign_support_lead(
+            lead_id=self.lead.id,
+            payload={"assigned_agent_id": self.support_exec_emp.id},
+            db=self.db,
+            current_user=self.support_manager_user,
+        )
 
         # The source quotation is often unlinked while the proforma keeps the
         # conversion reference. This matches the live Support purchase view.

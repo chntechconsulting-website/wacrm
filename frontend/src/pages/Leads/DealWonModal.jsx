@@ -6,7 +6,6 @@ import PingoPopupService from '../../services/pingoPopupService';
 import PingoMascot from '../../components/Common/PingoMascot';
 import {
   Trophy,
-  UserCheck,
   Building,
   DollarSign,
   Users,
@@ -39,11 +38,6 @@ const formatINR = (val) => {
 const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
   const navigate = useNavigate();
 
-  // Support Managers State
-  const [supportManagers, setSupportManagers] = useState([]);
-  const [loadingManagers, setLoadingManagers] = useState(false);
-  const [supportManagerId, setSupportManagerId] = useState('');
-
   // Proforma Invoices State
   const [proformas, setProformas] = useState([]);
   const [loadingProformas, setLoadingProformas] = useState(false);
@@ -72,7 +66,6 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
   useEffect(() => {
     if (isOpen && lead) {
       setValidationError('');
-      fetchSupportManagers();
       fetchProformaInvoices(lead.id);
       setRequirements(lead.requirement_notes || '');
     }
@@ -100,30 +93,6 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
       setPaymentAmount(selectedProforma.amount_paid ? String(selectedProforma.amount_paid) : '0');
     }
   }, [selectedProforma]);
-
-  const fetchSupportManagers = async () => {
-    try {
-      setLoadingManagers(true);
-      const res = await API.get('/workflow/support-managers');
-      const list = res.data || [];
-      setSupportManagers(list);
-      if (list.length === 1) {
-        setSupportManagerId(String(list[0].id));
-      } else {
-        const kumar = list.find((m) =>
-          (m.name || '').toLowerCase().includes('kumar') ||
-          (m.username || '').toLowerCase().includes('kumar')
-        );
-        if (kumar) {
-          setSupportManagerId(String(kumar.id));
-        }
-      }
-    } catch (err) {
-      console.error('Failed to load support managers', err);
-    } finally {
-      setLoadingManagers(false);
-    }
-  };
 
   const fetchProformaInvoices = async (leadId) => {
     try {
@@ -169,20 +138,14 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
       return;
     }
 
-    // 2. Support Manager Assignment Validation
-    if (!supportManagerId) {
-      setValidationError('Please assign an active Support Manager before marking this deal as WON.');
-      return;
-    }
-
-    // 3. User Licence Count Validation
+    // 2. User Licence Count Validation
     const parsedUserCount = parseInt(customerUsersCount, 10);
     if (isNaN(parsedUserCount) || parsedUserCount <= 0) {
       setValidationError('Please enter a valid employee / user licence count (minimum 1).');
       return;
     }
 
-    // 4. Amount Adjustment Validation
+    // 3. Amount Adjustment Validation
     if (isAmountAdjusted && !dealAdjustmentReason.trim()) {
       setValidationError('The deal amount differs from the Proforma Grand Total. Please provide a reason for this adjustment.');
       return;
@@ -192,7 +155,6 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
       setSubmitting(true);
 
       const payload = {
-        support_manager_id: parseInt(supportManagerId, 10),
         proforma_id: selectedProforma.id,
         proforma_number: selectedProforma.doc_number,
         product_service: selectedProforma.product_summary || selectedProforma.product_category || 'WAHRMS Business Solution',
@@ -211,17 +173,15 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
       };
 
       const res = await API.post(`/leads/${lead.id}/won`, payload);
-      const selectedManager = supportManagers.find((m) => String(m.id) === String(supportManagerId));
-      const managerName = selectedManager?.name || 'Support Manager';
 
       PingoPopupService.triggerStatusUpdate({
         module: 'Deal',
         status: 'WON',
         reference: lead.company_name || lead.name || `Lead #${lead.id}`,
-        customMessage: `Deal closed for ₹${(parseFloat(dealAmount) || 0).toLocaleString('en-IN')}! Support handoff assigned to ${managerName}.`
+        customMessage: `Deal closed for ₹${(parseFloat(dealAmount) || 0).toLocaleString('en-IN')}! Support assignment is available after conversion.`
       });
 
-      onSuccess(res.data, managerName);
+      onSuccess(res.data);
       onClose();
     } catch (err) {
       console.error('Error completing deal won workflow:', err);
@@ -309,7 +269,7 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 </span>
               </div>
               <p style={{ margin: '2px 0 0 0', fontSize: '0.82rem', color: '#ecfdf5' }}>
-                Link verified Proforma Invoice & handoff client onboarding to Support Manager
+                Link the verified Proforma Invoice. Won stays in Sales; Support is assigned after an explicit conversion.
               </p>
             </div>
           </div>
@@ -1011,62 +971,7 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
               </div>
             )}
 
-            {/* SECTION 6: Support Manager Assignment */}
-            <div
-              style={{
-                background: '#ffffff',
-                border: '1px solid #cbd5e1',
-                borderRadius: '12px',
-                padding: '16px',
-                marginBottom: '18px'
-              }}
-            >
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  fontSize: '0.88rem',
-                  fontWeight: 700,
-                  color: '#0f172a',
-                  marginBottom: '6px'
-                }}
-              >
-                <UserCheck size={16} style={{ color: '#059669' }} />
-                <span>6. Assign to Support Manager <span style={{ color: '#dc2626' }}>*</span></span>
-              </label>
-
-              <select
-                value={supportManagerId}
-                onChange={(e) => {
-                  setSupportManagerId(e.target.value);
-                  if (validationError) setValidationError('');
-                }}
-                disabled={loadingManagers}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  borderRadius: '8px',
-                  border: validationError && !supportManagerId ? '2px solid #ef4444' : '1px solid #cbd5e1',
-                  backgroundColor: '#ffffff',
-                  fontSize: '0.9rem',
-                  fontWeight: 600,
-                  color: '#0f172a'
-                }}
-              >
-                <option value="">-- Select Active Support Manager --</option>
-                {supportManagers.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} ({m.role.replace('_', ' ')}) &ndash; {m.email || m.username}
-                  </option>
-                ))}
-              </select>
-              <small style={{ color: '#64748b', fontSize: '0.74rem', marginTop: '4px', display: 'block' }}>
-                Required: Only active users with Support Manager role are eligible for deal onboarding.
-              </small>
-            </div>
-
-            {/* SECTION 7: Onboarding Requirements / Handover Notes */}
+            {/* SECTION 6: Onboarding Requirements / Handover Notes */}
             <div
               style={{
                 background: '#f8fafc',
@@ -1087,7 +992,7 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 }}
               >
                 <FileText size={16} style={{ color: '#0284c7' }} />
-                <span>7. Onboarding Requirements / Handover Notes</span>
+                <span>6. Onboarding Requirements / Handover Notes</span>
               </label>
               <textarea
                 rows="3"
@@ -1163,7 +1068,7 @@ const DealWonModal = ({ isOpen, onClose, lead, onSuccess }) => {
                 }}
               >
                 <CheckCircle2 size={18} />
-                <span>{submitting ? 'Confirming Deal WON...' : 'Confirm WON & Hand Off'}</span>
+                <span>{submitting ? 'Confirming Deal WON...' : 'Confirm WON'}</span>
               </button>
             </div>
           </div>

@@ -574,6 +574,12 @@
   color: #047857;
 }
 
+.admin-pill.teal {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+  color: #0f766e;
+}
+
 .admin-pill.amber {
   border-color: #fde68a;
   background: #fffbeb;

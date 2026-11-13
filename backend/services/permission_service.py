@@ -1165,6 +1165,12 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
                 return True
             if handoff.assigned_agent_id and handoff.assigned_agent_id in team_emp_ids:
                 return True
+            # Converted deals wait unassigned for a Support Manager to pick an
+            # executive. Any Support Manager may see and assign them, while
+            # still not seeing ordinary Sales-owned leads before conversion.
+            from utils.lead_status import is_converted_to_support_status
+            if not handoff.assigned_agent_id and is_converted_to_support_status(lead.status):
+                return True
 
         if lead.assigned_to and lead.assigned_to in team_emp_ids:
             return True
@@ -1254,6 +1260,20 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
         for h in h_leads:
             if h[0]:
                 lead_ids.add(h[0])
+
+        # 1b. Converted deals that are still waiting for a Support Executive.
+        # They are intentionally visible to Support Managers so the explicit
+        # conversion step can be completed without assigning ownership early.
+        from utils.lead_status import is_converted_to_support_status
+        unassigned_converted = (
+            db.query(SupportHandoff.lead_id, Lead.status)
+            .join(Lead, Lead.id == SupportHandoff.lead_id)
+            .filter(SupportHandoff.assigned_agent_id.is_(None))
+            .all()
+        )
+        for lead_id, lead_status in unassigned_converted:
+            if lead_id and is_converted_to_support_status(lead_status):
+                lead_ids.add(lead_id)
 
         # 2. Leads directly assigned to team members
         direct_leads = db.query(Lead.id).filter(Lead.assigned_to.in_(team_emp_ids)).all()

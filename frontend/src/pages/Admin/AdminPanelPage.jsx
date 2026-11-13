@@ -147,10 +147,12 @@ const handoverStatusClass = (status) => {
 };
 
 const salesStatusClass = (status) => {
-  const value = String(status || '').trim().toUpperCase();
+  const value = String(status || '').trim().toUpperCase().replace(/[\s-]/g, '_');
+  if (value === 'CONVERTED_TO_SUPPORT') return 'admin-pill teal';
   if (value === 'WON' || value === 'CONVERTED') return 'admin-pill green';
+  if (value === 'TRIAL') return 'admin-pill blue';
   if (value === 'LOST') return 'admin-pill red';
-  if (value === 'PROPOSAL SENT' || value === 'PROPOSAL_SENT') return 'admin-pill blue';
+  if (value === 'PROPOSAL_SENT') return 'admin-pill blue';
   return 'admin-pill slate';
 };
 

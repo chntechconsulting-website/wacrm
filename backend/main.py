@@ -608,6 +608,91 @@ async def startup_db_client():
             except Exception as ex:
                 print(f"Sales targets schema check: {ex}")
 
+            # Performance indexes for the hot CRM read paths. These are
+            # additive, created once, and skip any index that already exists so
+            # repeated startups do not touch the schema.
+            hot_indexes = [
+                (
+                    "leads",
+                    "ix_leads_status_created_at",
+                    "ALTER TABLE leads ADD INDEX ix_leads_status_created_at (status, created_at)",
+                ),
+                (
+                    "leads",
+                    "ix_leads_source_created_at",
+                    "ALTER TABLE leads ADD INDEX ix_leads_source_created_at (source, created_at)",
+                ),
+                (
+                    "leads",
+                    "ix_leads_assigned_created_at",
+                    "ALTER TABLE leads ADD INDEX ix_leads_assigned_created_at (assigned_to, created_at)",
+                ),
+                (
+                    "leads",
+                    "ix_leads_updated_at",
+                    "ALTER TABLE leads ADD INDEX ix_leads_updated_at (updated_at)",
+                ),
+                (
+                    "leads",
+                    "ix_leads_followup_date",
+                    "ALTER TABLE leads ADD INDEX ix_leads_followup_date (followup_date)",
+                ),
+                (
+                    "lead_activities",
+                    "ix_lead_activities_lead_created",
+                    "ALTER TABLE lead_activities ADD INDEX ix_lead_activities_lead_created (lead_id, created_at)",
+                ),
+                (
+                    "followups",
+                    "ix_followups_lead_status_date",
+                    "ALTER TABLE followups ADD INDEX ix_followups_lead_status_date (lead_id, status, followup_date)",
+                ),
+                (
+                    "followups",
+                    "ix_followups_status_date",
+                    "ALTER TABLE followups ADD INDEX ix_followups_status_date (status, followup_date)",
+                ),
+                (
+                    "followups",
+                    "ix_followups_assigned_status_date",
+                    "ALTER TABLE followups ADD INDEX ix_followups_assigned_status_date (assigned_to, status, followup_date)",
+                ),
+                (
+                    "support_handoffs",
+                    "ix_support_handoffs_onboarding_status",
+                    "ALTER TABLE support_handoffs ADD INDEX ix_support_handoffs_onboarding_status (onboarding_status)",
+                ),
+                (
+                    "call_logs",
+                    "ix_call_logs_lead_created",
+                    "ALTER TABLE call_logs ADD INDEX ix_call_logs_lead_created (lead_id, created_at)",
+                ),
+                (
+                    "quotations",
+                    "ix_quotations_lead_type_status",
+                    "ALTER TABLE quotations ADD INDEX ix_quotations_lead_type_status (lead_id, doc_type, status)",
+                ),
+            ]
+            try:
+                existing_indexes = {}
+                for table_name, index_name, index_sql in hot_indexes:
+                    if table_name not in existing_indexes:
+                        rows = conn.execute(
+                            text(f"SHOW INDEX FROM {table_name}")
+                        ).fetchall()
+                        existing_indexes[table_name] = {row[2] for row in rows}
+                    if index_name in existing_indexes[table_name]:
+                        continue
+                    try:
+                        conn.execute(text(index_sql))
+                        conn.commit()
+                        existing_indexes[table_name].add(index_name)
+                        print(f"Auto-added performance index '{index_name}' on '{table_name}'.")
+                    except Exception as ex:
+                        print(f"Performance index '{index_name}' skipped: {ex}")
+            except Exception as ex:
+                print(f"Performance index sync check: {ex}")
+
     except Exception as e:
         print(f"Error creating/synchronizing database tables: {e}")
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Date, DateTime, ForeignKey, Boolean, Float
+from sqlalchemy import Column, Integer, String, Text, Date, DateTime, ForeignKey, Boolean, Float, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -7,6 +7,13 @@ from utils.timezone import get_ist_now
 
 class Lead(Base):
     __tablename__ = "leads"
+    __table_args__ = (
+        Index("ix_leads_status_created_at", "status", "created_at"),
+        Index("ix_leads_source_created_at", "source", "created_at"),
+        Index("ix_leads_assigned_created_at", "assigned_to", "created_at"),
+        Index("ix_leads_updated_at", "updated_at"),
+        Index("ix_leads_followup_date", "followup_date"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     first_name = Column(String(50), nullable=True)
@@ -34,7 +41,7 @@ class Lead(Base):
     landing_page = Column(String(255), nullable=True)
 
     source = Column(String(50), index=True, default="Manual", nullable=False)  # META, EXCEL, MANUAL, WEBSITE, REFERRAL
-    status = Column(String(50), index=True, default="NEW", nullable=False)     # NEW, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, CONVERTED, NOT_INTERESTED, LOST
+    status = Column(String(50), index=True, default="NEW", nullable=False)     # NEW, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, WON, CONVERTED_TO_SUPPORT, CONVERTED, NOT_INTERESTED, LOST
     campaign_name = Column(String(100), nullable=True)
     rating = Column(String(50), default="Warm", nullable=True)                  # Hot, Warm, Cold
     priority = Column(String(20), default="MEDIUM", nullable=True)              # High, Medium, Low

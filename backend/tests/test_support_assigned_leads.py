@@ -301,7 +301,12 @@ class TestSupportAssignedLeads(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 403)
 
     def test_09_support_manager_can_reassign_agent(self):
-        """Support Manager can assign/reassign a Support Executive to a lead."""
+        """Support Manager can assign/reassign a Support Executive after conversion."""
+        # Support assignment is intentionally gated on the explicit Sales
+        # conversion status.
+        self.lead_a.status = "CONVERTED_TO_SUPPORT"
+        self.db.commit()
+
         res = assign_support_lead(
             lead_id=self.lead_a.id,
             payload={"assigned_agent_id": self.emp_sup_b.id},
@@ -309,7 +314,8 @@ class TestSupportAssignedLeads(unittest.TestCase):
             current_user=self.sup_mgr_user
         )
         self.assertTrue(res["success"])
-        self.assertEqual(res["assigned_to"], self.emp_sup_b.id)
+        self.assertEqual(res["assigned_agent_id"], self.emp_sup_b.id)
+        self.assertEqual(res["sales_owner_id"], self.lead_a.assigned_to)
 
         # Reassign back to Exec A
         res2 = assign_support_lead(
@@ -319,7 +325,16 @@ class TestSupportAssignedLeads(unittest.TestCase):
             current_user=self.sup_mgr_user
         )
         self.assertTrue(res2["success"])
-        self.assertEqual(res2["assigned_to"], self.emp_sup_a.id)
+        self.assertEqual(res2["assigned_agent_id"], self.emp_sup_a.id)
+
+        # Re-submitting the same Executive is idempotent.
+        res3 = assign_support_lead(
+            lead_id=self.lead_a.id,
+            payload={"assigned_agent_id": self.emp_sup_a.id},
+            db=self.db,
+            current_user=self.sup_mgr_user
+        )
+        self.assertTrue(res3["already_assigned"])
 
     def test_10_support_team_members_list(self):
         """Support team members endpoint returns support employees only."""

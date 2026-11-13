@@ -99,6 +99,7 @@ export default function SupportAssignedLeadsPage() {
 
   // Filters & Pagination
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [sourceFilter, setSourceFilter] = useState('ALL');
@@ -135,6 +136,17 @@ export default function SupportAssignedLeadsPage() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Update one visible row + an open drawer without replacing the table with a
+  // loading state or losing filters/pagination.
+  const patchLeadRow = (leadId, updates) => {
+    setLeads(prev => prev.map(lead => (
+      lead.id === leadId ? { ...lead, ...updates } : lead
+    )));
+    setSelectedLead(prev => (
+      prev && prev.id === leadId ? { ...prev, ...updates } : prev
+    ));
+  };
+
   // Fetch Team Members (for Support Manager / Admin assignment)
   useEffect(() => {
     if (isManager) {
@@ -150,6 +162,12 @@ export default function SupportAssignedLeadsPage() {
     }
   }, [isManager]);
 
+  // Debounce the search box (one request per pause instead of per keystroke).
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   // Fetch Assigned Leads
   const fetchAssignedLeads = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -161,7 +179,7 @@ export default function SupportAssignedLeadsPage() {
         limit: limit
       };
 
-      if (search.trim()) params.search = search.trim();
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
       if (statusFilter !== 'ALL') params.status = statusFilter;
       if (priorityFilter !== 'ALL') params.priority = priorityFilter;
       if (sourceFilter !== 'ALL') params.source = sourceFilter;
@@ -179,7 +197,7 @@ export default function SupportAssignedLeadsPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [page, limit, search, statusFilter, priorityFilter, sourceFilter, agentFilter]);
+  }, [page, limit, debouncedSearch, statusFilter, priorityFilter, sourceFilter, agentFilter]);
 
   useEffect(() => {
     fetchAssignedLeads();
@@ -217,14 +235,10 @@ export default function SupportAssignedLeadsPage() {
       showToast(
         `Customer #${leadId} Support status updated to ${supportStatusLabel(canonicalStatus)}`
       );
-      fetchAssignedLeads(true);
-      if (selectedLead && selectedLead.id === leadId) {
-        setSelectedLead(prev => ({
-          ...prev,
-          support_status: canonicalStatus,
-          onboarding_status: canonicalStatus,
-        }));
-      }
+      patchLeadRow(leadId, {
+        support_status: canonicalStatus,
+        onboarding_status: canonicalStatus,
+      });
     } catch (err) {
       console.error('Failed to update Support status:', err);
       showToast(err.response?.data?.detail || 'Failed to update Support status.');
@@ -242,10 +256,10 @@ export default function SupportAssignedLeadsPage() {
         description: activityDesc.trim()
       });
       showToast('Activity note added successfully.');
+      const activityLeadId = activityModalLead.id;
       setActivityModalLead(null);
       setActivityDesc('');
-      fetchAssignedLeads(true);
-      if (selectedLead && selectedLead.id === activityModalLead.id) {
+      if (selectedLead && selectedLead.id === activityLeadId) {
         fetchLeadActivities(selectedLead.id);
       }
     } catch (err) {
@@ -269,10 +283,14 @@ export default function SupportAssignedLeadsPage() {
         status: 'Pending'
       });
       showToast('Follow-up scheduled successfully.');
+      const followupLeadId = followupModalLead.id;
+      patchLeadRow(followupLeadId, {
+        next_followup_date: followupDate,
+        next_followup_time: followupTime
+      });
       setFollowupModalLead(null);
       setFollowupDate('');
       setFollowupNote('');
-      fetchAssignedLeads(true);
       window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
       console.error('Failed to schedule follow-up:', err);
@@ -282,18 +300,40 @@ export default function SupportAssignedLeadsPage() {
     }
   };
 
-  // Assign Support Agent (Support Manager & Admin)
+  // Assign Support Agent (Support Manager & Admin). The backend additionally
+  // enforces that the deal is explicitly CONVERTED_TO_SUPPORT and that the
+  // target is an active Support Executive.
   const handleSaveAssign = async () => {
     if (!selectedAgentId) return;
+    const salesStatus = normalizeSupportStatus(
+      assignModalLead?.sales_status || assignModalLead?.status || ''
+    );
+    if (salesStatus !== 'CONVERTED_TO_SUPPORT') {
+      showToast('Support assignment is enabled only after the deal is converted to Support.');
+      return;
+    }
     setSavingAssign(true);
     try {
-      await API.put(`/leads/${assignModalLead.id}/support-assign`, {
+      const res = await API.put(`/leads/${assignModalLead.id}/support-assign`, {
         assigned_agent_id: parseInt(selectedAgentId, 10)
       });
-      showToast(`Lead assigned to support executive.`);
+      showToast(
+        res.data?.already_assigned
+          ? 'This Support Executive is already assigned.'
+          : 'Lead assigned to support executive.'
+      );
+      patchLeadRow(assignModalLead.id, {
+        assigned_support_executive_id: res.data?.assigned_agent_id,
+        assigned_support_executive_name: res.data?.assigned_agent_name,
+        support_assigned_to: res.data?.assigned_agent_id,
+        support_assigned_to_name: res.data?.assigned_agent_name,
+        support_assigned_at: res.data?.support_assigned_at,
+        support_manager_id: res.data?.support_manager_id,
+        support_manager_name: res.data?.support_manager_name,
+        support_assignment_status: 'ASSIGNED'
+      });
       setAssignModalLead(null);
       setSelectedAgentId('');
-      fetchAssignedLeads(true);
       window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
       console.error('Failed to assign support agent:', err);
@@ -706,19 +746,29 @@ export default function SupportAssignedLeadsPage() {
                             <CalendarPlus size={15} />
                           </button>
 
-                          {isManager && (
-                            <button
-                              type="button"
-                              className="action-btn-icon"
-                              title="Assign Support Agent"
-                              onClick={() => {
-                                setAssignModalLead(lead);
-                                setSelectedAgentId(lead.assigned_support_executive_id || '');
-                              }}
-                            >
-                              <UserPlus size={15} />
-                            </button>
-                          )}
+                          {isManager && (() => {
+                            const assignmentSalesStatus = normalizeSupportStatus(
+                              lead.sales_status || lead.status || ''
+                            );
+                            const isConverted = assignmentSalesStatus === 'CONVERTED_TO_SUPPORT';
+                            return (
+                              <button
+                                type="button"
+                                className="action-btn-icon"
+                                title={isConverted
+                                  ? 'Assign Support Agent'
+                                  : 'Support assignment is enabled only after the Sales team converts the deal to Support'}
+                                disabled={!isConverted}
+                                onClick={() => {
+                                  if (!isConverted) return;
+                                  setAssignModalLead(lead);
+                                  setSelectedAgentId(lead.assigned_support_executive_id || '');
+                                }}
+                              >
+                                <UserPlus size={15} />
+                              </button>
+                            );
+                          })()}
                         </div>
                       </td>
                     </tr>
@@ -1174,12 +1224,18 @@ export default function SupportAssignedLeadsPage() {
               </button>
             </div>
             <div className="modal-body">
+              {normalizeSupportStatus(assignModalLead.sales_status || assignModalLead.status || '') !== 'CONVERTED_TO_SUPPORT' && (
+                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '0.82rem', fontWeight: 600 }}>
+                  Support assignment is disabled until Sales marks the deal WON and explicitly converts it to Support.
+                </div>
+              )}
               <div className="form-group">
                 <label>Select Support Executive *</label>
                 <select
                   className="form-select"
                   value={selectedAgentId}
                   onChange={(e) => setSelectedAgentId(e.target.value)}
+                  disabled={normalizeSupportStatus(assignModalLead.sales_status || assignModalLead.status || '') !== 'CONVERTED_TO_SUPPORT'}
                 >
                   <option value="">-- Choose Support Executive --</option>
                   {teamMembers.map(tm => (
@@ -1188,6 +1244,9 @@ export default function SupportAssignedLeadsPage() {
                     </option>
                   ))}
                 </select>
+                <small style={{ color: '#64748b', marginTop: '6px', display: 'block' }}>
+                  Only active Support Executives are eligible. Sales employees, Managers/Admins and inactive users are excluded.
+                </small>
               </div>
             </div>
             <div className="modal-footer">
@@ -1203,7 +1262,11 @@ export default function SupportAssignedLeadsPage() {
                 type="button"
                 className="modal-btn-primary"
                 onClick={handleSaveAssign}
-                disabled={savingAssign || !selectedAgentId}
+                disabled={
+                  savingAssign ||
+                  !selectedAgentId ||
+                  normalizeSupportStatus(assignModalLead.sales_status || assignModalLead.status || '') !== 'CONVERTED_TO_SUPPORT'
+                }
               >
                 {savingAssign ? 'Assigning...' : 'Assign Executive'}
               </button>
