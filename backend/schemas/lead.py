@@ -235,6 +235,10 @@ class LeadOut(LeadBase):
     trial_status: Optional[str] = None
     trial_support_employee_id: Optional[int] = None
     trial_support_employee_name: Optional[str] = None
+    # Role of the employee stored in trial_support_employee_id so clients can
+    # label the assignment as "Support Manager" (or "Support" for a legacy
+    # value) without hardcoding role names of their own.
+    trial_support_employee_role: Optional[str] = None
 
     # Re-Inquiry Tracking Fields
     is_reinquiry: bool = False

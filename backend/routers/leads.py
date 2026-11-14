@@ -59,7 +59,8 @@ from services.hierarchy_service import (
     ROLE_SALES_MANAGER,
     ROLE_SALES_EXECUTIVE,
     ROLE_SUPPORT_MANAGER,
-    ROLE_SUPPORT_EXECUTIVE
+    ROLE_SUPPORT_EXECUTIVE,
+    SUPPORT_MANAGER_ROLES
 )
 from services.excel_service import (
     generate_excel_template,
@@ -144,6 +145,31 @@ def is_active_support_executive(emp: Optional[Employee], db: Session) -> bool:
     if not _employee_user_is_active(emp, db):
         return False
     return (emp.department or "").strip().upper() == "SUPPORT"
+
+
+def is_active_support_manager(emp: Optional[Employee], db: Session) -> bool:
+    """Trial Support assignment targets must be active Support Managers.
+
+    The manager is identified through the CRM's canonical role and
+    department mapping (``SUPPORT_MANAGER_ROLES`` plus the Support
+    department), never by matching a name or designation string. The linked
+    login must carry the same manager role so the assignment always points
+    at a real Support Manager account. Support Executives, Admins, Sales
+    employees, other departments and inactive records are rejected.
+    """
+    if not emp:
+        return False
+    if normalize_role(emp.role) != ROLE_SUPPORT_MANAGER:
+        return False
+    if not _employee_user_is_active(emp, db):
+        return False
+    if (emp.department or "").strip().upper() != "SUPPORT":
+        return False
+    if emp.user_id:
+        user = db.query(User).filter(User.id == emp.user_id).first()
+        if user and normalize_role(user.role) != ROLE_SUPPORT_MANAGER:
+            return False
+    return True
 
 
 def _resolve_employee_manager(emp: Employee, db: Session) -> Optional[Employee]:
@@ -452,7 +478,12 @@ def build_lead_out(
     if trial_support_emp and not support_assigned_to:
         support_assigned_to = trial_support_emp.id
         support_assigned_to_name = trial_support_emp.name
-        if not support_manager_id:
+        if normalize_role(trial_support_emp.role) == ROLE_SUPPORT_MANAGER:
+            # The trial contact is itself the Support Manager, so it must not
+            # be projected as somebody else's (e.g. the Admin's) manager.
+            support_manager_id = trial_support_emp.id
+            support_manager_name = trial_support_emp.name
+        elif not support_manager_id:
             trial_support_manager = _resolve_employee_manager(trial_support_emp, db)
             if trial_support_manager:
                 support_manager_id = trial_support_manager.id
@@ -528,6 +559,9 @@ def build_lead_out(
         trial_support_employee_id=trial_support_id,
         trial_support_employee_name=(
             trial_support_emp.name if trial_support_emp else None
+        ),
+        trial_support_employee_role=(
+            trial_support_emp.role if trial_support_emp else None
         ),
         assigned_to=lead.assigned_to,
         assigned_employee_name=lead.assigned_employee.name if lead.assigned_employee else None,
@@ -1431,22 +1465,37 @@ def get_support_assigned_leads(
         
         assigned_exec_id = None
         assigned_exec_name = None
+        trial_assignee = None
         if h and h.assigned_agent_id:
             assigned_exec_id = h.assigned_agent_id
             assigned_exec_name = h.assigned_agent_name
         elif getattr(l, "trial_support_employee_id", None):
-            trial_support_emp = execs_by_id.get(l.trial_support_employee_id)
-            assigned_exec_id = l.trial_support_employee_id
-            assigned_exec_name = (
-                trial_support_emp.name if trial_support_emp else None
-            )
+            trial_assignee = execs_by_id.get(l.trial_support_employee_id)
+            # A trial customer can be owned by a Support Manager. That person
+            # is projected as the assigned manager below, never as a Support
+            # Executive, so the queue never reports an executive who is not
+            # actually assigned.
+            if not (
+                trial_assignee
+                and normalize_role(trial_assignee.role) == ROLE_SUPPORT_MANAGER
+            ):
+                assigned_exec_id = l.trial_support_employee_id
+                assigned_exec_name = (
+                    trial_assignee.name if trial_assignee else None
+                )
         elif l.assigned_employee and (l.assigned_employee.department == 'SUPPORT' or 'SUPPORT' in (l.assigned_employee.role or '')):
             assigned_exec_id = l.assigned_to
             assigned_exec_name = l.assigned_employee.name
 
         assigned_mgr_id = h.support_manager_id if h else None
         assigned_mgr_name = h.support_manager_name if h else None
-        if not assigned_mgr_name and assigned_exec_id:
+        if (
+            trial_assignee
+            and normalize_role(trial_assignee.role) == ROLE_SUPPORT_MANAGER
+        ):
+            assigned_mgr_id = trial_assignee.id
+            assigned_mgr_name = trial_assignee.name
+        elif not assigned_mgr_name and assigned_exec_id:
             exec_emp = l.assigned_employee or execs_by_id.get(assigned_exec_id)
             if exec_emp and exec_emp.manager_id:
                 mgr = managers_by_id.get(exec_emp.manager_id)
@@ -1517,6 +1566,9 @@ def get_support_assigned_leads(
             "is_trial_expired": is_expired,
             "trial_status": trial_status_for(l.status, trial_end),
             "trial_support_employee_id": getattr(l, "trial_support_employee_id", None),
+            "trial_support_employee_role": (
+                trial_assignee.role if trial_assignee else None
+            ),
             "created_at": l.created_at.isoformat() if l.created_at else None,
             "last_updated": l.updated_at.isoformat() if l.updated_at else (l.created_at.isoformat() if l.created_at else None),
             "next_followup_date": l.followup_date.isoformat() if l.followup_date else None,
@@ -1668,14 +1720,16 @@ def get_trial_support_options(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Active Support employees available for a trial customer.
+    Active Support Managers available for a trial customer.
 
     The Set Trial Period modal is used by Sales (the assigned Sales employee
     or an authorised Sales Manager) and by Admin, so this variant of the
     existing Support team-members lookup is reachable for those roles only.
-    Employee ids and names always come from the database - nothing is
-    hardcoded - and the exact same active-Support-Executive validation as the
-    post-conversion assignment is applied.
+    Employee ids, names and roles always come from the database - nothing is
+    hardcoded - and eligibility is decided by the canonical Support Manager
+    role + Support department mapping. Regular Support Executives are
+    deliberately excluded: they belong to the post-conversion Support
+    assignment workflow, which this endpoint does not touch.
     """
     norm_role = normalize_role(current_user.role)
     if norm_role not in [ROLE_ADMIN, ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
@@ -1687,10 +1741,10 @@ def get_trial_support_options(
             ),
         )
 
-    support_emps = db.query(Employee).filter(
+    support_managers = db.query(Employee).filter(
         Employee.department == "SUPPORT",
         Employee.status == "ACTIVE",
-        Employee.role.in_(["SUPPORT_EXECUTIVE", "SUPPORT"])
+        Employee.role.in_(sorted(SUPPORT_MANAGER_ROLES)),
     ).order_by(Employee.name.asc()).all()
 
     return [
@@ -1702,8 +1756,8 @@ def get_trial_support_options(
             "manager_id": e.manager_id,
             "status": e.status
         }
-        for e in support_emps
-        if is_active_support_executive(e, db)
+        for e in support_managers
+        if is_active_support_manager(e, db)
     ]
 
 
@@ -2145,8 +2199,8 @@ def update_lead(
             lead.trial_end_date = lead_in.trial_end_date
 
     # ------------------------------------------------------------------
-    # Trial Support assignment (Set Trial Period modal).
-    # Reuses the same active-Support-Executive validation and the same
+    # Trial Support Manager assignment (Set Trial Period modal).
+    # Reuses the same canonical role/department validation and the same
     # auditable LeadAssignment rows as the post-conversion assignment flow.
     # Sales ownership (Lead.assigned_to) and Support statuses are untouched.
     # ------------------------------------------------------------------
@@ -2157,7 +2211,7 @@ def update_lead(
                 detail=(
                     "Support team cannot change the Trial Support assignment. "
                     "The Sales employee or Sales Manager selects the Support "
-                    "employee responsible for a trial customer."
+                    "Manager responsible for a trial customer."
                 ),
             )
         requested_support_id = lead_in.trial_support_employee_id
@@ -2171,8 +2225,8 @@ def update_lead(
                     performed_by_id=emp_id,
                     activity_type="TRIAL_SUPPORT_UNASSIGNED",
                     description=(
-                        f"{emp_name} cleared the Trial Support assignment "
-                        f"for Lead #{lead.id}."
+                        f"{emp_name} cleared the Trial Support Manager "
+                        f"assignment for Lead #{lead.id}."
                     ),
                 )
         else:
@@ -2183,11 +2237,18 @@ def update_lead(
                 raise HTTPException(
                     status_code=404, detail="Support employee not found"
                 )
-            if not is_active_support_executive(support_emp, db):
+            # A value that is already stored (written before Support Manager
+            # selection was introduced) is kept untouched, so existing trial
+            # assignments are never lost. Only a *new* selection has to be an
+            # active Support Manager.
+            if (
+                support_emp.id != current_support_id
+                and not is_active_support_manager(support_emp, db)
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
-                        "Only an active Support Executive can be assigned to a "
+                        "Only an active Support Manager can be assigned to a "
                         "trial customer."
                     ),
                 )
@@ -2207,7 +2268,7 @@ def update_lead(
                         assigned_at=datetime.utcnow(),
                         assignment_method="TRIAL_SUPPORT",
                         notes=(
-                            f"Assigned to Support Executive {support_emp.name} "
+                            f"Assigned to Support Manager {support_emp.name} "
                             f"for the trial period by {current_user.username}."
                         ),
                     ))
@@ -2217,8 +2278,8 @@ def update_lead(
                     performed_by_id=emp_id,
                     activity_type="TRIAL_SUPPORT_ASSIGNED",
                     description=(
-                        f"Trial Support assigned to {support_emp.name} by "
-                        f"{current_user.username}."
+                        f"Trial Support Manager assigned to {support_emp.name} "
+                        f"by {current_user.username}."
                     ),
                 )
 

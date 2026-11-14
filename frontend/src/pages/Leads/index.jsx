@@ -109,6 +109,16 @@ const trialStatusLabel = (lead) => {
   return '';
 };
 
+// Labels the trial Support assignment using the role that is actually stored
+// on the employee record. New selections are validated as SUPPORT_MANAGER by
+// the backend, while older rows can still hold a Support Executive, so the
+// label follows the stored role instead of assuming one.
+const trialSupportAssigneeLabel = (lead) => {
+  if (!lead?.trial_support_employee_id) return 'Support';
+  const role = String(lead.trial_support_employee_role || '').toUpperCase();
+  return role === 'SUPPORT_MANAGER' ? 'Support Manager' : 'Support';
+};
+
 const STATUS_OPTIONS = [
   'NEW LEAD',
   'RE-INQUIRY',
@@ -351,11 +361,15 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     trial_end_date: addDaysToISO(toISODate(new Date()), DEFAULT_TRIAL_DURATION_DAYS),
     trial_support_employee_id: ''
   });
-  // Active Support employees for the trial dropdown, fetched from the API -
+  // Active Support Managers for the trial dropdown, fetched from the API -
   // never hardcoded ids or names.
   const [trialSupportOptions, setTrialSupportOptions] = useState([]);
   const [trialSupportLoading, setTrialSupportLoading] = useState(false);
   const [trialSupportError, setTrialSupportError] = useState('');
+  // True once the user actually touches the manager dropdown. Until then an
+  // already-stored legacy value (written before Support Manager selection
+  // existed) must be re-saved unchanged instead of being cleared.
+  const [trialSupportTouched, setTrialSupportTouched] = useState(false);
 
   // Explicit Support Assignment modal (opened immediately after conversion or
   // later from a converted lead drawer).
@@ -1000,9 +1014,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
-  // Active Support employees for the Set Trial Period modal. Sales users are
-  // explicitly allowed to read this list by the backend; ids/names always come
-  // from the API (nothing is hardcoded).
+  // Active Support Managers for the Set Trial Period modal. Sales users are
+  // explicitly allowed to read this list by the backend; ids/names/roles always
+  // come from the API (nothing is hardcoded) and regular Support Executives are
+  // excluded by the backend.
   const loadTrialSupportOptions = async () => {
     setTrialSupportLoading(true);
     setTrialSupportError('');
@@ -1010,10 +1025,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       const res = await API.get('/leads/trial/support-options');
       setTrialSupportOptions(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error('Failed to load active Support employees for trial:', err);
+      console.error('Failed to load active Support Managers for trial:', err);
       setTrialSupportOptions([]);
       setTrialSupportError(
-        err.response?.data?.detail || 'Failed to load active Support employees.'
+        err.response?.data?.detail || 'Failed to load active Support Managers.'
       );
     } finally {
       setTrialSupportLoading(false);
@@ -1217,6 +1232,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       });
       setTrialSupportOptions([]);
       setTrialSupportError('');
+      setTrialSupportTouched(false);
       setShowTrialPromptModal(true);
       loadTrialSupportOptions();
       return;
@@ -1384,15 +1400,25 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         trial_start_date: pendingTrialData.trial_start_date,
         trial_end_date: endDate,
         trial_duration_days: duration,
-        // Explicit null clears the assignment (=> "pending"); an id assigns it.
-        trial_support_employee_id: pendingTrialData.trial_support_employee_id
-          ? parseInt(pendingTrialData.trial_support_employee_id, 10)
-          : null
+        // An id assigns the selected Support Manager; an explicit null clears
+        // the assignment (=> "pending"). A stored legacy value that the
+        // manager-only dropdown does not offer is re-saved unchanged while the
+        // user has not touched the field, so an existing Support assignment is
+        // never lost.
+        trial_support_employee_id: (() => {
+          const selected = pendingTrialData.trial_support_employee_id;
+          if (selected) return parseInt(selected, 10);
+          if (!trialSupportTouched && pendingTrialLead?.trial_support_employee_id) {
+            return pendingTrialLead.trial_support_employee_id;
+          }
+          return null;
+        })()
       };
       const res = await API.put(`/leads/${pendingTrialLead.id}`, payload);
-      const supportEmp = trialSupportOptions.find(
-        opt => String(opt.id) === String(payload.trial_support_employee_id)
-      );
+      // Label the assignment from the role the server actually stored, so a
+      // preserved legacy Support employee is never announced as a manager.
+      const assignedRole = res.data?.trial_support_employee_role;
+      const assignedName = res.data?.trial_support_employee_name;
       patchLeadRow(pendingTrialLead.id, {
         status: 'TRIAL',
         trial_start_date: res.data?.trial_start_date || payload.trial_start_date,
@@ -1403,17 +1429,20 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         trial_status: res.data?.trial_status || null,
         trial_support_employee_id: res.data?.trial_support_employee_id ?? null,
         trial_support_employee_name: res.data?.trial_support_employee_name ?? null,
+        trial_support_employee_role: res.data?.trial_support_employee_role ?? null,
         support_assigned_to: res.data?.support_assigned_to ?? null,
-        support_assigned_to_name: res.data?.support_assigned_to_name ?? null
+        support_assigned_to_name: res.data?.support_assigned_to_name ?? null,
+        support_manager_id: res.data?.support_manager_id ?? null,
+        support_manager_name: res.data?.support_manager_name ?? null
       });
       setShowTrialPromptModal(false);
       setPendingTrialLead(null);
       setSuccess(
         `Lead #${pendingTrialLead.id} set to TRIAL for ${duration} day(s) - ` +
         `${formatDateDDMMYYYY(payload.trial_start_date)} to ${formatDateDDMMYYYY(endDate)}. ` +
-        (supportEmp
-          ? `Support assigned to ${supportEmp.name}.`
-          : 'Support assignment is pending.')
+        (assignedName
+          ? `${assignedRole === 'SUPPORT_MANAGER' ? 'Support Manager' : 'Support'} assigned to ${assignedName}.`
+          : 'Support Manager assignment is pending.')
       );
       window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
@@ -2842,7 +2871,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           gap: '5px'
                         }}>
                           <UserCheck size={12} />
-                          Support: {selectedLead.trial_support_employee_name
+                          {trialSupportAssigneeLabel(selectedLead)}: {selectedLead.trial_support_employee_name
                             || selectedLead.support_assigned_to_name
                             || 'Pending assignment'}
                         </div>
@@ -4075,7 +4104,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             <form onSubmit={handleConfirmTrialSchedule}>
               <p style={{ fontSize: '0.84rem', color: '#64748b', marginBottom: '16px', lineHeight: 1.45 }}>
                 Enter the number of trial days - the start and end dates are calculated automatically.
-                Expiry reminders are scheduled for the Sales Manager and the Support Employee at 3 days,
+                Expiry reminders are scheduled for the Sales Manager and the assigned Support Manager at 3 days,
                 1 day, and on the Trial Expiry Date.
               </p>
 
@@ -4148,51 +4177,70 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                   : 'Enter a valid Trial Duration to see the calculated trial period.'}
               </div>
 
-              {/* Assign Support Employee */}
+              {/* Assign Support Manager */}
               <div className="form-group" style={{ marginBottom: '6px' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
-                  Assign Support Employee
+                  Assign Support Manager
                 </label>
-                <select
-                  value={pendingTrialData.trial_support_employee_id}
-                  onChange={(e) => setPendingTrialData({ ...pendingTrialData, trial_support_employee_id: e.target.value })}
-                  disabled={trialSupportLoading}
-                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff' }}
-                >
-                  <option value="">
-                    {trialSupportLoading ? 'Loading active Support employees...' : 'Select Support employee (optional)'}
-                  </option>
-                  {pendingTrialData.trial_support_employee_id &&
-                    !trialSupportOptions.some(opt => String(opt.id) === String(pendingTrialData.trial_support_employee_id)) && (
-                      <option value={pendingTrialData.trial_support_employee_id}>
-                        {pendingTrialLead?.trial_support_employee_name || `Employee #${pendingTrialData.trial_support_employee_id}`}
-                      </option>
-                    )}
-                  {trialSupportOptions.map(member => (
-                    <option key={member.id} value={String(member.id)}>
-                      {member.name} ({(member.role || '').replace(/_/g, ' ')})
-                    </option>
-                  ))}
-                </select>
+                {/* A stored legacy value (a Support Executive saved before this
+                    rule existed) is never rendered as a selectable option -
+                    regular Support Employees must not appear in this list. It
+                    is kept untouched unless the user picks a manager. */}
+                {(() => {
+                  const storedId = pendingTrialData.trial_support_employee_id;
+                  const isListedManager = Boolean(storedId) &&
+                    trialSupportOptions.some(opt => String(opt.id) === String(storedId));
+                  const storedNotListed = Boolean(storedId) &&
+                    !trialSupportLoading &&
+                    trialSupportOptions.length > 0 &&
+                    !isListedManager;
+                  return (
+                    <>
+                      <select
+                        value={storedNotListed ? '' : storedId}
+                        onChange={(e) => {
+                          setTrialSupportTouched(true);
+                          setPendingTrialData({ ...pendingTrialData, trial_support_employee_id: e.target.value });
+                        }}
+                        disabled={trialSupportLoading}
+                        style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff' }}
+                      >
+                        <option value="">
+                          {trialSupportLoading ? 'Loading active Support Managers...' : 'Select Support Manager (optional)'}
+                        </option>
+                        {trialSupportOptions.map(member => (
+                          <option key={member.id} value={String(member.id)}>
+                            {member.name} ({(member.role || '').replace(/_/g, ' ')})
+                          </option>
+                        ))}
+                      </select>
 
-                {trialSupportError && (
-                  <p style={{ fontSize: '0.78rem', color: '#b91c1c', marginTop: '6px' }}>{trialSupportError}</p>
-                )}
-                {!trialSupportLoading && !trialSupportError && trialSupportOptions.length === 0 && (
-                  <p style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '6px' }}>
-                    No active Support employees found.
-                  </p>
-                )}
-                {!pendingTrialData.trial_support_employee_id && (
-                  <p style={{ fontSize: '0.78rem', color: '#b45309', marginTop: '6px', fontWeight: 600 }}>
-                    Support assignment is pending - no Support employee selected.
-                  </p>
-                )}
-                {pendingTrialData.trial_support_employee_id && (
-                  <p style={{ fontSize: '0.78rem', color: '#047857', marginTop: '6px', fontWeight: 600 }}>
-                    Support reminders will also go to this employee.
-                  </p>
-                )}
+                      {storedNotListed && (
+                        <p style={{ fontSize: '0.78rem', color: '#475569', marginTop: '6px', fontWeight: 600 }}>
+                          Currently assigned: {pendingTrialLead?.trial_support_employee_name || `Employee #${storedId}`} - this existing Support assignment is kept unless you select a Support Manager.
+                        </p>
+                      )}
+                      {trialSupportError && (
+                        <p style={{ fontSize: '0.78rem', color: '#b91c1c', marginTop: '6px' }}>{trialSupportError}</p>
+                      )}
+                      {!trialSupportLoading && !trialSupportError && trialSupportOptions.length === 0 && (
+                        <p style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '6px' }}>
+                          No Support Manager available.
+                        </p>
+                      )}
+                      {!storedId && (
+                        <p style={{ fontSize: '0.78rem', color: '#b45309', marginTop: '6px', fontWeight: 600 }}>
+                          Support assignment is pending - no Support Manager selected.
+                        </p>
+                      )}
+                      {isListedManager && (
+                        <p style={{ fontSize: '0.78rem', color: '#047857', marginTop: '6px', fontWeight: 600 }}>
+                          Trial expiry reminders will also go to this Support Manager.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '16px' }}>

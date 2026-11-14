@@ -1177,6 +1177,8 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
 
         # Trial customers handed to a Support employee of this team before the
         # deal is converted are visible to that employee's Support Manager.
+        # When the modal stored this manager directly, the id matches emp.id
+        # (which is part of team_emp_ids), so the assignee always sees it.
         if getattr(lead, "trial_support_employee_id", None) and lead.trial_support_employee_id in team_emp_ids:
             return True
 
@@ -1203,8 +1205,10 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
         if lead.assigned_to == emp.id:
             return True
 
-        # The Support employee selected in the Set Trial Period modal owns the
+        # The Support Manager selected in the Set Trial Period modal owns the
         # trial customer from that moment, before any Won -> Support handoff.
+        # Older rows may still hold a Support Executive id, which is accepted
+        # unchanged so an existing assignment is never orphaned.
         if getattr(lead, "trial_support_employee_id", None) == emp.id:
             return True
 

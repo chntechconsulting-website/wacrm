@@ -7,17 +7,18 @@ Scenarios map 1:1 to the requested acceptance checks:
  1. 7 days  -> end date calculates correctly (start + 7).
  2. 14 days -> end date recalculates immediately on every change.
  3. Start date defaults to the current date (Asia/Kolkata).
- 4. The selected Support employee receives the assignment, is projected in the
-    customer profile and appears on Support Assigned Leads.
- 5. Sales Manager and Support Employee receive the T-3 / T-1 / expiry-day
-    reminders with every required field.
+ 4. The selected Support Manager receives the assignment, is projected in the
+    customer profile and appears on Support Assigned Leads. Regular Support
+    Executives are rejected by the dropdown and by the save validation.
+ 5. Sales Manager and the selected Support Manager receive the T-3 / T-1 /
+    expiry-day reminders with every required field.
  6. Changing the trial duration updates the scheduled reminders without
     duplicating a notification.
  7. Expired / expiring-soon trials are identified correctly and the Sales and
     Support statuses are never overwritten.
  8. Existing Sales (WON) and Support (handoff) workflows stay unaffected.
  9. RBAC: Sales can read the Support dropdown, Support cannot change it, and
-    non-Support employees cannot be assigned.
+    only active Support Managers can be selected.
 10. End-to-end HTTP: PUT /api/leads/{id} with trial_duration_days and GET
     /api/leads/trial/support-options.
 """
@@ -111,6 +112,15 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
             "SUPPORT",
             status="INACTIVE",
             manager_emp=self.support_manager_emp,
+        )
+        # Inactive Support Manager: must never be offered by the dropdown.
+        self.inactive_support_manager_user, self.inactive_support_manager_emp = (
+            self._make_person(
+                "tds_inactive_support_mgr",
+                "SUPPORT_MANAGER",
+                "SUPPORT",
+                status="INACTIVE",
+            )
         )
 
     def tearDown(self):
@@ -250,24 +260,34 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         self.assertEqual(lead.trial_end_date, date(2026, 1, 15))
 
     # ------------------------------------------------------------------
-    # 4. Support employee assignment is saved and displayed
+    # 4. Support Manager assignment is saved and displayed
     # ------------------------------------------------------------------
-    def test_04_support_employee_is_assigned_and_projected(self):
+    def test_04_support_manager_is_assigned_and_projected(self):
         lead = self._make_lead()
-        self._set_trial(lead, 14, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 14, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
 
-        self.assertEqual(lead.trial_support_employee_id, self.support_exec_emp.id)
+        self.assertEqual(lead.trial_support_employee_id, self.support_manager_emp.id)
 
         projection = build_lead_out(lead, self.admin_user, self.db)
-        self.assertEqual(projection.trial_support_employee_id, self.support_exec_emp.id)
+        self.assertEqual(projection.trial_support_employee_id, self.support_manager_emp.id)
         self.assertEqual(
-            projection.trial_support_employee_name, self.support_exec_emp.name
+            projection.trial_support_employee_name, self.support_manager_emp.name
+        )
+        # The stored role lets the UI label the assignment "Support Manager".
+        self.assertEqual(
+            projection.trial_support_employee_role, "SUPPORT_MANAGER"
         )
         # The customer profile "Support Assigned To" projection picks it up.
-        self.assertEqual(projection.support_assigned_to, self.support_exec_emp.id)
+        self.assertEqual(projection.support_assigned_to, self.support_manager_emp.id)
         self.assertEqual(
-            projection.support_assigned_to_name, self.support_exec_emp.name
+            projection.support_assigned_to_name, self.support_manager_emp.name
+        )
+        # The assignee is itself the Support Manager, so it must not be
+        # projected as somebody else's manager (e.g. the Admin's).
+        self.assertEqual(projection.support_manager_id, self.support_manager_emp.id)
+        self.assertEqual(
+            projection.support_manager_name, self.support_manager_emp.name
         )
         # The Sales owner is untouched.
         self.assertEqual(projection.assigned_to, self.sales_exec_emp.id)
@@ -279,15 +299,15 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         methods = [
             (a.assignment_method, a.assigned_to) for a in lead.assignments
         ]
-        self.assertIn(("TRIAL_SUPPORT", self.support_exec_emp.id), methods)
+        self.assertIn(("TRIAL_SUPPORT", self.support_manager_emp.id), methods)
 
-        # Re-submitting the same employee must not duplicate the history row.
-        self._set_trial(lead, 14, support_id=self.support_exec_emp.id)
+        # Re-submitting the same manager must not duplicate the history row.
+        self._set_trial(lead, 14, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
         rows = [
             a for a in lead.assignments
             if a.assignment_method == "TRIAL_SUPPORT"
-            and a.assigned_to == self.support_exec_emp.id
+            and a.assigned_to == self.support_manager_emp.id
         ]
         self.assertEqual(len(rows), 1)
 
@@ -300,32 +320,42 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         projection = build_lead_out(lead, self.admin_user, self.db)
         self.assertIsNone(projection.trial_support_employee_id)
         self.assertIsNone(projection.trial_support_employee_name)
+        self.assertIsNone(projection.trial_support_employee_role)
         self.assertIsNone(projection.support_assigned_to)
 
         # Explicitly clearing an existing assignment returns it to pending.
-        self._set_trial(lead, 7, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 7, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
-        self.assertEqual(lead.trial_support_employee_id, self.support_exec_emp.id)
+        self.assertEqual(lead.trial_support_employee_id, self.support_manager_emp.id)
         self._set_trial(lead, 7, support_id=None)
         self.db.refresh(lead)
         self.assertIsNone(lead.trial_support_employee_id)
 
     # ------------------------------------------------------------------
-    # 9b. Only active Support Executives can be assigned; RBAC on the API
+    # 9b. Only active Support Managers can be assigned; RBAC on the API
     # ------------------------------------------------------------------
-    def test_05_only_active_support_executives_can_be_assigned(self):
+    def test_05_only_active_support_managers_can_be_assigned(self):
         lead = self._make_lead()
 
+        # A Sales employee is not a Support Manager.
         with self.assertRaises(HTTPException) as ctx:
             self._set_trial(lead, 14, support_id=self.sales_exec_emp.id)
         self.assertEqual(ctx.exception.status_code, 400)
 
+        # Regular Support Executives belong to the post-conversion workflow
+        # and must not be selectable for a trial.
         with self.assertRaises(HTTPException) as ctx:
-            self._set_trial(lead, 14, support_id=self.support_manager_emp.id)
+            self._set_trial(lead, 14, support_id=self.support_exec_emp.id)
+        self.assertEqual(ctx.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as ctx:
+            self._set_trial(lead, 14, support_id=self.other_support_exec_emp.id)
         self.assertEqual(ctx.exception.status_code, 400)
 
+        # Inactive Support Manager is rejected as well.
         with self.assertRaises(HTTPException) as ctx:
-            self._set_trial(lead, 14, support_id=self.inactive_support_emp.id)
+            self._set_trial(
+                lead, 14, support_id=self.inactive_support_manager_emp.id
+            )
         self.assertEqual(ctx.exception.status_code, 400)
 
         with self.assertRaises(HTTPException) as ctx:
@@ -334,6 +364,47 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
 
         self.db.refresh(lead)
         self.assertIsNone(lead.trial_support_employee_id)
+
+        # An active Support Manager is accepted.
+        self._set_trial(lead, 14, support_id=self.support_manager_emp.id)
+        self.db.refresh(lead)
+        self.assertEqual(
+            lead.trial_support_employee_id, self.support_manager_emp.id
+        )
+
+    def test_05d_legacy_support_executive_value_is_never_overwritten(self):
+        """A value written before the Support Manager rule still saves as-is."""
+        lead = self._make_lead()
+        lead.trial_support_employee_id = self.support_exec_emp.id
+        self.db.commit()
+
+        # Re-saving the same (legacy) value must not be rejected, otherwise the
+        # modal could no longer be used on that lead at all.
+        self._set_trial(lead, 7, support_id=self.support_exec_emp.id)
+        self.db.refresh(lead)
+        self.assertEqual(lead.trial_support_employee_id, self.support_exec_emp.id)
+
+        projection = build_lead_out(lead, self.admin_user, self.db)
+        self.assertEqual(
+            projection.trial_support_employee_role, "SUPPORT_EXECUTIVE"
+        )
+        self.assertEqual(
+            projection.support_assigned_to, self.support_exec_emp.id
+        )
+
+        # Switching to somebody else still requires an active Support Manager.
+        with self.assertRaises(HTTPException) as ctx:
+            self._set_trial(lead, 7, support_id=self.other_support_exec_emp.id)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.db.refresh(lead)
+        self.assertEqual(lead.trial_support_employee_id, self.support_exec_emp.id)
+
+        # The proper manager selection still works on that lead.
+        self._set_trial(lead, 7, support_id=self.support_manager_emp.id)
+        self.db.refresh(lead)
+        self.assertEqual(
+            lead.trial_support_employee_id, self.support_manager_emp.id
+        )
 
     def test_05b_support_users_cannot_change_the_trial_support_assignment(self):
         lead = self._make_lead()
@@ -351,20 +422,34 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
             db=self.db, current_user=self.sales_exec_user
         )
         ids = [o["id"] for o in options]
-        self.assertIn(self.support_exec_emp.id, ids)
-        self.assertIn(self.other_support_exec_emp.id, ids)
-        # No hardcoded ids/names: only active Support Executives come back.
+
+        # Only the active Support Manager is offered.
+        self.assertIn(self.support_manager_emp.id, ids)
+        # No hardcoded ids/names: regular Support Executives (active or not)
+        # and inactive managers are excluded.
+        self.assertNotIn(self.support_exec_emp.id, ids)
+        self.assertNotIn(self.other_support_exec_emp.id, ids)
         self.assertNotIn(self.inactive_support_emp.id, ids)
-        self.assertNotIn(self.support_manager_emp.id, ids)
+        self.assertNotIn(self.inactive_support_manager_emp.id, ids)
         self.assertNotIn(self.sales_exec_emp.id, ids)
+        self.assertNotIn(self.admin_emp.id, ids)
+
         for option in options:
+            self.assertEqual(option["role"], "SUPPORT_MANAGER")
             self.assertEqual(option["department"], "SUPPORT")
             self.assertEqual(option["status"], "ACTIVE")
 
         options_mgr = get_trial_support_options(
             db=self.db, current_user=self.sales_manager_user
         )
-        self.assertIn(self.support_exec_emp.id, [o["id"] for o in options_mgr])
+        self.assertIn(self.support_manager_emp.id, [o["id"] for o in options_mgr])
+
+        options_admin = get_trial_support_options(
+            db=self.db, current_user=self.admin_user
+        )
+        self.assertEqual(
+            [o["id"] for o in options_admin], [self.support_manager_emp.id]
+        )
 
         with self.assertRaises(HTTPException) as ctx:
             get_trial_support_options(
@@ -377,10 +462,10 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_06_trial_support_assignment_appears_on_support_assigned_leads(self):
         lead = self._make_lead()
-        self._set_trial(lead, 14, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 14, support_id=self.support_manager_emp.id)
 
         # Admin view of the Support queue contains the trial customer with the
-        # selected Support employee.
+        # selected Support Manager.
         page = get_support_assigned_leads(
             search=None,
             status=None,
@@ -394,37 +479,51 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         )
         item = next((i for i in page["items"] if i["lead_id"] == lead.id), None)
         self.assertIsNotNone(item, "Trial customer missing from Support queue")
+        # A Support Manager is reported as the assigned manager, never as a
+        # Support Executive.
+        self.assertIsNone(item["assigned_support_executive_id"])
+        self.assertIsNone(item["assigned_support_executive_name"])
         self.assertEqual(
-            item["assigned_support_executive_id"], self.support_exec_emp.id
+            item["assigned_support_manager_id"], self.support_manager_emp.id
         )
         self.assertEqual(
-            item["assigned_support_executive_name"], self.support_exec_emp.name
+            item["assigned_support_manager_name"], self.support_manager_emp.name
         )
         self.assertEqual(item["trial_status"], "TRIAL_ACTIVE")
+        self.assertEqual(
+            item["trial_support_employee_role"], "SUPPORT_MANAGER"
+        )
 
-        # The assigned Support employee's own queue contains the lead; the
-        # other Support employee's queue does not.
-        authorized = get_support_authorized_lead_ids(self.support_exec_user, self.db)
+        # The assigned Support Manager's own queue contains the lead; a
+        # Support Executive who is not the trial owner does not see it.
+        authorized = get_support_authorized_lead_ids(
+            self.support_manager_user, self.db
+        )
         self.assertIn(lead.id, authorized)
         other_authorized = get_support_authorized_lead_ids(
-            self.other_support_exec_user, self.db
+            self.support_exec_user, self.db
         )
         self.assertNotIn(lead.id, other_authorized)
 
         self.assertTrue(
+            is_support_lead_authorized(lead, self.support_manager_user, self.db)
+        )
+        self.assertFalse(
             is_support_lead_authorized(lead, self.support_exec_user, self.db)
         )
         self.assertFalse(
-            is_support_lead_authorized(lead, self.other_support_exec_user, self.db)
+            is_support_lead_authorized(
+                lead, self.other_support_exec_user, self.db
+            )
         )
 
-        # Filtering the queue by that agent also returns the trial customer.
+        # Filtering the queue by that manager also returns the trial customer.
         filtered = get_support_assigned_leads(
             search=None,
             status=None,
             priority=None,
             source=None,
-            assigned_agent_id=self.support_exec_emp.id,
+            assigned_agent_id=self.support_manager_emp.id,
             skip=0,
             limit=50,
             db=self.db,
@@ -433,12 +532,12 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         self.assertIn(lead.id, [i["lead_id"] for i in filtered["items"]])
 
     # ------------------------------------------------------------------
-    # 5. Reminders for Sales Manager + Support Employee with all fields
+    # 5. Reminders for Sales Manager + Support Manager with all fields
     # ------------------------------------------------------------------
-    def test_07_reminders_reach_sales_manager_and_support_with_all_fields(self):
+    def test_07_reminders_reach_sales_manager_and_support_manager(self):
         lead = self._make_lead()
         self._set_trial(
-            lead, 3, support_id=self.support_exec_emp.id
+            lead, 3, support_id=self.support_manager_emp.id
         )  # end date = today + 3 -> T-3 milestone today
         self.db.refresh(lead)
 
@@ -453,7 +552,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         )
         support_notes = (
             self.db.query(Notification)
-            .filter(Notification.user_id == self.support_exec_user.id)
+            .filter(Notification.user_id == self.support_manager_user.id)
             .all()
         )
         self.assertEqual(len(sales_notes), 1)
@@ -469,8 +568,10 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
             (self._today() + timedelta(days=3)).strftime("%d %b %Y"), message
         )  # trial end date
         self.assertIn("Remaining Trial Days: 3", message)
-        self.assertIn("Assigned Support Employee:", message)
-        self.assertIn(self.support_exec_emp.name, message)
+        # The Support side is addressed by its real role.
+        self.assertIn("Assigned Support Manager:", message)
+        self.assertIn(self.support_manager_emp.name, message)
+        self.assertNotIn("Assigned Support Employee:", message)
 
         support_message = support_notes[0].message
         self.assertIn("Assigned Sales Manager:", support_message)
@@ -480,6 +581,12 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         )
 
         # No notification for anyone else, and no duplicate on a re-run.
+        self.assertEqual(
+            self.db.query(Notification)
+            .filter(Notification.user_id == self.support_exec_user.id)
+            .count(),
+            0,
+        )
         self.assertEqual(
             self.db.query(Notification)
             .filter(Notification.user_id == self.other_support_exec_user.id)
@@ -495,7 +602,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_08_changing_duration_updates_reminders_without_duplicates(self):
         lead = self._make_lead()
-        self._set_trial(lead, 3, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 3, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
 
         first = check_and_send_trial_reminders(self.db, today=self._today())
@@ -510,7 +617,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         # Shorten the trial: end date moves from today+3 to today+1. The T-1
         # milestone for the NEW end date is scheduled; the already-delivered
         # T-3 row for the old end date is kept as history (never re-sent).
-        self._set_trial(lead, 1, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 1, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
         self.assertEqual(lead.trial_end_date, self._today() + timedelta(days=1))
 
@@ -546,7 +653,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
 
         # Reverting to an end date that was already delivered does NOT send a
         # second copy: the delivery key is (lead, user, milestone, end date).
-        self._set_trial(lead, 3, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 3, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
         fourth = check_and_send_trial_reminders(self.db, today=self._today())
         self.assertEqual(fourth["notifications_created"], 0)
@@ -565,7 +672,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         lead = self._make_lead()
         today = self._today()
 
-        self._set_trial(lead, 10, support_id=self.support_exec_emp.id)
+        self._set_trial(lead, 10, support_id=self.support_manager_emp.id)
         self.db.refresh(lead)
         self.assertEqual(trial_status_for("TRIAL", today + timedelta(days=10)), "TRIAL_ACTIVE")
         self.assertEqual(trial_status_for("TRIAL", today + timedelta(days=3)), "TRIAL_EXPIRING_SOON")
@@ -588,7 +695,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         self.assertEqual(projection.trial_days_remaining, -2)
         # Support assignment/status columns are untouched by expiry handling.
         self.assertEqual(
-            projection.support_assigned_to, self.support_exec_emp.id
+            projection.support_assigned_to, self.support_manager_emp.id
         )
         self.assertEqual(projection.support_assignment_status, "AWAITING_CONVERSION")
 
@@ -620,7 +727,7 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         from models.workflow import SupportHandoff
 
         trial_lead = self._make_lead()
-        self._set_trial(trial_lead, 14, support_id=self.support_exec_emp.id)
+        self._set_trial(trial_lead, 14, support_id=self.support_manager_emp.id)
         trial_lead.status = "CONVERTED_TO_SUPPORT"
         customer = Customer(
             company_name=trial_lead.company,
@@ -650,9 +757,10 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         self.assertEqual(
             projection.support_assigned_to_name, self.other_support_exec_emp.name
         )
-        # The trial Support employee is still reported on its own field.
+        # The trial Support Manager is still reported on its own field even
+        # though the handoff executive now owns the converted customer.
         self.assertEqual(
-            projection.trial_support_employee_id, self.support_exec_emp.id
+            projection.trial_support_employee_id, self.support_manager_emp.id
         )
         self.assertEqual(projection.trial_status, "TRIAL_CONVERTED")
 
@@ -701,6 +809,8 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
             username="http_admin", phone="9800000001", department="ADMINISTRATION",
             role="ADMIN", status="ACTIVE",
         ))
+        # Regular Support Executive: must never be offered by the dropdown and
+        # must be rejected by the save validation.
         seed.add(Employee(
             user_id=2, name="HTTP Support Exec", email="http_support@example.test",
             username="http_support", phone="9800000002", department="SUPPORT",
@@ -719,6 +829,26 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
             id=3, username="http_inactive", hashed_password="x",
             role="SUPPORT_EXECUTIVE", department="SUPPORT", is_active=False,
         ))
+        # The only eligible trial assignment target.
+        seed.add(Employee(
+            user_id=4, name="HTTP Support Manager", email="http_sup_mgr@example.test",
+            username="http_sup_mgr", phone="9800000004", department="SUPPORT",
+            role="SUPPORT_MANAGER", status="ACTIVE",
+        ))
+        seed.add(User(
+            id=4, username="http_sup_mgr", hashed_password="x",
+            role="SUPPORT_MANAGER", department="SUPPORT", is_active=True,
+        ))
+        # Inactive Support Manager: never offered.
+        seed.add(Employee(
+            user_id=5, name="HTTP Inactive Mgr", email="http_inactive_mgr@example.test",
+            username="http_inactive_mgr", phone="9800000005", department="SUPPORT",
+            role="SUPPORT_MANAGER", status="INACTIVE",
+        ))
+        seed.add(User(
+            id=5, username="http_inactive_mgr", hashed_password="x",
+            role="SUPPORT_MANAGER", department="SUPPORT", is_active=False,
+        ))
         lead = Lead(
             name="HTTP Trial Customer", phone="9811112222",
             email="http_trial@example.com", company="HTTP Trial Co",
@@ -727,7 +857,10 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         seed.add(lead)
         seed.commit()
         lead_id = lead.id
-        support_id = seed.query(Employee).filter(
+        manager_id = seed.query(Employee).filter(
+            Employee.username == "http_sup_mgr"
+        ).one().id
+        exec_id = seed.query(Employee).filter(
             Employee.username == "http_support"
         ).one().id
         seed.close()
@@ -735,21 +868,27 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         client = TestClient(app)
         today = get_ist_now().date()
 
-        # 1. The route resolves as its own path (not /{lead_id}).
+        # 1. The route resolves as its own path (not /{lead_id}) and returns
+        #    only the active Support Manager.
         resp = client.get("/api/leads/trial/support-options")
         self.assertEqual(resp.status_code, 200, resp.text)
         options = resp.json()
         self.assertEqual(len(options), 1)
-        self.assertEqual(options[0]["name"], "HTTP Support Exec")
-        self.assertNotIn("HTTP Inactive Support", [o["name"] for o in options])
+        self.assertEqual(options[0]["id"], manager_id)
+        self.assertEqual(options[0]["name"], "HTTP Support Manager")
+        self.assertEqual(options[0]["role"], "SUPPORT_MANAGER")
+        option_names = [o["name"] for o in options]
+        self.assertNotIn("HTTP Support Exec", option_names)
+        self.assertNotIn("HTTP Inactive Support", option_names)
+        self.assertNotIn("HTTP Inactive Mgr", option_names)
 
-        # 2. 7 days -> start today, end today + 7, Support employee assigned.
+        # 2. 7 days -> start today, end today + 7, Support Manager assigned.
         resp = client.put(
             f"/api/leads/{lead_id}",
             json={
                 "status": "TRIAL",
                 "trial_duration_days": 7,
-                "trial_support_employee_id": support_id,
+                "trial_support_employee_id": manager_id,
             },
         )
         self.assertEqual(resp.status_code, 200, resp.text)
@@ -761,10 +900,40 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         )
         self.assertEqual(body["trial_duration_days"], 7)
         self.assertEqual(body["trial_status"], "TRIAL_ACTIVE")
-        self.assertEqual(body["trial_support_employee_id"], support_id)
-        self.assertEqual(body["trial_support_employee_name"], "HTTP Support Exec")
-        self.assertEqual(body["support_assigned_to"], support_id)
-        self.assertEqual(body["support_assigned_to_name"], "HTTP Support Exec")
+        self.assertEqual(body["trial_support_employee_id"], manager_id)
+        self.assertEqual(body["trial_support_employee_name"], "HTTP Support Manager")
+        self.assertEqual(
+            body["trial_support_employee_role"], "SUPPORT_MANAGER"
+        )
+        self.assertEqual(body["support_assigned_to"], manager_id)
+        self.assertEqual(
+            body["support_assigned_to_name"], "HTTP Support Manager"
+        )
+        self.assertEqual(body["support_manager_id"], manager_id)
+        self.assertEqual(
+            body["support_manager_name"], "HTTP Support Manager"
+        )
+
+        # A regular Support Executive must be rejected by the save.
+        resp = client.put(
+            f"/api/leads/{lead_id}",
+            json={
+                "status": "TRIAL",
+                "trial_duration_days": 7,
+                "trial_support_employee_id": exec_id,
+            },
+        )
+        self.assertEqual(resp.status_code, 400, resp.text)
+        self.assertIn("Support Manager", resp.json()["detail"])
+
+        # The previously stored manager assignment is untouched by the 400.
+        resp = client.get(f"/api/leads/{lead_id}")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["trial_support_employee_id"], manager_id)
+        self.assertEqual(
+            body["trial_support_employee_role"], "SUPPORT_MANAGER"
+        )
 
         # 3 days -> Expiring Soon is reported automatically.
         resp = client.put(
@@ -790,8 +959,8 @@ class TrialDurationAndSupportAssignmentTests(unittest.TestCase):
         )
         self.assertEqual(body["trial_duration_days"], 14)
         self.assertEqual(body["trial_status"], "TRIAL_ACTIVE")
-        # The Support assignment from the previous save is preserved.
-        self.assertEqual(body["trial_support_employee_id"], support_id)
+        # The Support Manager assignment from the previous save is preserved.
+        self.assertEqual(body["trial_support_employee_id"], manager_id)
 
         # 4. Invalid duration -> 400.
         resp = client.put(

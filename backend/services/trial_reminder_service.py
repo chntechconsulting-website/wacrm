@@ -1,9 +1,14 @@
-"""Trial expiry reminders for Sales Managers and assigned Support employees.
+"""Trial expiry reminders for Sales Managers and the assigned Support Manager.
 
 The scheduler is deliberately independent from page activity. It re-checks the
 database periodically, while :class:`TrialReminderDelivery` guarantees that a
 given lead/user/milestone/trial-end-date combination is delivered at most once
 even across restarts or multiple application workers.
+
+Recipients come from the existing assignment chain (Support handoff, legacy
+MANUAL_SUPPORT row, then the Support Manager selected in the Set Trial Period
+modal), so changing a trial's duration or expiry re-targets the reminders
+without touching the post-conversion Support workflow.
 
 All date calculations use Asia/Kolkata through ``get_ist_now``. Trial columns
 are additive and nullable, so existing production rows are never changed.
@@ -26,6 +31,7 @@ from models.user import User
 from models.workflow import SupportHandoff
 from services.hierarchy_service import (
     ROLE_SALES_MANAGER,
+    ROLE_SUPPORT_MANAGER,
     normalize_role,
 )
 from utils.lead_status import is_trial_status
@@ -191,11 +197,13 @@ def _sales_recipient(db: Session, lead: Lead) -> Optional[Dict[str, Any]]:
 
 
 def _support_recipient(db: Session, lead: Lead) -> Optional[Dict[str, Any]]:
-    """Resolve the assigned Support employee from the latest handoff.
+    """Resolve the assigned Support contact for the reminder.
 
-    Legacy ``MANUAL_SUPPORT`` assignment rows are used as a read-only fallback.
-    Support Managers are not substituted for an unassigned employee because the
-    requirement is to notify the employee who owns the follow-up.
+    Order: Support handoff agent, legacy ``MANUAL_SUPPORT`` assignment row
+    (read-only fallback), then the Support Manager selected in the Set Trial
+    Period modal. A Support Manager is never substituted for an *unassigned*
+    contact - only an explicitly selected manager is notified - because the
+    requirement is to notify whoever actually owns the follow-up.
     """
     handoff = (
         db.query(SupportHandoff)
@@ -230,7 +238,7 @@ def _support_recipient(db: Session, lead: Lead) -> Optional[Dict[str, Any]]:
             )
 
     if not support_employee and getattr(lead, "trial_support_employee_id", None):
-        # Support owner selected in the Set Trial Period modal (before any
+        # Support Manager selected in the Set Trial Period modal (before any
         # post-conversion handoff exists).
         support_employee = (
             db.query(Employee)
@@ -256,6 +264,9 @@ def _support_recipient(db: Session, lead: Lead) -> Optional[Dict[str, Any]]:
         "user": support_user,
         "role": ROLE_SUPPORT,
         "name": support_employee.name or support_user.username,
+        # Canonical role of the assigned employee, used to address the Sales
+        # message as "Support Manager" or "Support Employee" correctly.
+        "employee_role": support_employee.role,
     }
 
 
@@ -277,14 +288,17 @@ def build_trial_reminder_message(
     today: date,
     sales_manager_name: Optional[str],
     support_employee_name: Optional[str],
+    support_assignee_label: str = "Assigned Support Employee",
 ) -> str:
     """Build the role-appropriate Trial reminder body.
 
     The first paragraph matches the wording requested for the 3-day/1-day and
     expiry-day notices. The structured lines underneath include every required
     field: lead, company, trial start date, trial end date, remaining days and
-    the opposite assignee. The direct lead link is stored separately on
-    ``Notification``.
+    the opposite assignee. ``support_assignee_label`` lets the caller address
+    the Support side as a Support Manager or a Support Employee based on the
+    stored role instead of assuming one. The direct lead link is stored
+    separately on ``Notification``.
     """
     lead_name = _lead_display_name(lead)
     company_name = _company_display_name(lead)
@@ -311,7 +325,7 @@ def build_trial_reminder_message(
                 "for conversion."
             )
         opposite_line = (
-            f"Assigned Support Employee: {support_employee_name or 'Not assigned'}"
+            f"{support_assignee_label}: {support_employee_name or 'Not assigned'}"
         )
     else:
         if days_remaining == 0:
@@ -431,6 +445,21 @@ def check_and_send_trial_reminders(
             (r["name"] for r in recipients if r["role"] == ROLE_SUPPORT),
             None,
         )
+        support_role = next(
+            (
+                r.get("employee_role")
+                for r in recipients
+                if r["role"] == ROLE_SUPPORT
+            ),
+            None,
+        )
+        # Address the Support side by its real role: the Set Trial Period
+        # modal stores a Support Manager, older rows may store an Executive.
+        support_assignee_label = (
+            "Assigned Support Manager"
+            if normalize_role(support_role) == ROLE_SUPPORT_MANAGER
+            else "Assigned Support Employee"
+        )
 
         for recipient in recipients:
             user = recipient["user"]
@@ -457,6 +486,7 @@ def check_and_send_trial_reminders(
                 today=today,
                 sales_manager_name=sales_name,
                 support_employee_name=support_name,
+                support_assignee_label=support_assignee_label,
             )
             title = SALES_TITLE if role == ROLE_SALES else SUPPORT_TITLE
             link_url = (

@@ -677,7 +677,9 @@ export default function SupportAssignedLeadsPage() {
                             <UserCheck size={12} color="#2563eb" />
                             {lead.assigned_support_executive_name
                               || (lead.trial_status && !lead.support_handoff_id
-                                ? 'Pending assignment'
+                                ? (lead.assigned_support_manager_name
+                                    ? `Support Manager: ${lead.assigned_support_manager_name}`
+                                    : 'Pending assignment')
                                 : 'Unassigned Agent')}
                           </span>
                           {lead.assigned_support_manager_name && (
