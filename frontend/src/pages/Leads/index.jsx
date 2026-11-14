@@ -60,8 +60,9 @@ import {
 // ---------------------------------------------------------------------------
 // Trial date helpers. Everything is built from the *local* calendar so "today"
 // is never shifted by a day for IST users (Date.toISOString() is UTC-based).
-// The end date is always derived from start + duration - the user never
-// calculates it manually.
+// Date and duration stay in sync: a new duration recalculates the end date, a
+// new start date re-anchors the same duration, and a new end date recalculates
+// the duration. All three are editable in the Set Trial Period modal.
 // ---------------------------------------------------------------------------
 const toISODate = (date) => {
   const d = date instanceof Date ? date : new Date(date);
@@ -1374,13 +1375,43 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     });
   };
 
+  // Editable start date: re-anchors the current duration on the new day.
+  const handleTrialStartChange = (e) => {
+    const start = e.target.value;
+    setPendingTrialData(prev => {
+      const days = parseInt(prev.trial_duration_days, 10);
+      const end = start && Number.isFinite(days) && days >= 1
+        ? addDaysToISO(start, days)
+        : '';
+      return { ...prev, trial_start_date: start, trial_end_date: end };
+    });
+  };
+
+  // Editable end date: recalculates the duration from start -> end. A date that
+  // is not at least one day after the start is kept in the field so the submit
+  // validation can explain the problem instead of silently overwriting it.
+  const handleTrialEndChange = (e) => {
+    const end = e.target.value;
+    setPendingTrialData(prev => {
+      if (!end) return { ...prev, trial_end_date: '' };
+      const days = diffDaysISO(prev.trial_start_date, end);
+      return {
+        ...prev,
+        trial_end_date: end,
+        trial_duration_days: Number.isFinite(days) && days >= 1
+          ? days
+          : prev.trial_duration_days
+      };
+    });
+  };
+
   const handleConfirmTrialSchedule = async (e) => {
     if (e) e.preventDefault();
     if (!pendingTrialLead) return;
 
     const duration = parseInt(pendingTrialData.trial_duration_days, 10);
-    if (!Number.isFinite(duration) || duration < 1) {
-      setError('Please enter a Trial Duration of at least 1 day.');
+    if (!Number.isFinite(duration) || duration < 1 || duration > 365) {
+      setError('Trial Duration must be between 1 and 365 days.');
       return;
     }
     if (!pendingTrialData.trial_start_date) {
@@ -1390,6 +1421,16 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     const endDate = addDaysToISO(pendingTrialData.trial_start_date, duration);
     if (!endDate) {
       setError('Could not calculate the Trial End Date from the Trial Duration.');
+      return;
+    }
+    // The editable dates and the duration must agree; if they do not, the end
+    // date is before/equal to the start date.
+    if (!pendingTrialData.trial_end_date) {
+      setError('Trial End Date is missing.');
+      return;
+    }
+    if (pendingTrialData.trial_end_date !== endDate) {
+      setError('Trial End Date must be at least 1 day after the Trial Start Date.');
       return;
     }
 
@@ -4103,12 +4144,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
             <form onSubmit={handleConfirmTrialSchedule}>
               <p style={{ fontSize: '0.84rem', color: '#64748b', marginBottom: '16px', lineHeight: 1.45 }}>
-                Enter the number of trial days - the start and end dates are calculated automatically.
+                Set the trial duration or pick the start and end dates directly - the three fields stay in sync.
                 Expiry reminders are scheduled for the Sales Manager and the assigned Support Manager at 3 days,
                 1 day, and on the Trial Expiry Date.
               </p>
 
-              {/* Trial Duration (days) - the only manual input */}
+              {/* Trial Duration (days) */}
               <div className="form-group" style={{ marginBottom: '14px' }}>
                 <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
                   Trial Duration (days) *
@@ -4127,36 +4168,34 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 />
               </div>
 
-              {/* Auto-calculated dates */}
+              {/* Editable trial dates */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                 <div className="form-group">
                   <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
-                    Trial Start Date (auto)
+                    Trial Start Date *
                   </label>
-                  <div style={{
-                    padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1',
-                    backgroundColor: '#f8fafc', color: '#0f172a', fontWeight: 600,
-                    fontSize: '0.9rem', minHeight: '20px'
-                  }}>
-                    {pendingTrialData.trial_start_date
-                      ? formatDateDDMMYYYY(pendingTrialData.trial_start_date)
-                      : '—'}
-                  </div>
+                  <input
+                    type="date"
+                    required
+                    value={pendingTrialData.trial_start_date || ''}
+                    onChange={handleTrialStartChange}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                  />
                 </div>
 
                 <div className="form-group">
                   <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
-                    Trial End Date (auto)
+                    Trial End Date *
                   </label>
-                  <div style={{
-                    padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1',
-                    backgroundColor: '#f8fafc', color: '#0f172a', fontWeight: 600,
-                    fontSize: '0.9rem', minHeight: '20px'
-                  }}>
-                    {pendingTrialData.trial_end_date
-                      ? formatDateDDMMYYYY(pendingTrialData.trial_end_date)
-                      : '—'}
-                  </div>
+                  <input
+                    type="date"
+                    required
+                    min={pendingTrialData.trial_start_date ? addDaysToISO(pendingTrialData.trial_start_date, 1) : undefined}
+                    max={pendingTrialData.trial_start_date ? addDaysToISO(pendingTrialData.trial_start_date, 365) : undefined}
+                    value={pendingTrialData.trial_end_date || ''}
+                    onChange={handleTrialEndChange}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                  />
                 </div>
               </div>
 
