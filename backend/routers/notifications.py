@@ -49,6 +49,22 @@ def get_notifications(
     notifications = query.order_by(desc(Notification.created_at), desc(Notification.id)).limit(limit).all()
     return notifications
 
+@router.get("/unread-count")
+def get_unread_notification_count(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Lightweight unread count for the notification bell."""
+    count = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == current_user.id,
+            Notification.is_read == False
+        )
+        .count()
+    )
+    return {"unread_count": count, "count": count}
+
 @router.put("/{notification_id}/read", response_model=NotificationOut)
 def toggle_notification_read(
     notification_id: int,
@@ -130,3 +146,19 @@ def trigger_sync_notifications(
     """
     sync_notifications_from_real_data(db, user_id=current_user.id)
     return {"message": "Notifications synced successfully from CRM database"}
+
+@router.post("/trial-reminders/run")
+def trigger_trial_reminders_run(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Trigger the Trial Expiry Reminders sweep.
+    Idempotent: deliveries are recorded in trial_reminder_deliveries so duplicates are skipped.
+    """
+    from services.trial_reminder_service import check_and_send_trial_reminders
+    res = check_and_send_trial_reminders(db)
+    return {
+        "message": "Trial reminders processed successfully",
+        "result": res
+    }

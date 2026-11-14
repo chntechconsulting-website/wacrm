@@ -7,7 +7,7 @@ import DooctiInAppDialer from './Dialer/DooctiInAppDialer';
 import CallCompletionDispositionModal from './Dialer/CallCompletionDispositionModal';
 import FollowupReminderCard from './FollowupReminder/FollowupReminderCard';
 import IncomingCallSupportPanel from './Support/IncomingCallSupportPanel';
-import { Menu, Building2, PhoneIncoming, X, ArrowRight } from 'lucide-react';
+import { Menu, Building2, PhoneIncoming, X, ArrowRight, Bell } from 'lucide-react';
 import API from '../services/api';
 
 const Layout = () => {
@@ -22,6 +22,24 @@ const Layout = () => {
   const location = useLocation();
   const { user } = useAuth();
   const isMetaReviewer = user?.role === 'META_REVIEWER';
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+
+  useEffect(() => {
+    if (isMetaReviewer) return undefined;
+    let isMounted = true;
+    const fetchUnread = async () => {
+      try {
+        const res = await API.get('/notifications/unread-count');
+        if (isMounted) setUnreadNotifCount(res.data?.unread_count || 0);
+      } catch (e) {}
+    };
+    fetchUnread();
+    window.addEventListener('notificationUpdated', fetchUnread);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('notificationUpdated', fetchUnread);
+    };
+  }, [isMetaReviewer]);
 
   // Keep the polling closure current without restarting the interval whenever
   // an alert opens/closes.
@@ -444,6 +462,50 @@ const Layout = () => {
               }}
             />
           </div>
+          {!isMetaReviewer && (
+            <button
+              type="button"
+              onClick={() => navigate('/notifications')}
+              style={{
+                position: 'relative',
+                background: '#ffffff',
+                border: '1px solid #e2e8f0',
+                color: '#475569',
+                width: '38px',
+                height: '38px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer'
+              }}
+              aria-label="Notifications"
+              title={unreadNotifCount ? `${unreadNotifCount} unread notifications` : 'Notifications'}
+            >
+              <Bell size={18} />
+              {unreadNotifCount > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: '-4px',
+                  right: '-4px',
+                  backgroundColor: '#ef4444',
+                  color: '#ffffff',
+                  fontSize: '0.65rem',
+                  fontWeight: '800',
+                  minWidth: '16px',
+                  height: '16px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 4px',
+                  lineHeight: 1
+                }}>
+                  {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
+                </span>
+              )}
+            </button>
+          )}
         </header>
 
         {/* Dynamic Route Content */}

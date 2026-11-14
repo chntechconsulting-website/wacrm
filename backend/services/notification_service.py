@@ -1,13 +1,15 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
+
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+
+from models.call_log import CallLog
+from models.followup import Followup
+from models.lead import Lead
 from models.notification import Notification
 from models.user import User
-from models.lead import Lead, LeadAssignment
-from models.followup import Followup
-from models.call_log import CallLog
-from models.activity import LeadActivity
+
 
 def create_notification(
     db: Session,
@@ -34,22 +36,52 @@ def create_notification(
     db.refresh(notif)
     return notif
 
+
+def _admin_user_ids(db: Session):
+    return {
+        user.id
+        for user in db.query(User).filter(
+            func.upper(User.role) == "ADMIN",
+            User.is_active == True,
+        ).all()
+    }
+
+
+def _scoped_targets(db: Session, requested_user_id: Optional[int], *user_ids):
+    """Return only targets relevant to this request.
+
+    ``user_id`` is supplied by the notification endpoint so one user's page load
+    must never create notifications for somebody else. Admin users remain the
+    fallback owner for events that have no directly assigned employee.
+    """
+    targets = set(_admin_user_ids(db))
+    for user_id in user_ids:
+        if user_id:
+            targets.add(int(user_id))
+    if requested_user_id is not None:
+        targets = {uid for uid in targets if uid == requested_user_id}
+    return targets
+
+
+def _notification_exists(db: Session, user_id: int, title: str, message: str) -> bool:
+    return bool(
+        db.query(Notification.id).filter(
+            Notification.user_id == user_id,
+            Notification.title == title,
+            Notification.message == message,
+        ).first()
+    )
+
+
 def sync_notifications_from_real_data(db: Session, user_id: Optional[int] = None):
     """
     Synchronizes real CRM database events (leads, followups, calls, conversions)
     into the notifications table for all users or a specific user.
-    Avoids duplicate entries by checking title/message.
+
+    Recipients are scoped to the employee who owns the event (plus Admins as the
+    fallback). A Sales user never receives another Sales owner's lead, and a
+    Support employee only receives notifications for their own assignments.
     """
-    users = db.query(User).all()
-    if user_id:
-        users = [u for u in users if u.id == user_id]
-
-    if not users:
-        return
-
-    admin_users = [u for u in users if (u.role or "").upper() == "ADMIN"]
-    all_target_users = users
-
     # 1. Sync from Real Leads (Most recent 15 leads)
     recent_leads = db.query(Lead).order_by(desc(Lead.id)).limit(15).all()
     for lead in recent_leads:
@@ -62,29 +94,22 @@ def sync_notifications_from_real_data(db: Session, user_id: Optional[int] = None
         if lead.company:
             msg += f" Company: {lead.company}."
 
-        notif_type = "LEAD"
-        link = f"/leads"
+        assigned_user_id = None
+        if lead.assigned_employee and lead.assigned_employee.user_id:
+            assigned_user_id = lead.assigned_employee.user_id
 
-        # Check if already exists
-        exists = db.query(Notification).filter(
-            Notification.title == title,
-            Notification.message == msg
-        ).first()
-
-        if not exists:
-            # Notify admins and assigned user if any
-            targets = admin_users if admin_users else all_target_users
-            for target in targets:
-                notif = Notification(
-                    user_id=target.id,
-                    title=title,
-                    message=msg,
-                    notification_type=notif_type,
-                    link_url=link,
-                    is_read=False,
-                    created_at=lead.created_at or datetime.utcnow()
-                )
-                db.add(notif)
+        for target_id in _scoped_targets(db, user_id, assigned_user_id):
+            if _notification_exists(db, target_id, title, msg):
+                continue
+            db.add(Notification(
+                user_id=target_id,
+                title=title,
+                message=msg,
+                notification_type="LEAD",
+                link_url="/leads",
+                is_read=False,
+                created_at=lead.created_at or datetime.utcnow(),
+            ))
 
     # 2. Sync from Real Scheduled Follow-ups
     recent_followups = db.query(Followup).order_by(desc(Followup.id)).limit(10).all()
@@ -99,25 +124,22 @@ def sync_notifications_from_real_data(db: Session, user_id: Optional[int] = None
         if f.notes:
             msg += f" Notes: {f.notes[:80]}"
 
-        exists = db.query(Notification).filter(
-            Notification.title == title,
-            Notification.message == msg
-        ).first()
+        assigned_user_id = None
+        if f.assigned_employee and f.assigned_employee.user_id:
+            assigned_user_id = f.assigned_employee.user_id
 
-        if not exists:
-            # Notify assigned employee or admins
-            target_id = f.assigned_to or (admin_users[0].id if admin_users else users[0].id)
-            # Find user for employee
-            notif = Notification(
-                user_id=target_id if any(u.id == target_id for u in users) else users[0].id,
+        for target_id in _scoped_targets(db, user_id, assigned_user_id):
+            if _notification_exists(db, target_id, title, msg):
+                continue
+            db.add(Notification(
+                user_id=target_id,
                 title=title,
                 message=msg,
                 notification_type="FOLLOWUP",
                 link_url="/communication/followups",
                 is_read=False,
-                created_at=f.created_at or datetime.utcnow()
-            )
-            db.add(notif)
+                created_at=f.created_at or datetime.utcnow(),
+            ))
 
     # 3. Sync from Real Calls (Call Logs)
     recent_calls = db.query(CallLog).order_by(desc(CallLog.id)).limit(10).all()
@@ -134,23 +156,22 @@ def sync_notifications_from_real_data(db: Session, user_id: Optional[int] = None
         if call.notes:
             msg += f" Notes: {call.notes[:80]}"
 
-        exists = db.query(Notification).filter(
-            Notification.title == title,
-            Notification.message == msg
-        ).first()
+        employee_user_id = None
+        if call.employee and call.employee.user_id:
+            employee_user_id = call.employee.user_id
 
-        if not exists:
-            target_user = admin_users[0] if admin_users else users[0]
-            notif = Notification(
-                user_id=target_user.id,
+        for target_id in _scoped_targets(db, user_id, employee_user_id):
+            if _notification_exists(db, target_id, title, msg):
+                continue
+            db.add(Notification(
+                user_id=target_id,
                 title=title,
                 message=msg,
                 notification_type="CALL",
                 link_url="/communication/calls",
                 is_read=False,
-                created_at=call.created_at or datetime.utcnow()
-            )
-            db.add(notif)
+                created_at=call.created_at or datetime.utcnow(),
+            ))
 
     # 4. Sync from Real Conversions (Leads with CONVERTED / WON)
     converted_leads = db.query(Lead).filter(Lead.status.in_([
@@ -161,22 +182,21 @@ def sync_notifications_from_real_data(db: Session, user_id: Optional[int] = None
         title = f"Lead Converted: {lead_name}"
         msg = f"{lead_name} was successfully converted to customer status ({lead.status})."
 
-        exists = db.query(Notification).filter(
-            Notification.title == title,
-            Notification.message == msg
-        ).first()
+        assigned_user_id = None
+        if lead.assigned_employee and lead.assigned_employee.user_id:
+            assigned_user_id = lead.assigned_employee.user_id
 
-        if not exists:
-            for admin in (admin_users if admin_users else users):
-                notif = Notification(
-                    user_id=admin.id,
-                    title=title,
-                    message=msg,
-                    notification_type="CONVERSION",
-                    link_url="/customers",
-                    is_read=False,
-                    created_at=lead.updated_at or lead.created_at or datetime.utcnow()
-                )
-                db.add(notif)
+        for target_id in _scoped_targets(db, user_id, assigned_user_id):
+            if _notification_exists(db, target_id, title, msg):
+                continue
+            db.add(Notification(
+                user_id=target_id,
+                title=title,
+                message=msg,
+                notification_type="CONVERSION",
+                link_url="/customers",
+                is_read=False,
+                created_at=lead.updated_at or lead.created_at or datetime.utcnow(),
+            ))
 
     db.commit()

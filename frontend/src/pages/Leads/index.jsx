@@ -57,6 +57,58 @@ import {
   formatLeadReceivedFull
 } from '../../utils/dateUtils';
 
+// ---------------------------------------------------------------------------
+// Trial date helpers. Everything is built from the *local* calendar so "today"
+// is never shifted by a day for IST users (Date.toISOString() is UTC-based).
+// The end date is always derived from start + duration - the user never
+// calculates it manually.
+// ---------------------------------------------------------------------------
+const toISODate = (date) => {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const addDaysToISO = (isoDate, days) => {
+  if (!isoDate || !Number.isFinite(days)) return '';
+  const parts = String(isoDate).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => Number.isNaN(n))) return '';
+  const d = new Date(parts[0], parts[1] - 1, parts[2] + days);
+  return toISODate(d);
+};
+
+const diffDaysISO = (fromISO, toISO) => {
+  if (!fromISO || !toISO) return NaN;
+  const [fy, fm, fd] = String(fromISO).split('-').map(Number);
+  const [ty, tm, td] = String(toISO).split('-').map(Number);
+  if ([fy, fm, fd, ty, tm, td].some(n => Number.isNaN(n))) return NaN;
+  const start = new Date(fy, fm - 1, fd);
+  const end = new Date(ty, tm - 1, td);
+  return Math.round((end - start) / 86400000);
+};
+
+const DEFAULT_TRIAL_DURATION_DAYS = 14;
+
+// Human labels for the backend-derived Trial status projection.
+const TRIAL_STATUS_LABELS = {
+  TRIAL_ACTIVE: 'Active',
+  TRIAL_EXPIRING_SOON: 'Expiring Soon',
+  TRIAL_EXPIRED: 'Expired',
+  TRIAL_CONVERTED: 'Converted',
+  TRIAL_CANCELLED: 'Cancelled'
+};
+
+const trialStatusLabel = (lead) => {
+  if (lead?.trial_status) {
+    return TRIAL_STATUS_LABELS[lead.trial_status] || String(lead.trial_status).replace(/_/g, ' ');
+  }
+  if (lead?.is_trial_expired) return 'Expired';
+  return '';
+};
+
 const STATUS_OPTIONS = [
   'NEW LEAD',
   'RE-INQUIRY',
@@ -290,6 +342,21 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [showDealWonModal, setShowDealWonModal] = useState(false);
   const [pendingDealWonLead, setPendingDealWonLead] = useState(null);
 
+  // Trial Dates Prompt State
+  const [showTrialPromptModal, setShowTrialPromptModal] = useState(false);
+  const [pendingTrialLead, setPendingTrialLead] = useState(null);
+  const [pendingTrialData, setPendingTrialData] = useState({
+    trial_duration_days: DEFAULT_TRIAL_DURATION_DAYS,
+    trial_start_date: toISODate(new Date()),
+    trial_end_date: addDaysToISO(toISODate(new Date()), DEFAULT_TRIAL_DURATION_DAYS),
+    trial_support_employee_id: ''
+  });
+  // Active Support employees for the trial dropdown, fetched from the API -
+  // never hardcoded ids or names.
+  const [trialSupportOptions, setTrialSupportOptions] = useState([]);
+  const [trialSupportLoading, setTrialSupportLoading] = useState(false);
+  const [trialSupportError, setTrialSupportError] = useState('');
+
   // Explicit Support Assignment modal (opened immediately after conversion or
   // later from a converted lead drawer).
   const [showSupportAssignModal, setShowSupportAssignModal] = useState(false);
@@ -464,7 +531,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     requirement_notes: '',
 
     followup_date: '',
-    followup_time: '10:00 AM'
+    followup_time: '10:00 AM',
+    trial_start_date: '',
+    trial_end_date: ''
   });
 
   const [assigneeId, setAssigneeId] = useState('');
@@ -677,7 +746,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       requirement_notes: lead.requirement_notes || '',
 
       followup_date: lead.followup_date || '',
-      followup_time: lead.followup_time || '10:00 AM'
+      followup_time: lead.followup_time || '10:00 AM',
+      trial_start_date: lead.trial_start_date || '',
+      trial_end_date: lead.trial_end_date || ''
     });
     setError('');
     setShowEditModal(true);
@@ -859,12 +930,16 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         designation: formData.designation && formData.designation.trim() ? formData.designation.trim() : null,
         requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
         assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null,
-        followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null
+        followup_date: formData.followup_date && formData.followup_date.trim() ? formData.followup_date.trim() : null,
+        trial_start_date: formData.trial_start_date && formData.trial_start_date.trim() ? formData.trial_start_date.trim() : null,
+        trial_end_date: formData.trial_end_date && formData.trial_end_date.trim() ? formData.trial_end_date.trim() : null
       };
-      await API.put(`/leads/${selectedLead.id}`, payload);
+      const res = await API.put(`/leads/${selectedLead.id}`, payload);
       const assignedEmployee = employees.find(emp => String(emp.id) === String(payload.assigned_to));
       patchLeadRow(selectedLead.id, {
         ...payload,
+        trial_days_remaining: res.data?.trial_days_remaining,
+        is_trial_expired: res.data?.is_trial_expired || false,
         assigned_employee_name: assignedEmployee?.name ?? (payload.assigned_to ? selectedLead.assigned_employee_name : null)
       });
       setSuccess('Lead updated successfully!');
@@ -922,6 +997,26 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       );
     } finally {
       setSupportMembersLoading(false);
+    }
+  };
+
+  // Active Support employees for the Set Trial Period modal. Sales users are
+  // explicitly allowed to read this list by the backend; ids/names always come
+  // from the API (nothing is hardcoded).
+  const loadTrialSupportOptions = async () => {
+    setTrialSupportLoading(true);
+    setTrialSupportError('');
+    try {
+      const res = await API.get('/leads/trial/support-options');
+      setTrialSupportOptions(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Failed to load active Support employees for trial:', err);
+      setTrialSupportOptions([]);
+      setTrialSupportError(
+        err.response?.data?.detail || 'Failed to load active Support employees.'
+      );
+    } finally {
+      setTrialSupportLoading(false);
     }
   };
 
@@ -1098,6 +1193,35 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       return;
     }
 
+    // If status is changed to TRIAL, prompt for Trial Duration + Support via Modal
+    if (newStatus === 'TRIAL' || newStatus === 'TRIAL LEAD') {
+      const targetLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
+      const todayStr = toISODate(new Date());
+      // An existing trial keeps its original start date and duration; a new
+      // trial starts today. The end date is always derived from the duration.
+      const existingStart = targetLead?.trial_start_date || '';
+      const startStr = existingStart || todayStr;
+      let duration = DEFAULT_TRIAL_DURATION_DAYS;
+      if (existingStart && targetLead?.trial_end_date) {
+        const existingDays = diffDaysISO(existingStart, targetLead.trial_end_date);
+        if (Number.isFinite(existingDays) && existingDays > 0) duration = existingDays;
+      }
+      setPendingTrialLead(targetLead || { id: leadId, name: `Lead #${leadId}` });
+      setPendingTrialData({
+        trial_duration_days: duration,
+        trial_start_date: startStr,
+        trial_end_date: addDaysToISO(startStr, duration),
+        trial_support_employee_id: targetLead?.trial_support_employee_id
+          ? String(targetLead.trial_support_employee_id)
+          : ''
+      });
+      setTrialSupportOptions([]);
+      setTrialSupportError('');
+      setShowTrialPromptModal(true);
+      loadTrialSupportOptions();
+      return;
+    }
+
     // If status is changed to FOLLOW-UP or FOLLOW_UP, prompt for Next Follow-up Date via Modal
     if (newStatus === 'FOLLOW-UP' || newStatus === 'FOLLOW_UP') {
       const targetLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
@@ -1210,6 +1334,93 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setError(err.response?.data?.detail || 'Failed to schedule follow-up.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleTrialDurationChange = (e) => {
+    const raw = e.target.value;
+    if (raw === '') {
+      setPendingTrialData(prev => ({ ...prev, trial_duration_days: '', trial_end_date: '' }));
+      return;
+    }
+    const days = parseInt(raw, 10);
+    setPendingTrialData(prev => {
+      const next = {
+        ...prev,
+        trial_duration_days: Number.isFinite(days) ? days : '',
+        trial_end_date: ''
+      };
+      if (next.trial_start_date && Number.isFinite(days) && days >= 1) {
+        // Recalculated immediately on every keystroke.
+        next.trial_end_date = addDaysToISO(next.trial_start_date, days);
+      }
+      return next;
+    });
+  };
+
+  const handleConfirmTrialSchedule = async (e) => {
+    if (e) e.preventDefault();
+    if (!pendingTrialLead) return;
+
+    const duration = parseInt(pendingTrialData.trial_duration_days, 10);
+    if (!Number.isFinite(duration) || duration < 1) {
+      setError('Please enter a Trial Duration of at least 1 day.');
+      return;
+    }
+    if (!pendingTrialData.trial_start_date) {
+      setError('Trial Start Date is missing.');
+      return;
+    }
+    const endDate = addDaysToISO(pendingTrialData.trial_start_date, duration);
+    if (!endDate) {
+      setError('Could not calculate the Trial End Date from the Trial Duration.');
+      return;
+    }
+
+    try {
+      setSavingLeadId(pendingTrialLead.id);
+      const payload = {
+        status: 'TRIAL',
+        trial_start_date: pendingTrialData.trial_start_date,
+        trial_end_date: endDate,
+        trial_duration_days: duration,
+        // Explicit null clears the assignment (=> "pending"); an id assigns it.
+        trial_support_employee_id: pendingTrialData.trial_support_employee_id
+          ? parseInt(pendingTrialData.trial_support_employee_id, 10)
+          : null
+      };
+      const res = await API.put(`/leads/${pendingTrialLead.id}`, payload);
+      const supportEmp = trialSupportOptions.find(
+        opt => String(opt.id) === String(payload.trial_support_employee_id)
+      );
+      patchLeadRow(pendingTrialLead.id, {
+        status: 'TRIAL',
+        trial_start_date: res.data?.trial_start_date || payload.trial_start_date,
+        trial_end_date: res.data?.trial_end_date || endDate,
+        trial_duration_days: res.data?.trial_duration_days ?? duration,
+        trial_days_remaining: res.data?.trial_days_remaining ?? null,
+        is_trial_expired: res.data?.is_trial_expired || false,
+        trial_status: res.data?.trial_status || null,
+        trial_support_employee_id: res.data?.trial_support_employee_id ?? null,
+        trial_support_employee_name: res.data?.trial_support_employee_name ?? null,
+        support_assigned_to: res.data?.support_assigned_to ?? null,
+        support_assigned_to_name: res.data?.support_assigned_to_name ?? null
+      });
+      setShowTrialPromptModal(false);
+      setPendingTrialLead(null);
+      setSuccess(
+        `Lead #${pendingTrialLead.id} set to TRIAL for ${duration} day(s) - ` +
+        `${formatDateDDMMYYYY(payload.trial_start_date)} to ${formatDateDDMMYYYY(endDate)}. ` +
+        (supportEmp
+          ? `Support assigned to ${supportEmp.name}.`
+          : 'Support assignment is pending.')
+      );
+      window.dispatchEvent(new Event('leadStatsUpdated'));
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.detail || 'Failed to update Trial status.');
+    } finally {
+      setSavingLeadId(null);
     }
   };
 
@@ -1997,6 +2208,25 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                             </option>
                           ))}
                         </select>
+                        {lead.is_trial_expired && (
+                          <div style={{ marginTop: '4px' }}>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              backgroundColor: '#fee2e2',
+                              color: '#b91c1c',
+                              border: '1px solid #fca5a5',
+                              fontWeight: '800',
+                              fontSize: '0.68rem',
+                              letterSpacing: '0.03em',
+                              textTransform: 'uppercase'
+                            }}>
+                              Expired
+                            </span>
+                          </div>
+                        )}
                         {savingLeadId === lead.id && (
                           <span style={{ display: 'block', marginTop: 2, fontSize: '0.65rem', fontWeight: 600, color: '#64748b' }}>
                             Saving…
@@ -2234,6 +2464,25 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                     onChange={(e) => setFormData({ ...formData, requirement_notes: e.target.value })}
                     style={{ paddingTop: '10px' }}
                   />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '12px' }}>
+                  <div className="form-group">
+                    <label>Trial Start Date</label>
+                    <input 
+                      type="date" 
+                      value={formData.trial_start_date || ''}
+                      onChange={(e) => setFormData({ ...formData, trial_start_date: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Trial End Date</label>
+                    <input 
+                      type="date" 
+                      value={formData.trial_end_date || ''}
+                      onChange={(e) => setFormData({ ...formData, trial_end_date: e.target.value })}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -2492,38 +2741,113 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         })()}
 
                         {/* Interactive Status Pill in Header */}
-                        <div style={{ position: 'relative' }} title="Change Lead Status">
-                          <select
-                            value={selectedLead.status}
-                            onChange={(e) => handleStatusChange(selectedLead.id, e.target.value)}
-                            disabled={savingLeadId === selectedLead.id}
-                            aria-busy={savingLeadId === selectedLead.id}
-                            title={savingLeadId === selectedLead.id ? 'Saving status...' : 'Change Lead Status'}
-                            style={{
-                              appearance: 'none',
-                              WebkitAppearance: 'none',
-                              padding: '4px 26px 4px 10px',
-                              borderRadius: '16px',
-                              fontSize: '0.74rem',
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{ position: 'relative' }} title="Change Lead Status">
+                            <select
+                              value={selectedLead.status}
+                              onChange={(e) => handleStatusChange(selectedLead.id, e.target.value)}
+                              disabled={savingLeadId === selectedLead.id}
+                              aria-busy={savingLeadId === selectedLead.id}
+                              title={savingLeadId === selectedLead.id ? 'Saving status...' : 'Change Lead Status'}
+                              style={{
+                                appearance: 'none',
+                                WebkitAppearance: 'none',
+                                padding: '4px 26px 4px 10px',
+                                borderRadius: '16px',
+                                fontSize: '0.74rem',
+                                fontWeight: '800',
+                                backgroundColor: getStatusBadgeStyle(selectedLead.status).bg,
+                                color: getStatusBadgeStyle(selectedLead.status).color,
+                                border: `1.5px solid ${getStatusBadgeStyle(selectedLead.status).color}40`,
+                                cursor: savingLeadId === selectedLead.id ? 'wait' : 'pointer',
+                                outline: 'none',
+                                opacity: savingLeadId === selectedLead.id ? 0.6 : 1
+                              }}
+                            >
+                              {STATUS_OPTIONS.map(st => (
+                                <option key={st} value={st} style={{ background: '#ffffff', color: '#0f172a' }}>
+                                  {st.replace(/_/g, ' ')}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown size={13} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: getStatusBadgeStyle(selectedLead.status).color }} />
+                          </div>
+                          {selectedLead.is_trial_expired && (
+                            <span style={{
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              backgroundColor: '#fee2e2',
+                              color: '#b91c1c',
+                              border: '1px solid #fca5a5',
                               fontWeight: '800',
-                              backgroundColor: getStatusBadgeStyle(selectedLead.status).bg,
-                              color: getStatusBadgeStyle(selectedLead.status).color,
-                              border: `1.5px solid ${getStatusBadgeStyle(selectedLead.status).color}40`,
-                              cursor: savingLeadId === selectedLead.id ? 'wait' : 'pointer',
-                              outline: 'none',
-                              opacity: savingLeadId === selectedLead.id ? 0.6 : 1
-                            }}
-                          >
-                            {STATUS_OPTIONS.map(st => (
-                              <option key={st} value={st} style={{ background: '#ffffff', color: '#0f172a' }}>
-                                {st.replace(/_/g, ' ')}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown size={13} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: getStatusBadgeStyle(selectedLead.status).color }} />
+                              fontSize: '0.68rem',
+                              letterSpacing: '0.03em',
+                              textTransform: 'uppercase'
+                            }}>
+                              Expired
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
+
+                    {/* DEDICATED TRIAL METRICS BANNER */}
+                    {(selectedLead.trial_start_date || selectedLead.trial_end_date) && (
+                      <div style={{
+                        marginTop: '10px',
+                        marginBottom: '4px',
+                        padding: '10px 14px',
+                        background: selectedLead.is_trial_expired ? '#fef2f2' : '#f0f9ff',
+                        border: `1.5px solid ${selectedLead.is_trial_expired ? '#fca5a5' : '#bae6fd'}`,
+                        borderRadius: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '8px'
+                      }}>
+                        <div>
+                          <span style={{ fontSize: '0.8rem', fontWeight: '800', color: selectedLead.is_trial_expired ? '#b91c1c' : '#0369a1', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Clock size={13} /> TRIAL PERIOD
+                            {trialStatusLabel(selectedLead) && (
+                              <span style={{
+                                padding: '1px 7px',
+                                borderRadius: '10px',
+                                fontSize: '0.68rem',
+                                letterSpacing: '0.03em',
+                                textTransform: 'uppercase',
+                                backgroundColor: selectedLead.trial_status === 'TRIAL_EXPIRING_SOON' ? '#fff7ed' : (selectedLead.is_trial_expired ? '#fee2e2' : '#e0f2fe'),
+                                color: selectedLead.trial_status === 'TRIAL_EXPIRING_SOON' ? '#c2410c' : (selectedLead.is_trial_expired ? '#b91c1c' : '#0369a1'),
+                                border: `1px solid ${selectedLead.trial_status === 'TRIAL_EXPIRING_SOON' ? '#fed7aa' : (selectedLead.is_trial_expired ? '#fca5a5' : '#bae6fd')}`
+                              }}>
+                                {trialStatusLabel(selectedLead)}
+                              </span>
+                            )}
+                          </span>
+                          <span style={{ fontSize: '0.78rem', color: selectedLead.is_trial_expired ? '#991b1b' : '#0c4a6e', marginTop: '2px', display: 'block' }}>
+                            {formatDateDDMMYYYY(selectedLead.trial_start_date)} to {formatDateDDMMYYYY(selectedLead.trial_end_date)}
+                            {selectedLead.trial_days_remaining !== null && selectedLead.trial_days_remaining !== undefined && (
+                              <strong style={{ marginLeft: '6px' }}>
+                                ({selectedLead.trial_days_remaining >= 0 ? `${selectedLead.trial_days_remaining} days left` : `Expired ${Math.abs(selectedLead.trial_days_remaining)} days ago`})
+                              </strong>
+                            )}
+                          </span>
+                        </div>
+                        <div style={{
+                          fontSize: '0.76rem',
+                          fontWeight: 700,
+                          color: selectedLead.trial_support_employee_name || selectedLead.support_assigned_to_name ? '#047857' : '#b45309',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px'
+                        }}>
+                          <UserCheck size={12} />
+                          Support: {selectedLead.trial_support_employee_name
+                            || selectedLead.support_assigned_to_name
+                            || 'Pending assignment'}
+                        </div>
+                      </div>
+                    )}
 
                     {/* DEDICATED RE-INQUIRY METRICS BANNER */}
                     {selectedLead.is_reinquiry ? (
@@ -2900,6 +3224,14 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                             {selectedLead.is_converted_to_support ? (
                               <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 700, color: selectedLead.support_assigned_to_name ? '#047857' : '#b45309' }}>
                                 {selectedLead.support_assigned_to_name ? '• Support assignment active' : '• Pending Support Assignment'}
+                              </span>
+                            ) : selectedLead.trial_support_employee_id ? (
+                              <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 700, color: '#047857' }}>
+                                • Trial Support assignment active
+                              </span>
+                            ) : selectedLead.trial_status ? (
+                              <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 700, color: '#b45309' }}>
+                                • Pending Support Assignment (trial)
                               </span>
                             ) : (
                               <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 600, color: '#64748b' }}>
@@ -3700,6 +4032,190 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                   style={{ backgroundColor: '#2563eb', color: '#ffffff', fontWeight: 700, padding: '10px 18px', borderRadius: '8px' }}
                 >
                   {submitting ? 'Saving...' : 'Set Follow-up & Schedule'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* TRIAL EXPIRY & DATES PROMPT MODAL */}
+      {showTrialPromptModal && pendingTrialLead && (
+        <div className="modal-backdrop" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: '20px'
+        }}>
+          <div className="modal-content" style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '18px',
+            width: '100%', maxWidth: '480px', padding: '24px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.25)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px', borderBottom: '1px solid #e2e8f0', paddingBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '10px', backgroundColor: '#e0f2fe', color: '#0369a1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Clock size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a', margin: 0 }}>Set Trial Period</h3>
+                  <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Lead: {pendingTrialLead.name || `#${pendingTrialLead.id}`}</span>
+                </div>
+              </div>
+              <button 
+                type="button"
+                onClick={() => { setShowTrialPromptModal(false); setPendingTrialLead(null); }} 
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmTrialSchedule}>
+              <p style={{ fontSize: '0.84rem', color: '#64748b', marginBottom: '16px', lineHeight: 1.45 }}>
+                Enter the number of trial days - the start and end dates are calculated automatically.
+                Expiry reminders are scheduled for the Sales Manager and the Support Employee at 3 days,
+                1 day, and on the Trial Expiry Date.
+              </p>
+
+              {/* Trial Duration (days) - the only manual input */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
+                  Trial Duration (days) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  step="1"
+                  required
+                  inputMode="numeric"
+                  value={pendingTrialData.trial_duration_days}
+                  onChange={handleTrialDurationChange}
+                  placeholder="e.g. 14"
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                />
+              </div>
+
+              {/* Auto-calculated dates */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="form-group">
+                  <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
+                    Trial Start Date (auto)
+                  </label>
+                  <div style={{
+                    padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1',
+                    backgroundColor: '#f8fafc', color: '#0f172a', fontWeight: 600,
+                    fontSize: '0.9rem', minHeight: '20px'
+                  }}>
+                    {pendingTrialData.trial_start_date
+                      ? formatDateDDMMYYYY(pendingTrialData.trial_start_date)
+                      : '—'}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
+                    Trial End Date (auto)
+                  </label>
+                  <div style={{
+                    padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1',
+                    backgroundColor: '#f8fafc', color: '#0f172a', fontWeight: 600,
+                    fontSize: '0.9rem', minHeight: '20px'
+                  }}>
+                    {pendingTrialData.trial_end_date
+                      ? formatDateDDMMYYYY(pendingTrialData.trial_end_date)
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Live preview */}
+              <div style={{
+                marginBottom: '16px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                backgroundColor: pendingTrialData.trial_end_date ? '#f0f9ff' : '#fff7ed',
+                border: `1px solid ${pendingTrialData.trial_end_date ? '#bae6fd' : '#fed7aa'}`,
+                color: pendingTrialData.trial_end_date ? '#0369a1' : '#9a3412',
+                fontSize: '0.84rem',
+                fontWeight: 600,
+                lineHeight: 1.5
+              }}>
+                {pendingTrialData.trial_end_date && pendingTrialData.trial_start_date
+                  ? <>Your trial will run from <strong>{formatDateDDMMYYYY(pendingTrialData.trial_start_date)}</strong> to <strong>{formatDateDDMMYYYY(pendingTrialData.trial_end_date)}</strong> (<strong>{pendingTrialData.trial_duration_days}</strong> days).</>
+                  : 'Enter a valid Trial Duration to see the calculated trial period.'}
+              </div>
+
+              {/* Assign Support Employee */}
+              <div className="form-group" style={{ marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', marginBottom: '6px', display: 'block' }}>
+                  Assign Support Employee
+                </label>
+                <select
+                  value={pendingTrialData.trial_support_employee_id}
+                  onChange={(e) => setPendingTrialData({ ...pendingTrialData, trial_support_employee_id: e.target.value })}
+                  disabled={trialSupportLoading}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff' }}
+                >
+                  <option value="">
+                    {trialSupportLoading ? 'Loading active Support employees...' : 'Select Support employee (optional)'}
+                  </option>
+                  {pendingTrialData.trial_support_employee_id &&
+                    !trialSupportOptions.some(opt => String(opt.id) === String(pendingTrialData.trial_support_employee_id)) && (
+                      <option value={pendingTrialData.trial_support_employee_id}>
+                        {pendingTrialLead?.trial_support_employee_name || `Employee #${pendingTrialData.trial_support_employee_id}`}
+                      </option>
+                    )}
+                  {trialSupportOptions.map(member => (
+                    <option key={member.id} value={String(member.id)}>
+                      {member.name} ({(member.role || '').replace(/_/g, ' ')})
+                    </option>
+                  ))}
+                </select>
+
+                {trialSupportError && (
+                  <p style={{ fontSize: '0.78rem', color: '#b91c1c', marginTop: '6px' }}>{trialSupportError}</p>
+                )}
+                {!trialSupportLoading && !trialSupportError && trialSupportOptions.length === 0 && (
+                  <p style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '6px' }}>
+                    No active Support employees found.
+                  </p>
+                )}
+                {!pendingTrialData.trial_support_employee_id && (
+                  <p style={{ fontSize: '0.78rem', color: '#b45309', marginTop: '6px', fontWeight: 600 }}>
+                    Support assignment is pending - no Support employee selected.
+                  </p>
+                )}
+                {pendingTrialData.trial_support_employee_id && (
+                  <p style={{ fontSize: '0.78rem', color: '#047857', marginTop: '6px', fontWeight: 600 }}>
+                    Support reminders will also go to this employee.
+                  </p>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '16px' }}>
+                <button 
+                  type="button" 
+                  onClick={() => { setShowTrialPromptModal(false); setPendingTrialLead(null); }} 
+                  className="btn btn-outline"
+                  disabled={savingLeadId === pendingTrialLead.id}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn btn-primary"
+                  disabled={
+                    savingLeadId === pendingTrialLead.id ||
+                    !pendingTrialData.trial_end_date ||
+                    !Number.isFinite(parseInt(pendingTrialData.trial_duration_days, 10)) ||
+                    parseInt(pendingTrialData.trial_duration_days, 10) < 1
+                  }
+                  style={{ backgroundColor: '#0284c7', color: '#ffffff', fontWeight: 700, padding: '10px 18px', borderRadius: '8px' }}
+                >
+                  {savingLeadId === pendingTrialLead.id ? 'Saving...' : 'Set Trial & Update Status'}
                 </button>
               </div>
             </form>

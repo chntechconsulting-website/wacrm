@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_, desc, asc, func, select, case
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger("leads_router")
 
@@ -76,9 +76,11 @@ from utils.lead_status import (
     STATUS_CONVERTED_TO_SUPPORT,
     STATUS_TRIAL,
     is_converted_to_support_status,
+    is_trial_status,
     is_won_or_converted_status,
     is_won_status,
     normalize_lead_status,
+    trial_status_for,
 )
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
@@ -434,6 +436,28 @@ def build_lead_out(
     elif support_handoff and support_assigned_to:
         support_assigned_at = support_handoff.updated_at
 
+    # A trial customer can receive a Support owner before the deal is ever
+    # converted. That assignment lives on leads.trial_support_employee_id and
+    # is only a display/reminder fallback: a Support handoff, a legacy direct
+    # Support owner or a MANUAL_SUPPORT row always win, and no Support status
+    # is written from here.
+    trial_support_emp = None
+    trial_support_id = getattr(lead, "trial_support_employee_id", None)
+    if trial_support_id and db:
+        trial_support_emp = (
+            db.query(Employee).filter(Employee.id == trial_support_id).first()
+        )
+    if not trial_support_emp:
+        trial_support_id = None
+    if trial_support_emp and not support_assigned_to:
+        support_assigned_to = trial_support_emp.id
+        support_assigned_to_name = trial_support_emp.name
+        if not support_manager_id:
+            trial_support_manager = _resolve_employee_manager(trial_support_emp, db)
+            if trial_support_manager:
+                support_manager_id = trial_support_manager.id
+                support_manager_name = trial_support_manager.name
+
     conversion_event = None
     for history in ((lead.status_history if include_timeline else []) or []):
         if normalize_lead_status(history.new_status) == STATUS_CONVERTED_TO_SUPPORT:
@@ -445,6 +469,25 @@ def build_lead_out(
         support_assignment_status = "ASSIGNED" if support_assigned_to else "NOT_ASSIGNED"
     else:
         support_assignment_status = "AWAITING_CONVERSION"
+
+    trial_end_date = getattr(lead, "trial_end_date", None)
+    trial_start_date = getattr(lead, "trial_start_date", None)
+    trial_days_remaining = (
+        (trial_end_date - get_ist_now().date()).days
+        if trial_end_date else None
+    )
+    is_trial_expired = bool(
+        is_trial_status(lead.status)
+        and trial_end_date
+        and trial_end_date < get_ist_now().date()
+    )
+    # Derived, never persisted: keeps Sales and Support statuses untouched
+    # while still reporting Trial Active / Expiring Soon / Expired / etc.
+    trial_duration_days = (
+        (trial_end_date - trial_start_date).days
+        if trial_end_date and trial_start_date else None
+    )
+    trial_status = trial_status_for(lead.status, trial_end_date)
 
     return LeadOut(
         id=lead.id,
@@ -476,6 +519,16 @@ def build_lead_out(
         product_category_confirmed=bool(getattr(lead, 'product_category_confirmed', False)),
         followup_date=lead.followup_date,
         followup_time=lead.followup_time,
+        trial_start_date=getattr(lead, "trial_start_date", None),
+        trial_end_date=trial_end_date,
+        trial_days_remaining=trial_days_remaining,
+        is_trial_expired=is_trial_expired,
+        trial_duration_days=trial_duration_days,
+        trial_status=trial_status,
+        trial_support_employee_id=trial_support_id,
+        trial_support_employee_name=(
+            trial_support_emp.name if trial_support_emp else None
+        ),
         assigned_to=lead.assigned_to,
         assigned_employee_name=lead.assigned_employee.name if lead.assigned_employee else None,
         assigned_by=lead.assigned_by,
@@ -1133,6 +1186,13 @@ def create_lead(
     creator_name = current_emp.name if current_emp else current_user.username
 
     lead_data = lead_in.dict()
+    trial_start = lead_data.get("trial_start_date")
+    trial_end = lead_data.get("trial_end_date")
+    if trial_start and trial_end and trial_end < trial_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trial End Date cannot be before Trial Start Date.",
+        )
     # Users without assign permission can only assign to themselves on creation
     has_assign_permission = user_has_permission(current_user, "leads", "assign", db)
     if not has_assign_permission:
@@ -1242,7 +1302,8 @@ def get_support_assigned_leads(
         query = query.filter(
             or_(
                 Lead.id.in_(handoff_lead_ids),
-                Lead.assigned_to.in_(support_emp_ids)
+                Lead.assigned_to.in_(support_emp_ids),
+                Lead.trial_support_employee_id.is_not(None),
             )
         )
 
@@ -1254,6 +1315,7 @@ def get_support_assigned_leads(
         query = query.filter(
             or_(
                 Lead.assigned_to == assigned_agent_id,
+                Lead.trial_support_employee_id == assigned_agent_id,
                 Lead.id.in_(handoff_leads_for_agent)
             )
         )
@@ -1339,6 +1401,8 @@ def get_support_assigned_leads(
         h = handoffs_map.get(l.id)
         if h and h.assigned_agent_id:
             exec_ids.add(h.assigned_agent_id)
+        elif getattr(l, "trial_support_employee_id", None):
+            exec_ids.add(l.trial_support_employee_id)
         elif l.assigned_employee and (
             l.assigned_employee.department == 'SUPPORT'
             or 'SUPPORT' in (l.assigned_employee.role or '')
@@ -1370,6 +1434,12 @@ def get_support_assigned_leads(
         if h and h.assigned_agent_id:
             assigned_exec_id = h.assigned_agent_id
             assigned_exec_name = h.assigned_agent_name
+        elif getattr(l, "trial_support_employee_id", None):
+            trial_support_emp = execs_by_id.get(l.trial_support_employee_id)
+            assigned_exec_id = l.trial_support_employee_id
+            assigned_exec_name = (
+                trial_support_emp.name if trial_support_emp else None
+            )
         elif l.assigned_employee and (l.assigned_employee.department == 'SUPPORT' or 'SUPPORT' in (l.assigned_employee.role or '')):
             assigned_exec_id = l.assigned_to
             assigned_exec_name = l.assigned_employee.name
@@ -1398,6 +1468,14 @@ def get_support_assigned_leads(
         company_name = l.company or (h.company_name if h else None)
         product_service = (h.product_service if h else None) or l.latest_source or "Support & Services"
         support_requirements = (h.customer_requirements if h else None) or (h.support_notes if h else None) or l.requirement_notes
+
+        trial_end = getattr(l, "trial_end_date", None)
+        trial_days_rem = (trial_end - get_ist_now().date()).days if trial_end else None
+        is_expired = bool(
+            is_trial_status(l.status)
+            and trial_end
+            and trial_end < get_ist_now().date()
+        )
 
         items.append({
             "id": l.id,
@@ -1433,6 +1511,12 @@ def get_support_assigned_leads(
             "assigned_support_manager_id": assigned_mgr_id,
             "assigned_support_manager_name": assigned_mgr_name,
             "assignment_date": assignment_date,
+            "trial_start_date": l.trial_start_date.isoformat() if getattr(l, "trial_start_date", None) else None,
+            "trial_end_date": l.trial_end_date.isoformat() if getattr(l, "trial_end_date", None) else None,
+            "trial_days_remaining": trial_days_rem,
+            "is_trial_expired": is_expired,
+            "trial_status": trial_status_for(l.status, trial_end),
+            "trial_support_employee_id": getattr(l, "trial_support_employee_id", None),
             "created_at": l.created_at.isoformat() if l.created_at else None,
             "last_updated": l.updated_at.isoformat() if l.updated_at else (l.created_at.isoformat() if l.created_at else None),
             "next_followup_date": l.followup_date.isoformat() if l.followup_date else None,
@@ -1576,6 +1660,51 @@ def get_sales_managers(
             "status": emp.status
         })
     return result
+
+
+@router.get("/trial/support-options")
+def get_trial_support_options(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Active Support employees available for a trial customer.
+
+    The Set Trial Period modal is used by Sales (the assigned Sales employee
+    or an authorised Sales Manager) and by Admin, so this variant of the
+    existing Support team-members lookup is reachable for those roles only.
+    Employee ids and names always come from the database - nothing is
+    hardcoded - and the exact same active-Support-Executive validation as the
+    post-conversion assignment is applied.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role not in [ROLE_ADMIN, ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Access forbidden: only the Sales team and Admin can fetch "
+                "Support options for a trial customer."
+            ),
+        )
+
+    support_emps = db.query(Employee).filter(
+        Employee.department == "SUPPORT",
+        Employee.status == "ACTIVE",
+        Employee.role.in_(["SUPPORT_EXECUTIVE", "SUPPORT"])
+    ).order_by(Employee.name.asc()).all()
+
+    return [
+        {
+            "id": e.id,
+            "name": e.name,
+            "role": e.role,
+            "department": e.department,
+            "manager_id": e.manager_id,
+            "status": e.status
+        }
+        for e in support_emps
+        if is_active_support_executive(e, db)
+    ]
 
 
 @router.put("/{lead_id}/support-assign")
@@ -1941,6 +2070,8 @@ def update_lead(
     )
     if lead_in.status is not None and not conversion_requested:
         lead.status = lead_in.status
+        if is_trial_status(lead.status) and not getattr(lead, "trial_start_date", None):
+            lead.trial_start_date = get_ist_now().date()
         if lead_in.status != old_status:
             db.add(LeadStatusHistory(
                 lead_id=lead.id,
@@ -1963,6 +2094,133 @@ def update_lead(
     if lead_in.requirement_notes is not None: lead.requirement_notes = lead_in.requirement_notes
     if lead_in.followup_date is not None: lead.followup_date = lead_in.followup_date
     if lead_in.followup_time is not None: lead.followup_time = lead_in.followup_time
+
+    new_trial_start = (
+        lead_in.trial_start_date
+        if lead_in.trial_start_date is not None
+        else getattr(lead, "trial_start_date", None)
+    )
+    new_trial_end = (
+        lead_in.trial_end_date
+        if lead_in.trial_end_date is not None
+        else getattr(lead, "trial_end_date", None)
+    )
+    if new_trial_start and new_trial_end and new_trial_end < new_trial_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trial End Date cannot be before Trial Start Date.",
+        )
+
+    # Trial duration drives the expiry date. When the client sends it, the
+    # server recomputes trial_end_date = trial_start_date + duration so the
+    # user never has to calculate (or can never submit a wrong) end date.
+    trial_fields = set(getattr(lead_in, "model_fields_set", set()) or ())
+    trial_duration_days = None
+    if "trial_duration_days" in trial_fields and lead_in.trial_duration_days is not None:
+        try:
+            trial_duration_days = int(lead_in.trial_duration_days)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Trial Duration must be a whole number of days.",
+            )
+        if trial_duration_days < 1 or trial_duration_days > 365:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Trial Duration must be between 1 and 365 days.",
+            )
+
+    if trial_duration_days is not None:
+        duration_start = (
+            lead_in.trial_start_date
+            or getattr(lead, "trial_start_date", None)
+            or get_ist_now().date()
+        )
+        lead.trial_start_date = duration_start
+        lead.trial_end_date = duration_start + timedelta(days=trial_duration_days)
+    else:
+        if lead_in.trial_start_date is not None:
+            lead.trial_start_date = lead_in.trial_start_date
+        if lead_in.trial_end_date is not None:
+            lead.trial_end_date = lead_in.trial_end_date
+
+    # ------------------------------------------------------------------
+    # Trial Support assignment (Set Trial Period modal).
+    # Reuses the same active-Support-Executive validation and the same
+    # auditable LeadAssignment rows as the post-conversion assignment flow.
+    # Sales ownership (Lead.assigned_to) and Support statuses are untouched.
+    # ------------------------------------------------------------------
+    if "trial_support_employee_id" in trial_fields:
+        if _is_support_actor(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Support team cannot change the Trial Support assignment. "
+                    "The Sales employee or Sales Manager selects the Support "
+                    "employee responsible for a trial customer."
+                ),
+            )
+        requested_support_id = lead_in.trial_support_employee_id
+        current_support_id = getattr(lead, "trial_support_employee_id", None)
+        if requested_support_id is None:
+            if current_support_id:
+                lead.trial_support_employee_id = None
+                log_lead_activity(
+                    db=db,
+                    lead_id=lead.id,
+                    performed_by_id=emp_id,
+                    activity_type="TRIAL_SUPPORT_UNASSIGNED",
+                    description=(
+                        f"{emp_name} cleared the Trial Support assignment "
+                        f"for Lead #{lead.id}."
+                    ),
+                )
+        else:
+            support_emp = (
+                db.query(Employee).filter(Employee.id == requested_support_id).first()
+            )
+            if not support_emp:
+                raise HTTPException(
+                    status_code=404, detail="Support employee not found"
+                )
+            if not is_active_support_executive(support_emp, db):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Only an active Support Executive can be assigned to a "
+                        "trial customer."
+                    ),
+                )
+            if current_support_id != support_emp.id:
+                lead.trial_support_employee_id = support_emp.id
+                already_recorded = any(
+                    (getattr(a, "assignment_method", "") or "").upper()
+                    == "TRIAL_SUPPORT"
+                    and a.assigned_to == support_emp.id
+                    for a in lead.assignments
+                )
+                if not already_recorded:
+                    db.add(LeadAssignment(
+                        lead_id=lead.id,
+                        assigned_to=support_emp.id,
+                        assigned_by=emp_id,
+                        assigned_at=datetime.utcnow(),
+                        assignment_method="TRIAL_SUPPORT",
+                        notes=(
+                            f"Assigned to Support Executive {support_emp.name} "
+                            f"for the trial period by {current_user.username}."
+                        ),
+                    ))
+                log_lead_activity(
+                    db=db,
+                    lead_id=lead.id,
+                    performed_by_id=emp_id,
+                    activity_type="TRIAL_SUPPORT_ASSIGNED",
+                    description=(
+                        f"Trial Support assigned to {support_emp.name} by "
+                        f"{current_user.username}."
+                    ),
+                )
 
     if lead_in.quotetask_quotation_amount is not None:
         new_amt = float(lead_in.quotetask_quotation_amount)
@@ -2162,6 +2420,10 @@ def change_lead_status(
         return build_lead_out(lead, current_user, db)
 
     lead.status = new_status
+    if is_trial_status(new_status) and not getattr(lead, "trial_start_date", None):
+        # Record the first day of the trial without inventing an end date. The
+        # assigned team must set trial_end_date to enable expiry reminders.
+        lead.trial_start_date = get_ist_now().date()
 
     history = LeadStatusHistory(
         lead_id=lead.id,

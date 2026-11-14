@@ -379,7 +379,8 @@ const Sidebar = ({
     myLeads: 0,
     callLogs: 0,
     followups: 0,
-    supportLeads: 0
+    supportLeads: 0,
+    unreadNotifications: 0
   });
 
   // Fetch live stats from API
@@ -389,19 +390,28 @@ const Sidebar = ({
     let isMounted = true;
     const fetchCounts = async () => {
       try {
-        const res = await API.get('/leads/stats');
-        if (isMounted && res.data) {
-          setCounts({
-            allLeads: res.data.allLeads ?? res.data.totalLeads ?? 0,
-            metaLeads: res.data.metaLeads ?? 0,
-            websiteLeads: res.data.websiteLeads ?? 0,
-            manualLeads: res.data.manualLeads ?? 0,
-            excelLeads: res.data.excelLeads ?? 0,
-            myLeads: res.data.myLeads ?? 0,
-            callLogs: res.data.callLogs ?? 0,
-            followups: res.data.followups ?? 0,
-            supportLeads: res.data.supportLeads ?? 0
-          });
+        const [statsRes, unreadRes] = await Promise.allSettled([
+          API.get('/leads/stats'),
+          API.get('/notifications/unread-count')
+        ]);
+        if (isMounted) {
+          const statsData = statsRes.status === 'fulfilled' ? statsRes.value?.data : null;
+          const unreadData = unreadRes.status === 'fulfilled' ? unreadRes.value?.data : null;
+          setCounts(prev => ({
+            ...prev,
+            ...(statsData ? {
+              allLeads: statsData.allLeads ?? statsData.totalLeads ?? prev.allLeads,
+              metaLeads: statsData.metaLeads ?? prev.metaLeads,
+              websiteLeads: statsData.websiteLeads ?? prev.websiteLeads,
+              manualLeads: statsData.manualLeads ?? prev.manualLeads,
+              excelLeads: statsData.excelLeads ?? prev.excelLeads,
+              myLeads: statsData.myLeads ?? prev.myLeads,
+              callLogs: statsData.callLogs ?? prev.callLogs,
+              followups: statsData.followups ?? prev.followups,
+              supportLeads: statsData.supportLeads ?? prev.supportLeads,
+            } : {}),
+            unreadNotifications: unreadData?.unread_count ?? prev.unreadNotifications
+          }));
         }
       } catch (e) {
         // Silently preserve default values if endpoint is unavailable
@@ -411,10 +421,12 @@ const Sidebar = ({
 
     const handleStatsEvent = () => fetchCounts();
     window.addEventListener('leadStatsUpdated', handleStatsEvent);
+    window.addEventListener('notificationUpdated', handleStatsEvent);
 
     return () => { 
       isMounted = false; 
       window.removeEventListener('leadStatsUpdated', handleStatsEvent);
+      window.removeEventListener('notificationUpdated', handleStatsEvent);
     };
   }, [isMetaReviewer]);
 
@@ -952,6 +964,8 @@ const Sidebar = ({
                   exactMatch={true}
                   icon={Bell}
                   label="Notifications"
+                  badgeCount={counts.unreadNotifications}
+                  badgeVariant="red"
                   isCollapsed={isCollapsed}
                   onClick={handleItemClick}
                 />

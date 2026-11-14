@@ -438,18 +438,35 @@ const SupportDashboard = ({ data }) => {
                       </td>
                       <td style={{ padding: '10px', color: '#475569' }}>{ticket.product_service || '-'}</td>
                       <td style={{ padding: '10px' }}>
-                        <span style={{
-                          padding: '3px 9px',
-                          borderRadius: '10px',
-                          fontSize: '0.72rem',
-                          fontWeight: '700',
-                          ...getStatusStyle(ticket.support_status || ticket.onboarding_status),
-                        }}>
-                          {ticket.status_label ||
-                            ticket.support_status ||
-                            ticket.onboarding_status ||
-                            'New'}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{
+                            padding: '3px 9px',
+                            borderRadius: '10px',
+                            fontSize: '0.72rem',
+                            fontWeight: '700',
+                            ...getStatusStyle(ticket.support_status || ticket.onboarding_status),
+                          }}>
+                            {ticket.status_label ||
+                              ticket.support_status ||
+                              ticket.onboarding_status ||
+                              'New'}
+                          </span>
+                          {ticket.is_trial_expired && (
+                            <span style={{
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              backgroundColor: '#fee2e2',
+                              color: '#b91c1c',
+                              border: '1px solid #fca5a5',
+                              fontWeight: '800',
+                              fontSize: '0.68rem',
+                              letterSpacing: '0.03em',
+                              textTransform: 'uppercase'
+                            }}>
+                              Expired
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding: '10px', color: '#475569' }}>{ticket.assigned_agent_name || 'Unassigned'}</td>
                       <td style={{ padding: '10px', color: '#64748b' }}>{formatDateDDMMYYYY(ticket.created_at)}</td>

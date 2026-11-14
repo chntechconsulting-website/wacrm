@@ -1175,6 +1175,11 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
         if lead.assigned_to and lead.assigned_to in team_emp_ids:
             return True
 
+        # Trial customers handed to a Support employee of this team before the
+        # deal is converted are visible to that employee's Support Manager.
+        if getattr(lead, "trial_support_employee_id", None) and lead.trial_support_employee_id in team_emp_ids:
+            return True
+
         team_coverage = (
             db.query(SupportCoverageAssignment.id)
             .filter(
@@ -1196,6 +1201,11 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
             return True
 
         if lead.assigned_to == emp.id:
+            return True
+
+        # The Support employee selected in the Set Trial Period modal owns the
+        # trial customer from that moment, before any Won -> Support handoff.
+        if getattr(lead, "trial_support_employee_id", None) == emp.id:
             return True
 
         return False
@@ -1280,6 +1290,16 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
         for d in direct_leads:
             lead_ids.add(d[0])
 
+        # 2b. Trial customers whose Support owner is a team member
+        trial_support_leads = (
+            db.query(Lead.id)
+            .filter(Lead.trial_support_employee_id.in_(team_emp_ids))
+            .all()
+        )
+        for t in trial_support_leads:
+            if t[0]:
+                lead_ids.add(t[0])
+
         # 3. Temporary coverage handled by any team member
         coverage_leads = (
             db.query(SupportCoverageAssignment.lead_id)
@@ -1306,6 +1326,16 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
         direct_leads = db.query(Lead.id).filter(Lead.assigned_to == emp.id).all()
         for d in direct_leads:
             lead_ids.add(d[0])
+
+        # 2b. Trial customers where this employee is the selected Support owner
+        trial_support_leads = (
+            db.query(Lead.id)
+            .filter(Lead.trial_support_employee_id == emp.id)
+            .all()
+        )
+        for t in trial_support_leads:
+            if t[0]:
+                lead_ids.add(t[0])
 
         # 3. Customers temporarily covered during the permanent owner's leave
         coverage_leads = (

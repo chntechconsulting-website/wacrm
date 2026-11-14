@@ -46,11 +46,25 @@ const SidebarItem = ({
         aria-current={(isActive) ? 'page' : undefined}
         aria-label={label}
       >
-        <div className="icon-wrapper">
+        <div className="icon-wrapper" style={{ position: 'relative' }}>
           {IconComponent && (
             <IconComponent 
               size={18} 
               className={`nav-icon ${customIconClass}`} 
+            />
+          )}
+          {isCollapsed && Number(badgeCount) > 0 && (
+            <span 
+              style={{
+                position: 'absolute',
+                top: '-3px',
+                right: '-3px',
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: badgeVariant === 'red' ? '#ef4444' : '#2563eb',
+                border: '1.5px solid #ffffff'
+              }} 
             />
           )}
         </div>

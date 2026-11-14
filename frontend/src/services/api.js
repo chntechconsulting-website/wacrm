@@ -22,6 +22,7 @@ const LONG_GET_TTL_MS = 30000;
 const LONG_TTL_PATHS = [
   '/leads/sales-managers',
   '/leads/support/team-members',
+  '/leads/trial/support-options',
   '/roles',
   '/doocti/config',
 ];

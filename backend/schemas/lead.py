@@ -35,12 +35,18 @@ class LeadBase(BaseModel):
     followup_date: Optional[date] = None
     followup_time: Optional[str] = None
 
+    # Trial lifecycle dates. Reminders use trial_end_date for the Sales and
+    # Support Trial expiry schedule.
+    trial_start_date: Optional[date] = None
+    trial_end_date: Optional[date] = None
+
     @field_validator(
         "email", "followup_date", "followup_time", "whatsapp_number",
         "first_name", "last_name", "name", "designation", "company",
         "industry", "website", "company_size", "city", "state", "country", "location",
         "campaign_name", "website_id", "website_name", "landing_page",
         "rating", "priority", "requirement_notes",
+        "trial_start_date", "trial_end_date",
         mode="before", check_fields=False
     )
     @classmethod
@@ -93,12 +99,23 @@ class LeadUpdate(BaseModel):
     quotetask_quotation_amount: Optional[float] = None
     product_category: Optional[str] = None
     product_category_confirmed: Optional[bool] = None
+    trial_start_date: Optional[date] = None
+    trial_end_date: Optional[date] = None
+    # Trial duration in days. When supplied the server recalculates
+    # trial_end_date = trial_start_date + duration, so clients never have to
+    # compute the expiry date themselves.
+    trial_duration_days: Optional[int] = None
+    # Support employee who will own this trial customer. Null clears the
+    # assignment; omitting the field leaves it unchanged.
+    trial_support_employee_id: Optional[int] = None
 
     @field_validator(
         "email", "followup_date", "followup_time", "whatsapp_number",
         "first_name", "last_name", "name", "phone", "designation", "company",
         "industry", "website", "company_size", "city", "state", "country", "location",
         "source", "status", "campaign_name", "rating", "priority", "requirement_notes",
+        "trial_start_date", "trial_end_date", "trial_duration_days",
+        "trial_support_employee_id",
         mode="before", check_fields=False
     )
     @classmethod
@@ -210,6 +227,14 @@ class LeadOut(LeadBase):
     lead_received_formatted: Optional[str] = None
     lead_received_date: Optional[str] = None
     lead_received_time: Optional[str] = None
+
+    # Read-only Trial projections used by dashboards and the Leads table.
+    trial_days_remaining: Optional[int] = None
+    is_trial_expired: bool = False
+    trial_duration_days: Optional[int] = None
+    trial_status: Optional[str] = None
+    trial_support_employee_id: Optional[int] = None
+    trial_support_employee_name: Optional[str] = None
 
     # Re-Inquiry Tracking Fields
     is_reinquiry: bool = False

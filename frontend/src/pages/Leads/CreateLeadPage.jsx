@@ -196,7 +196,9 @@ const CreateLeadPage = () => {
     assigned_to: '',
     priority: 'Medium',
 
-    requirement_notes: ''
+    requirement_notes: '',
+    trial_start_date: '',
+    trial_end_date: ''
   });
 
   // --- BULK IMPORT STATE ---
@@ -269,7 +271,9 @@ const CreateLeadPage = () => {
         campaign_name: formData.campaign_name && formData.campaign_name.trim() ? formData.campaign_name.trim() : null,
         priority: formData.priority || 'Medium',
         requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
-        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null
+        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null,
+        trial_start_date: formData.status === 'TRIAL' && formData.trial_start_date ? formData.trial_start_date : null,
+        trial_end_date: formData.status === 'TRIAL' && formData.trial_end_date ? formData.trial_end_date : null
       };
 
       const res = await API.post('/leads/', payload);
@@ -740,12 +744,57 @@ const CreateLeadPage = () => {
                   <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Initial Status</label>
                   <select 
                     value={formData.status} 
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    onChange={(e) => {
+                      const newStatus = e.target.value;
+                      const todayStr = new Date().toISOString().split('T')[0];
+                      const defaultEndStr = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+                      setFormData({
+                        ...formData,
+                        status: newStatus,
+                        trial_start_date: newStatus === 'TRIAL' ? (formData.trial_start_date || todayStr) : formData.trial_start_date,
+                        trial_end_date: newStatus === 'TRIAL' ? (formData.trial_end_date || defaultEndStr) : formData.trial_end_date
+                      });
+                    }}
                   >
                     {STATUS_OPTIONS.map(st => <option key={st} value={st}>{st}</option>)}
                   </select>
                 </div>
               </div>
+
+              {formData.status === 'TRIAL' && (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: '16px',
+                  marginTop: '16px',
+                  padding: '16px',
+                  backgroundColor: '#f0f9ff',
+                  border: '1.5px solid #bae6fd',
+                  borderRadius: '12px'
+                }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: '700', fontSize: '0.86rem', color: '#0369a1' }}>
+                      Trial Start Date
+                    </label>
+                    <input 
+                      type="date" 
+                      value={formData.trial_start_date || ''} 
+                      onChange={(e) => setFormData({ ...formData, trial_start_date: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: '700', fontSize: '0.86rem', color: '#0369a1' }}>
+                      Trial End Date *
+                    </label>
+                    <input 
+                      type="date" 
+                      required
+                      value={formData.trial_end_date || ''} 
+                      onChange={(e) => setFormData({ ...formData, trial_end_date: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
                 <div className="form-group">

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY, formatLeadReceivedFull } from '../../utils/dateUtils';
@@ -135,6 +136,31 @@ export default function SupportAssignedLeadsPage() {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
+
+  const [searchParams] = useSearchParams();
+
+  // Auto-open lead drawer if openLeadId query parameter is provided
+  useEffect(() => {
+    const targetLeadId = searchParams.get('openLeadId');
+    if (!targetLeadId) return;
+    const leadIdNum = parseInt(targetLeadId, 10);
+    if (!leadIdNum) return;
+
+    const match = leads.find(l => l.id === leadIdNum);
+    if (match) {
+      handleOpenLeadDrawer(match);
+    } else {
+      API.get(`/leads/${leadIdNum}`)
+        .then(res => {
+          if (res.data) {
+            handleOpenLeadDrawer(res.data);
+          }
+        })
+        .catch(err => {
+          console.error('Failed to load targeted lead details:', err);
+        });
+    }
+  }, [searchParams, leads]);
 
   // Update one visible row + an open drawer without replacing the table with a
   // loading state or losing filters/pagination.
@@ -649,7 +675,10 @@ export default function SupportAssignedLeadsPage() {
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                           <span style={{ fontWeight: 600, color: '#0f172a', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <UserCheck size={12} color="#2563eb" />
-                            {lead.assigned_support_executive_name || 'Unassigned Agent'}
+                            {lead.assigned_support_executive_name
+                              || (lead.trial_status && !lead.support_handoff_id
+                                ? 'Pending assignment'
+                                : 'Unassigned Agent')}
                           </span>
                           {lead.assigned_support_manager_name && (
                             <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
@@ -661,26 +690,67 @@ export default function SupportAssignedLeadsPage() {
 
                       {/* 8. Sales Status (read-only) */}
                       <td>
-                        <span
-                          className={`status-pill ${salesStatusClean}`}
-                          title="Sales status is managed by the Sales team"
-                        >
-                          {salesStatus.replace(/_/g, ' ')}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span
+                            className={`status-pill ${salesStatusClean}`}
+                            title="Sales status is managed by the Sales team"
+                          >
+                            {salesStatus.replace(/_/g, ' ')}
+                          </span>
+                          {lead.is_trial_expired && (
+                            <span style={{
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              backgroundColor: '#fee2e2',
+                              color: '#b91c1c',
+                              border: '1px solid #fca5a5',
+                              fontWeight: '800',
+                              fontSize: '0.68rem',
+                              letterSpacing: '0.03em',
+                              textTransform: 'uppercase'
+                            }}>
+                              Expired
+                            </span>
+                          )}
+                          {!lead.is_trial_expired && lead.trial_status === 'TRIAL_EXPIRING_SOON' && (
+                            <span style={{
+                              padding: '2px 7px',
+                              borderRadius: '10px',
+                              backgroundColor: '#fff7ed',
+                              color: '#c2410c',
+                              border: '1px solid #fed7aa',
+                              fontWeight: '800',
+                              fontSize: '0.68rem',
+                              letterSpacing: '0.03em',
+                              textTransform: 'uppercase'
+                            }}>
+                              Trial Expiring Soon
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 9. Support Status (editable by Support only) */}
                       <td>
-                        <select
-                          className={`status-pill ${supportStatusClean}`}
-                          value={supportStatus}
-                          onChange={(e) => handleStatusChange(lead.id, e.target.value)}
-                          title="Support status is independent from Sales status"
-                        >
-                          {SUPPORT_STATUS_OPTIONS.map(st => (
-                            <option key={st.value} value={st.value}>{st.label}</option>
-                          ))}
-                        </select>
+                        {lead.support_handoff_id ? (
+                          <select
+                            className={`status-pill ${supportStatusClean}`}
+                            value={supportStatus}
+                            onChange={(e) => handleStatusChange(lead.id, e.target.value)}
+                            title="Support status is independent from Sales status"
+                          >
+                            {SUPPORT_STATUS_OPTIONS.map(st => (
+                              <option key={st.value} value={st.value}>{st.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span
+                            className={`status-pill ${supportStatusClean}`}
+                            title="Support status becomes editable once the deal is converted to Support"
+                          >
+                            {(SUPPORT_STATUS_OPTIONS.find(st => st.value === supportStatus) || {}).label || supportStatus.replace(/_/g, ' ')}
+                          </span>
+                        )}
                       </td>
 
                       {/* 10. Priority */}
@@ -904,10 +974,43 @@ export default function SupportAssignedLeadsPage() {
 
                   <div className="detail-item">
                     <span className="detail-label">Sales Status (read-only)</span>
-                    <span className="detail-value" style={{ textTransform: 'capitalize' }}>
-                      {(selectedLead.sales_status || selectedLead.status)?.replace(/_/g, ' ') || 'NEW'}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span className="detail-value" style={{ textTransform: 'capitalize' }}>
+                        {(selectedLead.sales_status || selectedLead.status)?.replace(/_/g, ' ') || 'NEW'}
+                      </span>
+                      {selectedLead.is_trial_expired && (
+                        <span style={{
+                          padding: '2px 7px',
+                          borderRadius: '10px',
+                          backgroundColor: '#fee2e2',
+                          color: '#b91c1c',
+                          border: '1px solid #fca5a5',
+                          fontWeight: '800',
+                          fontSize: '0.68rem',
+                          letterSpacing: '0.03em',
+                          textTransform: 'uppercase'
+                        }}>
+                          Expired
+                        </span>
+                      )}
+                    </div>
                   </div>
+
+                  {(selectedLead.trial_start_date || selectedLead.trial_end_date) && (
+                    <div className="detail-item" style={{ gridColumn: 'span 2', backgroundColor: selectedLead.is_trial_expired ? '#fef2f2' : '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: `1px solid ${selectedLead.is_trial_expired ? '#fecaca' : '#bae6fd'}` }}>
+                      <span className="detail-label" style={{ color: selectedLead.is_trial_expired ? '#b91c1c' : '#0369a1', fontWeight: 700 }}>
+                        Trial Period {selectedLead.is_trial_expired ? '(EXPIRED)' : ''}
+                      </span>
+                      <span className="detail-value" style={{ color: selectedLead.is_trial_expired ? '#991b1b' : '#0c4a6e', marginTop: '4px', display: 'block' }}>
+                        {formatDateDDMMYYYY(selectedLead.trial_start_date)} to {formatDateDDMMYYYY(selectedLead.trial_end_date)}
+                        {selectedLead.trial_days_remaining !== null && selectedLead.trial_days_remaining !== undefined && (
+                          <span style={{ marginLeft: '8px', fontWeight: 600 }}>
+                            ({selectedLead.trial_days_remaining >= 0 ? `${selectedLead.trial_days_remaining} days remaining` : `Expired ${Math.abs(selectedLead.trial_days_remaining)} days ago`})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="detail-item">
                     <span className="detail-label">Support Status</span>

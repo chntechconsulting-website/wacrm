@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   Bell, 
   CheckCheck, 
@@ -50,6 +50,14 @@ const getTypeConfig = (type) => {
         bgColor: '#ecfdf5',
         borderColor: '#a7f3d0'
       };
+    case 'TRIAL_EXPIRY':
+      return {
+        label: 'Trial Expiry',
+        icon: Clock,
+        color: '#dc2626',
+        bgColor: '#fef2f2',
+        borderColor: '#fecaca'
+      };
     case 'SYSTEM':
     default:
       return {
@@ -87,11 +95,12 @@ const formatTimeAgo = (dateStr) => {
 };
 
 const NotificationsPage = () => {
+  const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [statusFilter, setStatusFilter] = useState('ALL'); // ALL, UNREAD, READ
-  const [typeFilter, setTypeFilter] = useState('ALL'); // ALL, LEAD, FOLLOWUP, CALL, CONVERSION
+  const [typeFilter, setTypeFilter] = useState('ALL'); // ALL, TRIAL_EXPIRY, LEAD, FOLLOWUP, CALL, CONVERSION
 
   const fetchNotifications = async () => {
     try {
@@ -114,6 +123,7 @@ const NotificationsPage = () => {
       setSyncing(true);
       await API.post('/notifications/sync');
       await fetchNotifications();
+      window.dispatchEvent(new Event('notificationUpdated'));
     } catch (err) {
       console.error('Failed to sync original notifications:', err);
     } finally {
@@ -125,6 +135,7 @@ const NotificationsPage = () => {
     try {
       await API.post('/notifications/mark-all-read');
       setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      window.dispatchEvent(new Event('notificationUpdated'));
     } catch (err) {
       console.error('Failed to mark all as read:', err);
     }
@@ -135,25 +146,42 @@ const NotificationsPage = () => {
     try {
       await API.delete('/notifications/clear-all');
       setNotifications([]);
+      window.dispatchEvent(new Event('notificationUpdated'));
     } catch (err) {
       console.error('Failed to clear notifications:', err);
     }
   };
 
-  const toggleReadState = async (id) => {
+  const toggleReadState = async (id, e) => {
+    if (e) e.stopPropagation();
     try {
       const res = await API.put(`/notifications/${id}/read`);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: res.data.is_read } : n));
+      window.dispatchEvent(new Event('notificationUpdated'));
     } catch (err) {
       console.error('Failed to toggle read state:', err);
     }
   };
 
+  const handleNotificationClick = async (n) => {
+    if (!n.is_read) {
+      try {
+        await API.put(`/notifications/${n.id}/read`);
+        setNotifications(prev => prev.map(item => item.id === n.id ? { ...item, is_read: true } : item));
+        window.dispatchEvent(new Event('notificationUpdated'));
+      } catch (err) {}
+    }
+    if (n.link_url) {
+      navigate(n.link_url);
+    }
+  };
+
   const deleteNotification = async (id, e) => {
-    e.stopPropagation();
+    if (e) e.stopPropagation();
     try {
       await API.delete(`/notifications/${id}`);
       setNotifications(prev => prev.filter(n => n.id !== id));
+      window.dispatchEvent(new Event('notificationUpdated'));
     } catch (err) {
       console.error('Failed to delete notification:', err);
     }
@@ -293,6 +321,7 @@ const NotificationsPage = () => {
             }}
           >
             <option value="ALL">All Categories</option>
+            <option value="TRIAL_EXPIRY">Trial Expiry Reminders</option>
             <option value="LEAD">Leads Only</option>
             <option value="FOLLOWUP">Follow-ups Only</option>
             <option value="CALL">Call Logs Only</option>
@@ -353,6 +382,7 @@ const NotificationsPage = () => {
               return (
                 <div 
                   key={n.id}
+                  onClick={() => handleNotificationClick(n)}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -363,7 +393,8 @@ const NotificationsPage = () => {
                     border: `1px solid ${n.is_read ? '#e2e8f0' : '#bfdbfe'}`,
                     borderLeft: `4px solid ${n.is_read ? '#cbd5e1' : config.color}`,
                     transition: 'all 0.15s ease',
-                    boxShadow: n.is_read ? 'none' : '0 2px 5px rgba(37,99,235,0.04)'
+                    boxShadow: n.is_read ? 'none' : '0 2px 5px rgba(37,99,235,0.04)',
+                    cursor: n.link_url ? 'pointer' : 'default'
                   }}
                 >
                   {/* Left: Icon & Notification Info */}
@@ -425,7 +456,8 @@ const NotificationsPage = () => {
                         color: n.is_read ? '#64748b' : '#334155', 
                         margin: '0 0 6px 0',
                         lineHeight: 1.45,
-                        wordBreak: 'break-word'
+                        wordBreak: 'break-word',
+                        whiteSpace: 'pre-line'
                       }}>
                         {n.message}
                       </p>
@@ -459,7 +491,7 @@ const NotificationsPage = () => {
                   {/* Right: Actions */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                     <button 
-                      onClick={() => toggleReadState(n.id)}
+                      onClick={(e) => toggleReadState(n.id, e)}
                       className="btn btn-outline" 
                       style={{ 
                         fontSize: '0.76rem', 

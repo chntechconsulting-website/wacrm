@@ -13,6 +13,7 @@ class Lead(Base):
         Index("ix_leads_assigned_created_at", "assigned_to", "created_at"),
         Index("ix_leads_updated_at", "updated_at"),
         Index("ix_leads_followup_date", "followup_date"),
+        Index("ix_leads_trial_end_date", "trial_end_date"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -52,6 +53,18 @@ class Lead(Base):
     followup_date = Column(Date, nullable=True)
     followup_time = Column(String(20), nullable=True)
 
+    # Trial lifecycle dates. Both columns are additive and nullable so existing
+    # production leads are untouched. Reminders are only generated for leads in
+    # TRIAL status that have a trial_end_date.
+    trial_start_date = Column(Date, nullable=True)
+    trial_end_date = Column(Date, nullable=True)
+
+    # Support employee who owns the trial customer. Nullable and additive so
+    # existing rows are untouched. It is written only by the Set Trial Period
+    # modal and never overwrites Lead.assigned_to (the Sales owner) or any
+    # Support-handoff ownership.
+    trial_support_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+
     assigned_to = Column(Integer, ForeignKey("employees.id"), index=True, nullable=True)
     assigned_by = Column(Integer, ForeignKey("employees.id"), nullable=True)
     assigned_at = Column(DateTime, nullable=True)
@@ -81,6 +94,7 @@ class Lead(Base):
 
     assigned_employee = relationship("Employee", foreign_keys=[assigned_to])
     assigned_by_employee = relationship("Employee", foreign_keys=[assigned_by])
+    trial_support_employee = relationship("Employee", foreign_keys=[trial_support_employee_id])
     activities = relationship("LeadActivity", back_populates="lead", cascade="all, delete-orphan")
     assignments = relationship("LeadAssignment", back_populates="lead", cascade="all, delete-orphan")
     status_history = relationship("LeadStatusHistory", back_populates="lead", cascade="all, delete-orphan")

@@ -312,13 +312,46 @@ async def startup_db_client():
                     "previous_sources": "VARCHAR(255) NULL",
                     "latest_source": "VARCHAR(50) NULL",
                     "product_category": "VARCHAR(50) NULL",
-                    "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL"
+                    "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL",
+                    "trial_start_date": "DATE NULL",
+                    "trial_end_date": "DATE NULL",
+                    "trial_support_employee_id": "INT NULL"
                 }
                 for col_name, col_type in missing_cols.items():
                     if col_name not in columns:
                         conn.execute(text(f"ALTER TABLE leads ADD COLUMN {col_name} {col_type}"))
                         conn.commit()
                         print(f"Auto-added missing column '{col_name}' to 'leads' table.")
+                try:
+                    has_trial_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_trial_end_date'"
+                    )).scalar())
+                    if not has_trial_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD INDEX ix_leads_trial_end_date (trial_end_date)"
+                        ))
+                        conn.commit()
+                        print("Added leads.trial_end_date index.")
+                except Exception as ex:
+                    print(f"Leads trial_end_date index check: {ex}")
+                try:
+                    has_trial_support_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_trial_support_employee_id'"
+                    )).scalar())
+                    if not has_trial_support_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD INDEX ix_leads_trial_support_employee_id (trial_support_employee_id)"
+                        ))
+                        conn.commit()
+                        print("Added leads.trial_support_employee_id index.")
+                except Exception as ex:
+                    print(f"Leads trial_support_employee_id index check: {ex}")
             except Exception as ex:
                 print(f"Leads column sync check: {ex}")
 
@@ -777,6 +810,17 @@ async def startup_db_client():
         print("Follow-up 1-Hour Reminder background scheduler launched.")
     except Exception as ex:
         print(f"Failed to start follow-up reminder scheduler: {ex}")
+
+    # Launch Trial Expiry Reminder Background Scheduler. This is independent of
+    # page activity and re-checks periodically so a newly created trial is
+    # picked up on the same IST day. Delivery rows make each reminder idempotent.
+    try:
+        import asyncio
+        from services.trial_reminder_service import start_trial_reminder_scheduler
+        asyncio.create_task(start_trial_reminder_scheduler(interval_seconds=900))
+        print("Trial Expiry Reminder background scheduler launched.")
+    except Exception as ex:
+        print(f"Failed to start trial reminder scheduler: {ex}")
 
     # Launch DooCTI recording auto-link scheduler (links freshly uploaded recordings)
     try:

@@ -62,7 +62,8 @@ from utils.support_status import (
     normalize_support_status,
     support_status_storage_values,
 )
-from utils.lead_status import CONVERTED_TO_SUPPORT_STATUSES
+from utils.lead_status import CONVERTED_TO_SUPPORT_STATUSES, is_trial_status
+from utils.timezone import get_ist_now
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -407,8 +408,24 @@ def build_support_dashboard_payload(
         .limit(6)
         .all()
     )
+    recent_lead_ids = [r.lead_id for r in recent_records if r.lead_id]
+    recent_leads_by_id = {}
+    if recent_lead_ids:
+        recent_leads_by_id = {
+            ld.id: ld
+            for ld in db.query(Lead).filter(Lead.id.in_(recent_lead_ids)).all()
+        }
     recent_tickets = []
     for record in recent_records:
+        linked_lead = recent_leads_by_id.get(record.lead_id)
+        lead_trial_end = getattr(linked_lead, "trial_end_date", None) if linked_lead else None
+        is_trial_exp = bool(
+            linked_lead
+            and is_trial_status(linked_lead.status)
+            and lead_trial_end
+            and lead_trial_end < get_ist_now().date()
+        )
+        trial_days_rem = (lead_trial_end - get_ist_now().date()).days if lead_trial_end else None
         raw_status = (record.onboarding_status or "PENDING_ONBOARDING").strip().upper()
         support_status = normalize_support_status(raw_status) or SUPPORT_STATUS_NEW
         meta = SUPPORT_STATUS_META[support_status]
@@ -426,6 +443,8 @@ def build_support_dashboard_payload(
             "onboarding_status": raw_status,
             "status_label": meta["label"],
             "status_color": meta["color"],
+            "is_trial_expired": is_trial_exp,
+            "trial_days_remaining": trial_days_rem,
             # Never display a non-Support employee label on the Support
             # dashboard, even when a legacy handoff row still names one.
             "assigned_agent_name": (

@@ -294,6 +294,8 @@ class ReInquiryService:
             requirement_notes=req_notes,
             followup_date=enquiry_data.get("followup_date"),
             followup_time=enquiry_data.get("followup_time"),
+            trial_start_date=enquiry_data.get("trial_start_date"),
+            trial_end_date=enquiry_data.get("trial_end_date"),
             assigned_to=assigned_to_id,
             assigned_by=creator_emp_id if assigned_to_id else None,
             assigned_at=now if assigned_to_id else None,

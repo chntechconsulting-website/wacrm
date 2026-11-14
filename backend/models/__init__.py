@@ -6,6 +6,7 @@ from models.activity import LeadActivity
 from models.customer import Customer
 from models.followup import Followup
 from models.notification import Notification
+from models.trial_reminder import TrialReminderDelivery
 from models.call_log import CallLog
 from models.whatsapp import Conversation, WhatsAppMessage
 from models.integration import IntegrationConfig, IntegrationLog
@@ -43,6 +44,7 @@ __all__ = [
     "Customer",
     "Followup",
     "Notification",
+    "TrialReminderDelivery",
     "CallLog",
     "Conversation",
     "WhatsAppMessage",
