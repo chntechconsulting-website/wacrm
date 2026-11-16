@@ -10,6 +10,26 @@ WAHRMS_TERMS_AND_CONDITIONS = (
     "7. Confirmation of the purchase order constitutes acceptance of the quotation and these terms."
 )
 
+BIOMETRIC_TERMS_AND_CONDITIONS = (
+    "1. All civil works must be done by the client.\n"
+    "2. Electrical Cable and Casing Pipe, Switch & Socket as per the Cost. Charged by Electrician (Clients Scope).\n"
+    "3. Cable Per Meter Rs.45/-, Cable Laying Charges Per Meter Rs.35/-\n"
+    "4. Warranty: Products have one-year Manufacturer warranty. The warranty does not cover any physical damages.\n"
+    "5. Device Installation Charges Rs.1000- Per Location Per Device in Chennai and Coimbatore Only (Other Cities within TN Rs.2000).\n"
+    "6. Local or Remote ESSL Software Installation Charges: Chennai and Coimbatore Only: ₹1000 per location per device. Other Cities within TN: ₹1500 per location per device.\n"
+    "\n"
+    "Payment Terms:\n"
+    "• 75% advance payment is required before mobilization and commencement of work.\n"
+    "• The remaining 25% balance payment is payable immediately upon successful completion of the work."
+)
+
+
+def default_terms_for_category(category) -> str:
+    """Return the commercial terms that match the quotation category."""
+    if str(category or "").strip().upper() == "BIOMETRIC":
+        return BIOMETRIC_TERMS_AND_CONDITIONS
+    return WAHRMS_TERMS_AND_CONDITIONS
+
 # Older Proforma records may carry one of these short defaults. They should
 # render the full WAHRMS terms instead of the legacy wording.
 _LEGACY_PROFORMA_TERMS = (
@@ -33,12 +53,19 @@ def _normalize(value):
 
 
 _LEGACY_NORMALIZED = {_normalize(term) for term in _LEGACY_PROFORMA_TERMS}
+_LEGACY_BIOMETRIC_PLACEHOLDERS = {"biometric terms", "biometric terms and conditions"}
 
 
-def resolve_billing_terms(terms, doc_type):
-    """Return the WAHRMS terms for quotations/proformas when missing or legacy."""
+def resolve_billing_terms(terms, doc_type, product_category=None):
+    """Return category-aware terms for quotations/proformas when missing or legacy."""
     cleaned = str(terms or "").strip()
     if doc_type in ("quotation", "proforma"):
-        if not cleaned or _normalize(cleaned) in _LEGACY_NORMALIZED:
-            return WAHRMS_TERMS_AND_CONDITIONS
+        normalized = _normalize(cleaned)
+        is_biometric = str(product_category or "").strip().upper() == "BIOMETRIC"
+        if (
+            not cleaned
+            or normalized in _LEGACY_NORMALIZED
+            or (is_biometric and normalized.lower() in _LEGACY_BIOMETRIC_PLACEHOLDERS)
+        ):
+            return default_terms_for_category(product_category)
     return cleaned

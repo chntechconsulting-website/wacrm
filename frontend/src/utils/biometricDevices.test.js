@@ -12,57 +12,58 @@ import {
 } from './biometricDevices.js';
 
 const EXPECTED_PRICES = {
-  bio_dev_ai_mercury: 10722,
-  bio_dev_ai_urans: 10722,
-  bio_dev_ai_neptune: 13809,
-  bio_dev_ai_neptune_bat: 14732,
-  bio_dev_ai_pluto: 19130,
-  bio_dev_ai_mars: 23038,
-  bio_dev_ai_mars_wifi: 23571,
-  bio_dev_ai_mars_palm: 25539,
-  bio_dev_ai_jupiter: 33420,
-  bio_dev_ai_orcus: 13949,
-  bio_dev_ai_magnum_lite: 15151,
-  bio_dev_ai_magnum: 18307,
-  bio_dev_ai_magnum_wifi: 20718,
-  bio_dev_mb160: 12800,
-  bio_dev_mb160_bat: 13785,
-  bio_dev_mb160_bat_wifi_lan_bat: 16151,
-  bio_dev_mb20: 10722,
-  bio_dev_uface302: 25804,
-  bio_dev_silkbio_101tc_id_bat: 18181,
-  bio_dev_ai_eris: 26724,
-  bio_dev_ai_arion: 34315,
-  bio_dev_k30_bat: 6841,
-  bio_dev_k30_wifi_bat: 8633,
-  bio_dev_k90: 6553,
-  bio_dev_f22_wifi: 12322,
-  bio_dev_x990: 15012,
-  bio_dev_iclock_990: 23149,
-  bio_dev_fr1200: 6194,
-  bio_dev_kr500_e: 1651,
-  bio_dev_x7: 4009,
-  bio_dev_f_18: 16927,
-  bio_dev_sf_100: 10253,
-  bio_dev_sc_405: 11684
+  bio_dev_ai_mercury: 12000,
+  bio_dev_ai_urans: 11700,
+  bio_dev_ai_neptune: 15000,
+  bio_dev_ai_neptune_bat: 16000,
+  bio_dev_ai_pluto: 20700,
+  bio_dev_ai_mars: 25000,
+  bio_dev_ai_mars_wifi: 25500,
+  bio_dev_ai_mars_palm: 27700,
+  bio_dev_ai_jupiter: 36200,
+  bio_dev_ai_orcus: 15000,
+  bio_dev_ai_magnum_lite: 16400,
+  bio_dev_ai_magnum: 19800,
+  bio_dev_ai_magnum_wifi: 22500,
+  bio_dev_mb160: 13900,
+  bio_dev_mb160_bat: 15000,
+  bio_dev_mb160_bat_wifi_lan_bat: 17500,
+  bio_dev_mb20: 11600,
+  bio_dev_uface302: 28000,
+  bio_dev_uface302_4g: 37000,
+  bio_dev_silkbio_101tc_id_bat: 19700,
+  bio_dev_ai_eris: 29000,
+  bio_dev_ai_arion: 37200,
+  bio_dev_k30_bat: 7400,
+  bio_dev_k30_wifi_bat: 9400,
+  bio_dev_k90: 7200,
+  bio_dev_f22_wifi: 13400,
+  bio_dev_x990: 16300,
+  bio_dev_iclock_990: 25000,
+  bio_dev_fr1200: 6700,
+  bio_dev_kr500_e: 2000,
+  bio_dev_x7: 4500,
+  bio_dev_f_18: 18300,
+  bio_dev_sf_100: 11100,
+  bio_dev_sc_405: 12600
 };
 
-test('catalogue exposes all 33 devices from the 2026 price list', () => {
-  assert.equal(BIOMETRIC_DEVICE_COUNT, 33);
-  assert.equal(BIOMETRIC_DEVICES.length, 33);
-  assert.equal(new Set(BIOMETRIC_DEVICES.map((device) => device.code)).size, 33);
+test('catalogue exposes all 34 devices from the 2026 price list', () => {
+  assert.equal(BIOMETRIC_DEVICE_COUNT, 34);
+  assert.equal(BIOMETRIC_DEVICES.length, 34);
+  assert.equal(new Set(BIOMETRIC_DEVICES.map((device) => device.code)).size, 34);
   assert.deepEqual(
     BIOMETRIC_DEVICES.map((device) => device.code).sort(),
     Object.keys(EXPECTED_PRICES).sort()
   );
 });
 
-test('device groups contain 21 face/finger, 6 fingerprint and 6 reader models', () => {
+test('device groups contain 22 face/finger, 6 fingerprint and 6 reader models', () => {
   const counts = {};
   for (const device of BIOMETRIC_DEVICES) {
     counts[device.group] = (counts[device.group] || 0) + 1;
   }
-  assert.deepEqual(counts, { face_finger: 21, finger: 6, reader: 6 });
+  assert.deepEqual(counts, { face_finger: 22, finger: 6, reader: 6 });
   assert.deepEqual(
     BIOMETRIC_DEVICE_GROUPS.map((group) => group.code),
     ['face_finger', 'finger', 'reader']
@@ -98,13 +99,13 @@ test('device bundles are distinguishable from the existing biometric packages', 
 test('device lookup and bundle creation stay consistent', () => {
   const device = getBiometricDeviceByCode('bio_dev_mb160_bat');
   assert.equal(device.name, 'MB160 -BAT');
-  assert.equal(device.price, 13785);
+  assert.equal(device.price, 15000);
 
   const bundle = createBiometricDeviceBundle(device, 4);
   assert.equal(bundle.name, 'MB160 -BAT');
   assert.equal(bundle.badge, 'Face + Finger');
   assert.equal(bundle.sortOrder, 104);
-  assert.match(bundle.description, /13,785/);
+  assert.match(bundle.description, /15,000/);
   assert.match(bundle.description, /18% GST/);
   assert.equal(getBiometricDeviceByCode('missing'), null);
 });

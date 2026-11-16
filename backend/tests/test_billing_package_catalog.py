@@ -66,39 +66,40 @@ EXPECTED_PACKAGES = {
 
 
 EXPECTED_BIOMETRIC_PRICES = {
-    "bio_dev_ai_mercury": 10722,
-    "bio_dev_ai_urans": 10722,
-    "bio_dev_ai_neptune": 13809,
-    "bio_dev_ai_neptune_bat": 14732,
-    "bio_dev_ai_pluto": 19130,
-    "bio_dev_ai_mars": 23038,
-    "bio_dev_ai_mars_wifi": 23571,
-    "bio_dev_ai_mars_palm": 25539,
-    "bio_dev_ai_jupiter": 33420,
-    "bio_dev_ai_orcus": 13949,
-    "bio_dev_ai_magnum_lite": 15151,
-    "bio_dev_ai_magnum": 18307,
-    "bio_dev_ai_magnum_wifi": 20718,
-    "bio_dev_mb160": 12800,
-    "bio_dev_mb160_bat": 13785,
-    "bio_dev_mb160_bat_wifi_lan_bat": 16151,
-    "bio_dev_mb20": 10722,
-    "bio_dev_uface302": 25804,
-    "bio_dev_silkbio_101tc_id_bat": 18181,
-    "bio_dev_ai_eris": 26724,
-    "bio_dev_ai_arion": 34315,
-    "bio_dev_k30_bat": 6841,
-    "bio_dev_k30_wifi_bat": 8633,
-    "bio_dev_k90": 6553,
-    "bio_dev_f22_wifi": 12322,
-    "bio_dev_x990": 15012,
-    "bio_dev_iclock_990": 23149,
-    "bio_dev_fr1200": 6194,
-    "bio_dev_kr500_e": 1651,
-    "bio_dev_x7": 4009,
-    "bio_dev_f_18": 16927,
-    "bio_dev_sf_100": 10253,
-    "bio_dev_sc_405": 11684,
+    "bio_dev_ai_mercury": 12000,
+    "bio_dev_ai_urans": 11700,
+    "bio_dev_ai_neptune": 15000,
+    "bio_dev_ai_neptune_bat": 16000,
+    "bio_dev_ai_pluto": 20700,
+    "bio_dev_ai_mars": 25000,
+    "bio_dev_ai_mars_wifi": 25500,
+    "bio_dev_ai_mars_palm": 27700,
+    "bio_dev_ai_jupiter": 36200,
+    "bio_dev_ai_orcus": 15000,
+    "bio_dev_ai_magnum_lite": 16400,
+    "bio_dev_ai_magnum": 19800,
+    "bio_dev_ai_magnum_wifi": 22500,
+    "bio_dev_mb160": 13900,
+    "bio_dev_mb160_bat": 15000,
+    "bio_dev_mb160_bat_wifi_lan_bat": 17500,
+    "bio_dev_mb20": 11600,
+    "bio_dev_uface302": 28000,
+    "bio_dev_uface302_4g": 37000,
+    "bio_dev_silkbio_101tc_id_bat": 19700,
+    "bio_dev_ai_eris": 29000,
+    "bio_dev_ai_arion": 37200,
+    "bio_dev_k30_bat": 7400,
+    "bio_dev_k30_wifi_bat": 9400,
+    "bio_dev_k90": 7200,
+    "bio_dev_f22_wifi": 13400,
+    "bio_dev_x990": 16300,
+    "bio_dev_iclock_990": 25000,
+    "bio_dev_fr1200": 6700,
+    "bio_dev_kr500_e": 2000,
+    "bio_dev_x7": 4500,
+    "bio_dev_f_18": 18300,
+    "bio_dev_sf_100": 11100,
+    "bio_dev_sc_405": 12600,
 }
 
 
@@ -231,20 +232,20 @@ class TestBillingPackageCatalog(unittest.TestCase):
         )
         self.assertEqual(extract_plan_code({"description": "No plan here"}), "")
 
-    def test_all_33_biometric_devices_are_in_the_catalogue(self):
-        self.assertEqual(len(DEFAULT_BIOMETRIC_DEVICES), 33)
+    def test_all_34_biometric_devices_are_in_the_catalogue(self):
+        self.assertEqual(len(DEFAULT_BIOMETRIC_DEVICES), 34)
         self.assertEqual(
             {device["code"] for device in DEFAULT_BIOMETRIC_DEVICES},
             set(EXPECTED_BIOMETRIC_PRICES),
         )
-        self.assertEqual(len(BIOMETRIC_DEVICE_BUNDLE_CODES), 33)
+        self.assertEqual(len(BIOMETRIC_DEVICE_BUNDLE_CODES), 34)
         self.assertEqual(set(BIOMETRIC_DEVICE_BUNDLE_CODES), set(EXPECTED_BIOMETRIC_PRICES))
 
     def test_biometric_device_groups_match_the_price_list(self):
         counts = {}
         for device in DEFAULT_BIOMETRIC_DEVICES:
             counts[device["group"]] = counts.get(device["group"], 0) + 1
-        self.assertEqual(counts, {"face_finger": 21, "finger": 6, "reader": 6})
+        self.assertEqual(counts, {"face_finger": 22, "finger": 6, "reader": 6})
 
     def test_every_biometric_device_bundle_uses_the_exact_dealer_price_and_gst(self):
         bundles_by_code = {
@@ -279,7 +280,7 @@ class TestBillingPackageCatalog(unittest.TestCase):
         bundle = get_default_bundle("bio_dev_ai_mars_wifi")
         self.assertIsNotNone(bundle)
         self.assertEqual(bundle["name"], "AI MARS-WIFI")
-        self.assertEqual(bundle["items"][0]["rate"], 23571.0)
+        self.assertEqual(bundle["items"][0]["rate"], 25500.0)
         self.assertEqual(get_default_bundle("bio_dev_missing"), None)
 
 

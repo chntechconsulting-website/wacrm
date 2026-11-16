@@ -33,7 +33,7 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS } from '../../utils/quotationPdf';
 import {
   calculateBundleQuantity,
   createBundleSubscriptionFields,
@@ -74,13 +74,7 @@ import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
 
 const DEFAULT_TERMS_QUOTATION = WAHRMS_TERMS_AND_CONDITIONS;
 
-const DEFAULT_TERMS_BIOMETRIC_QUOTATION = 
-`1. Prices are subject to applicable GST as specified.
-2. Products carry a one-year manufacturer warranty covering manufacturing defects (excludes physical damage, electrical surge, or liquid ingress).
-3. Delivery, device installation, and cloud punch synchronization will be scheduled upon receipt of purchase order and advance payment.
-4. Client shall provide required power points, cabling infrastructure, and network access at installation sites.
-5. Setup, device registration, and administrator training will be provided upon installation.
-6. Confirmation of the purchase order constitutes acceptance of this quotation and terms.`;
+const DEFAULT_TERMS_BIOMETRIC_QUOTATION = BIOMETRIC_TERMS_AND_CONDITIONS;
 
 const DEFAULT_TERMS_PROFORMA = WAHRMS_TERMS_AND_CONDITIONS;
 

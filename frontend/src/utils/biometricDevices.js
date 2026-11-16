@@ -18,7 +18,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face"],
     connectivity: "Wi-Fi",
-    price: 10722
+    price: 12000
   },
   {
     code: "bio_dev_ai_urans",
@@ -26,7 +26,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID", "Password"],
     connectivity: "LAN",
-    price: 10722
+    price: 11700
   },
   {
     code: "bio_dev_ai_neptune",
@@ -34,7 +34,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID"],
     connectivity: "LAN",
-    price: 13809
+    price: 15000
   },
   {
     code: "bio_dev_ai_neptune_bat",
@@ -42,7 +42,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID"],
     connectivity: "Wi-Fi + LAN + Battery",
-    price: 14732
+    price: 16000
   },
   {
     code: "bio_dev_ai_pluto",
@@ -50,7 +50,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 19130
+    price: 20700
   },
   {
     code: "bio_dev_ai_mars",
@@ -58,7 +58,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID"],
     connectivity: "LAN",
-    price: 23038
+    price: 25000
   },
   {
     code: "bio_dev_ai_mars_wifi",
@@ -66,7 +66,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 23571
+    price: 25500
   },
   {
     code: "bio_dev_ai_mars_palm",
@@ -74,7 +74,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID", "Password", "Palm"],
     connectivity: "Wi-Fi + LAN",
-    price: 25539
+    price: 27700
   },
   {
     code: "bio_dev_ai_jupiter",
@@ -82,7 +82,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 33420
+    price: 36200
   },
   {
     code: "bio_dev_ai_orcus",
@@ -90,7 +90,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID", "Password"],
     connectivity: "Wi-Fi + LAN",
-    price: 13949
+    price: 15000
   },
   {
     code: "bio_dev_ai_magnum_lite",
@@ -98,7 +98,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 15151
+    price: 16400
   },
   {
     code: "bio_dev_ai_magnum",
@@ -106,7 +106,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 18307
+    price: 19800
   },
   {
     code: "bio_dev_ai_magnum_wifi",
@@ -114,7 +114,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 20718
+    price: 22500
   },
   {
     code: "bio_dev_mb160",
@@ -122,7 +122,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 12800
+    price: 13900
   },
   {
     code: "bio_dev_mb160_bat",
@@ -130,7 +130,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "LAN + Battery",
-    price: 13785
+    price: 15000
   },
   {
     code: "bio_dev_mb160_bat_wifi_lan_bat",
@@ -138,7 +138,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "Wi-Fi + LAN + Battery",
-    price: 16151
+    price: 17500
   },
   {
     code: "bio_dev_mb20",
@@ -146,7 +146,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 10722
+    price: 11600
   },
   {
     code: "bio_dev_uface302",
@@ -154,7 +154,15 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 25804
+    price: 28000
+  },
+  {
+    code: "bio_dev_uface302_4g",
+    name: "UFACE302 (4G)",
+    group: "face_finger",
+    features: ["Face", "Fingerprint", "RFID"],
+    connectivity: "4G GPRS + LAN + Battery",
+    price: 37000
   },
   {
     code: "bio_dev_silkbio_101tc_id_bat",
@@ -162,7 +170,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 18181
+    price: 19700
   },
   {
     code: "bio_dev_ai_eris",
@@ -170,7 +178,7 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 26724
+    price: 29000
   },
   {
     code: "bio_dev_ai_arion",
@@ -178,23 +186,23 @@ export const BIOMETRIC_DEVICES = [
     group: "face_finger",
     features: ["Face", "Fingerprint", "RFID"],
     connectivity: "Wi-Fi + LAN",
-    price: 34315
+    price: 37200
   },
   {
     code: "bio_dev_k30_bat",
-    name: "K30 + BAT",
+    name: "K30+B",
     group: "finger",
     features: ["Fingerprint", "RFID"],
     connectivity: "LAN + Battery",
-    price: 6841
+    price: 7400
   },
   {
     code: "bio_dev_k30_wifi_bat",
-    name: "K30 - WIFI+BAT",
+    name: "K30 -WIFI",
     group: "finger",
     features: ["Fingerprint", "RFID"],
-    connectivity: "Wi-Fi + LAN + Battery",
-    price: 8633
+    connectivity: "Wi-Fi / LAN",
+    price: 9400
   },
   {
     code: "bio_dev_k90",
@@ -202,7 +210,7 @@ export const BIOMETRIC_DEVICES = [
     group: "finger",
     features: ["Fingerprint", "RFID"],
     connectivity: "LAN + Battery",
-    price: 6553
+    price: 7200
   },
   {
     code: "bio_dev_f22_wifi",
@@ -210,7 +218,7 @@ export const BIOMETRIC_DEVICES = [
     group: "finger",
     features: ["Fingerprint", "RFID"],
     connectivity: "Wi-Fi / LAN",
-    price: 12322
+    price: 13400
   },
   {
     code: "bio_dev_x990",
@@ -218,7 +226,7 @@ export const BIOMETRIC_DEVICES = [
     group: "finger",
     features: ["Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 15012
+    price: 16300
   },
   {
     code: "bio_dev_iclock_990",
@@ -226,7 +234,7 @@ export const BIOMETRIC_DEVICES = [
     group: "finger",
     features: ["Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 23149
+    price: 25000
   },
   {
     code: "bio_dev_fr1200",
@@ -234,7 +242,7 @@ export const BIOMETRIC_DEVICES = [
     group: "reader",
     features: ["Fingerprint"],
     connectivity: "LAN",
-    price: 6194
+    price: 6700
   },
   {
     code: "bio_dev_kr500_e",
@@ -242,7 +250,7 @@ export const BIOMETRIC_DEVICES = [
     group: "reader",
     features: ["RFID"],
     connectivity: "LAN",
-    price: 1651
+    price: 2000
   },
   {
     code: "bio_dev_x7",
@@ -250,7 +258,7 @@ export const BIOMETRIC_DEVICES = [
     group: "reader",
     features: ["Fingerprint", "RFID", "Password"],
     connectivity: "LAN",
-    price: 4009
+    price: 4500
   },
   {
     code: "bio_dev_f_18",
@@ -258,7 +266,7 @@ export const BIOMETRIC_DEVICES = [
     group: "reader",
     features: ["Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 16927
+    price: 18300
   },
   {
     code: "bio_dev_sf_100",
@@ -266,7 +274,7 @@ export const BIOMETRIC_DEVICES = [
     group: "reader",
     features: ["Fingerprint", "RFID"],
     connectivity: "LAN",
-    price: 10253
+    price: 11100
   },
   {
     code: "bio_dev_sc_405",
@@ -274,7 +282,7 @@ export const BIOMETRIC_DEVICES = [
     group: "reader",
     features: ["RFID"],
     connectivity: "LAN",
-    price: 11684
+    price: 12600
   },
 ];
 

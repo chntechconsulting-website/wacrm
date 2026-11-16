@@ -37,7 +37,7 @@ from schemas.lead import (
 )
 from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
-from services.billing_terms import WAHRMS_TERMS_AND_CONDITIONS
+from services.billing_terms import default_terms_for_category
 from utils.document_status import invoice_document_status
 from utils.payment_status import FINANCE_STATUS_PAID, normalize_finance_status
 from services.permission_service import (
@@ -3001,7 +3001,7 @@ def download_lead_quotation(
                 "rate": sub,
                 "gstRate": 0.18
             }],
-            "terms_and_conditions": WAHRMS_TERMS_AND_CONDITIONS,
+            "terms_and_conditions": default_terms_for_category(getattr(lead, "product_category", None)),
             "prepared_by": (current_user.employee.name if getattr(current_user, 'employee', None) else current_user.username) or "Authorized Signatory"
         }
         pdf_bytes = generate_quotation_pdf(snapshot)
@@ -3073,7 +3073,7 @@ def download_lead_proforma(
                 "rate": sub,
                 "gstRate": 0.18
             }],
-            "terms_and_conditions": WAHRMS_TERMS_AND_CONDITIONS,
+            "terms_and_conditions": default_terms_for_category(getattr(lead, "product_category", None)),
             "prepared_by": (current_user.employee.name if getattr(current_user, 'employee', None) else current_user.username) or "Authorized Signatory"
         }
         pdf_bytes = generate_proforma_pdf(snapshot)

@@ -141,6 +141,7 @@ def build_common_data(doc):
             "id": d.get("id"),
             "doc_number": d.get("doc_number") or d.get("number") or "DOC",
             "doc_type": (d.get("doc_type") or d.get("docType") or "quotation").lower(),
+            "product_category": d.get("product_category") or d.get("productCategory") or "wahrms",
             "customer_name": d.get("customer_name") or d.get("customerName") or "Valued Client",
             "company_name": d.get("company_name") or d.get("companyName") or "",
             "phone": d.get("phone") or "",
@@ -176,6 +177,7 @@ def build_common_data(doc):
             "id": doc.id,
             "doc_number": doc.doc_number or "DOC",
             "doc_type": (doc.doc_type or "quotation").lower(),
+            "product_category": getattr(doc, "product_category", None) or "wahrms",
             "customer_name": doc.customer_name or "Valued Client",
             "company_name": doc.company_name or "",
             "phone": doc.phone or "",
@@ -685,7 +687,15 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         )
     else:
         default_terms = ""
-    terms_txt = resolve_billing_terms(data["terms"], doc_type) or default_terms
+    terms_txt = resolve_billing_terms(
+        data["terms"],
+        doc_type,
+        data.get("product_category"),
+    ) or default_terms
+    # ReportLab's built-in Helvetica font has no rupee glyph and only a
+    # limited bullet glyph, so render readable equivalents in the PDF while
+    # keeping the stored terms unchanged.
+    terms_txt = terms_txt.replace("₹", "Rs. ").replace("•", "-")
     terms_flowable = [
         Paragraph("<b>TERMS & CONDITIONS</b>", style_panel_title),
         Paragraph(terms_txt.replace("\n", "<br/>"), style_notes)
