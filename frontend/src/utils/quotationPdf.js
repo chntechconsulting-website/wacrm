@@ -29,10 +29,10 @@ const BRAND = {
 
 const CONTENT_WIDTH = 539; // Portrait A4 width (595) minus 28pt margins on either side
 
-// Biometric hardware POs are billed to the dedicated Axis Bank collection
-// account. Quotations, proformas and invoices keep using the company profile
-// bank details from billingMoney.js.
-export const BIOMETRIC_PO_BANK = {
+// Biometric hardware documents are billed to the dedicated Axis Bank
+// collection account. WAHRMS documents keep using the company profile bank
+// details from billingMoney.js.
+export const BIOMETRIC_BANK = {
   accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
   bankName: 'AXIS BANK',
   accountNumber: '921020014696411',
@@ -173,6 +173,7 @@ export function generateBillingPdf(docData, download = true) {
     .trim()
     .toLowerCase() === 'biometric';
   const isBiometricPO = isPO && isBiometric;
+  const documentBank = isBiometric ? BIOMETRIC_BANK : company.bank;
   const isRedThemed = isQuotation || isProforma;
 
   const headerWord = isProforma
@@ -639,16 +640,16 @@ export function generateBillingPdf(docData, download = true) {
   const proformaPaymentBlock = {
     stack: [
       { text: 'PAYMENT DETAILS', style: 'sectionHeading', margin: [0, 8, 0, 4] },
-      { text: company.bank.accountName, style: 'panelName', fontSize: 10.5, margin: [0, 0, 0, 4] },
+      { text: documentBank.accountName, style: 'panelName', fontSize: 10.5, margin: [0, 0, 0, 4] },
       {
         table: {
           widths: ['auto', 'auto'],
           body: [
-            [{ text: 'Bank:', style: 'p1BankLabel' }, { text: company.bank.bankName, style: 'p1BankVal' }],
-            [{ text: 'A/c:', style: 'p1BankLabel' }, { text: company.bank.accountNumber, style: 'p1BankVal' }],
-            [{ text: 'IFSC:', style: 'p1BankLabel' }, { text: company.bank.ifsc, style: 'p1BankVal' }],
-            ...(company.bank.branch ? [[{ text: 'Branch:', style: 'p1BankLabel' }, { text: company.bank.branch, style: 'p1BankVal' }]] : []),
-            [{ text: 'Type:', style: 'p1BankLabel' }, { text: company.bank.accountType, style: 'p1BankVal' }]
+            [{ text: 'Bank:', style: 'p1BankLabel' }, { text: documentBank.bankName, style: 'p1BankVal' }],
+            [{ text: 'A/c:', style: 'p1BankLabel' }, { text: documentBank.accountNumber, style: 'p1BankVal' }],
+            [{ text: 'IFSC:', style: 'p1BankLabel' }, { text: documentBank.ifsc, style: 'p1BankVal' }],
+            ...(documentBank.branch ? [[{ text: 'Branch:', style: 'p1BankLabel' }, { text: documentBank.branch, style: 'p1BankVal' }]] : []),
+            [{ text: 'Type:', style: 'p1BankLabel' }, { text: documentBank.accountType, style: 'p1BankVal' }]
           ]
         },
         layout: {
@@ -670,15 +671,15 @@ export function generateBillingPdf(docData, download = true) {
   const biometricPoPaymentBlock = {
     stack: [
       { text: 'PAYMENT DETAILS', style: 'sectionHeading', margin: [0, 8, 0, 4] },
-      { text: BIOMETRIC_PO_BANK.accountName, style: 'panelName', fontSize: 10.5, margin: [0, 0, 0, 4] },
+      { text: BIOMETRIC_BANK.accountName, style: 'panelName', fontSize: 10.5, margin: [0, 0, 0, 4] },
       {
         table: {
           widths: ['auto', 'auto'],
           body: [
-            [{ text: 'Bank:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.bankName, style: 'p1BankVal' }],
-            [{ text: 'A/c:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.accountNumber, style: 'p1BankVal' }],
-            [{ text: 'IFSC:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.ifsc, style: 'p1BankVal' }],
-            [{ text: 'Type:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.accountType, style: 'p1BankVal' }]
+            [{ text: 'Bank:', style: 'p1BankLabel' }, { text: BIOMETRIC_BANK.bankName, style: 'p1BankVal' }],
+            [{ text: 'A/c:', style: 'p1BankLabel' }, { text: BIOMETRIC_BANK.accountNumber, style: 'p1BankVal' }],
+            [{ text: 'IFSC:', style: 'p1BankLabel' }, { text: BIOMETRIC_BANK.ifsc, style: 'p1BankVal' }],
+            [{ text: 'Type:', style: 'p1BankLabel' }, { text: BIOMETRIC_BANK.accountType, style: 'p1BankVal' }]
           ]
         },
         layout: {
@@ -724,11 +725,11 @@ export function generateBillingPdf(docData, download = true) {
                 table: {
                   widths: ['auto', '*'],
                   body: [
-                    [{ text: 'Bank', style: 'bankLabel' }, { text: company.bank.bankName, style: 'bankValue' }],
-                    [{ text: 'A/c No', style: 'bankLabel' }, { text: company.bank.accountNumber, style: 'bankValue' }],
-                    [{ text: 'IFSC', style: 'bankLabel' }, { text: company.bank.ifsc, style: 'bankValue' }],
-                    [{ text: 'Beneficiary', style: 'bankLabel' }, { text: company.bank.accountName, style: 'bankValue' }],
-                    [{ text: 'Type', style: 'bankLabel' }, { text: company.bank.accountType, style: 'bankValue' }]
+                    [{ text: 'Bank', style: 'bankLabel' }, { text: documentBank.bankName, style: 'bankValue' }],
+                    [{ text: 'A/c No', style: 'bankLabel' }, { text: documentBank.accountNumber, style: 'bankValue' }],
+                    [{ text: 'IFSC', style: 'bankLabel' }, { text: documentBank.ifsc, style: 'bankValue' }],
+                    [{ text: 'Beneficiary', style: 'bankLabel' }, { text: documentBank.accountName, style: 'bankValue' }],
+                    [{ text: 'Type', style: 'bankLabel' }, { text: documentBank.accountType, style: 'bankValue' }]
                   ]
                 },
                 layout: {

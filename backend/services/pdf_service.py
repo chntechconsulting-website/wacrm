@@ -50,6 +50,16 @@ COMPANY_INFO = {
     "account_type": "Current"
 }
 
+# Biometric hardware documents are billed to the dedicated Axis Bank
+# collection account. WAHRMS documents keep the HDFC company account above.
+BIOMETRIC_BANK = {
+    "bank_name": "AXIS BANK",
+    "account_name": "CHN TECHNOLOGIES PRIVATE LIMITED",
+    "account_number": "921020014696411",
+    "ifsc": "UTIB0003702",
+    "account_type": "Current"
+}
+
 
 def number_to_indian_words(num):
     """Convert number to Indian currency words format."""
@@ -258,6 +268,10 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     # Custom styles
     is_invoice = (doc_type == "invoice")
     is_proforma = (doc_type == "proforma")
+    is_biometric = (
+        str(data.get("product_category") or "").strip().lower() == "biometric"
+    )
+    document_bank = BIOMETRIC_BANK if (is_biometric and not is_invoice) else COMPANY_INFO
 
     # Invoices use statutory deep navy/slate (#1e3a8a), while Quotes & Proformas use signature red (#dc2626)
     primary_color = colors.HexColor("#1e3a8a") if is_invoice else BRAND_RED_600
@@ -702,25 +716,30 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     ]
 
     if is_proforma:
+        payment_title = "PAYMENT DETAILS" if is_biometric else f"PAYMENT DETAILS ({document_bank['bank_name'].upper()})"
+        branch_line = (
+            f" &nbsp;&nbsp;|&nbsp;&nbsp; <b>Branch:</b> {document_bank['branch']}"
+            if document_bank.get("branch") else ""
+        )
         bank_flowable = [
-            Paragraph(f"<b>PAYMENT DETAILS ({COMPANY_INFO['bank_name'].upper()})</b>", style_panel_title),
-            Paragraph(f"<b>A/c Name:</b> {COMPANY_INFO['account_name']}", style_panel_body),
-            Paragraph(f"<b>Bank:</b> {COMPANY_INFO['bank_name']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>A/c No:</b> {COMPANY_INFO['account_number']}", style_panel_body),
-            Paragraph(f"<b>IFSC:</b> {COMPANY_INFO['ifsc']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Branch:</b> {COMPANY_INFO.get('branch', 'Mahalingapuram Branch')}", style_panel_body),
-            Paragraph(f"<b>Type:</b> {COMPANY_INFO['account_type']}", style_panel_body),
+            Paragraph(f"<b>{payment_title}</b>", style_panel_title),
+            Paragraph(f"<b>A/c Name:</b> {document_bank['account_name']}", style_panel_body),
+            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>A/c No:</b> {document_bank['account_number']}", style_panel_body),
+            Paragraph(f"<b>IFSC:</b> {document_bank['ifsc']}{branch_line}", style_panel_body),
+            Paragraph(f"<b>Type:</b> {document_bank['account_type']}", style_panel_body),
         ]
     elif is_invoice:
         bank_flowable = [
             Paragraph("<b>COMPANY BANK DETAILS</b>", style_panel_title),
-            Paragraph(f"<b>A/c Name:</b> {COMPANY_INFO['account_name']}", style_panel_body),
-            Paragraph(f"<b>Bank:</b> {COMPANY_INFO['bank_name']}<br/><b>A/c No:</b> {COMPANY_INFO['account_number']}<br/><b>IFSC:</b> {COMPANY_INFO['ifsc']}", style_panel_body),
+            Paragraph(f"<b>A/c Name:</b> {document_bank['account_name']}", style_panel_body),
+            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}<br/><b>A/c No:</b> {document_bank['account_number']}<br/><b>IFSC:</b> {document_bank['ifsc']}", style_panel_body),
             Spacer(1, 1 * mm),
             Paragraph("<font color='#1e3a8a'><b>Official Statutory Tax Invoice</b></font>", style_notes)
         ]
     else:
         bank_flowable = [
             Paragraph("<b>BANK DETAILS</b>", style_panel_title),
-            Paragraph(f"<b>Bank:</b> {COMPANY_INFO['bank_name']}<br/><b>A/c No:</b> {COMPANY_INFO['account_number']}<br/><b>IFSC:</b> {COMPANY_INFO['ifsc']}", style_panel_body)
+            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}<br/><b>A/c No:</b> {document_bank['account_number']}<br/><b>IFSC:</b> {document_bank['ifsc']}", style_panel_body)
         ]
 
     sign_flowable = [

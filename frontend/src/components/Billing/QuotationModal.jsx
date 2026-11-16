@@ -33,7 +33,7 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS, BIOMETRIC_PO_BANK } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS, BIOMETRIC_BANK } from '../../utils/quotationPdf';
 import {
   calculateBundleQuantity,
   createBundleSubscriptionFields,
@@ -583,8 +583,9 @@ export default function QuotationModal({
 
   const activeCompany = COMPANIES.find(c => c.id === selectedCompanyId) || COMPANIES[0];
   const isBiometricDoc = String(productCategory || '').trim().toLowerCase() === 'biometric';
-  const isBiometricPO = docType === 'po' && isBiometricDoc;
-  const bankSnapshot = isBiometricPO ? BIOMETRIC_PO_BANK : activeCompany.bank;
+  const bankSnapshot = isBiometricDoc && (docType === 'po' || docType === 'proforma')
+    ? BIOMETRIC_BANK
+    : activeCompany.bank;
 
   // Initialize line items
   const [lineItems, setLineItems] = useState(() => {
