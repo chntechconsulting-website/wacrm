@@ -375,7 +375,9 @@ async def startup_db_client():
                     "ALTER TABLE call_logs ADD COLUMN recording_verified_at DATETIME NULL",
                     "ALTER TABLE call_logs ADD COLUMN recording_consent_at DATETIME NULL",
                     "ALTER TABLE call_logs ADD COLUMN native_call_reference VARCHAR(100) NULL",
-                    "ALTER TABLE call_logs ADD INDEX ix_call_logs_recording_id (recording_id)"
+                    "ALTER TABLE call_logs ADD COLUMN customer_poc_id INT NULL",
+                    "ALTER TABLE call_logs ADD INDEX ix_call_logs_recording_id (recording_id)",
+                    "ALTER TABLE call_logs ADD INDEX ix_call_logs_customer_poc_id (customer_poc_id)"
                 ]:
                     try:
                         conn.execute(text(col_sql))
@@ -418,6 +420,32 @@ async def startup_db_client():
                     print(f"Call logs native-reference unique index NOT created: {ex}")
             except Exception as ex:
                 print(f"Call logs column sync check: {ex}")
+
+            # Support interaction -> customer POC link (additive). The
+            # customer_pocs table itself is created by create_all above.
+            try:
+                result = conn.execute(text("SHOW COLUMNS FROM support_interactions"))
+                si_cols = [row[0] for row in result.fetchall()]
+                if "customer_poc_id" not in si_cols:
+                    conn.execute(text(
+                        "ALTER TABLE support_interactions "
+                        "ADD COLUMN customer_poc_id INT NULL"
+                    ))
+                    conn.commit()
+                    print(
+                        "Auto-added missing column 'customer_poc_id' "
+                        "to 'support_interactions' table."
+                    )
+                try:
+                    conn.execute(text(
+                        "ALTER TABLE support_interactions ADD INDEX "
+                        "ix_support_interactions_customer_poc_id (customer_poc_id)"
+                    ))
+                    conn.commit()
+                except Exception:
+                    pass
+            except Exception as ex:
+                print(f"Support interactions column sync check: {ex}")
 
             # employees table schema sync for additive self-service profile fields
             try:
@@ -887,6 +915,18 @@ async def startup_db_client():
         db.rollback()
     finally:
         db.close()
+
+    # Apply one-time billing catalog data migrations. This runs as the backend
+    # service user so it can read the deployment's .env file. The migration
+    # itself is idempotent and guarded by wacrm_schema_migrations, so restarts
+    # and multiple workers are safe.
+    try:
+        from migrations.apply_biometric_price_list_2026_migration import (
+            apply_migration as apply_biometric_price_migration,
+        )
+        apply_biometric_price_migration()
+    except Exception as ex:
+        print(f"Biometric price migration failed: {ex}")
 
 @app.get("/")
 def root():

@@ -44,23 +44,3 @@ jobs:
           script: |
             set -eu
             sudo /usr/local/sbin/wacrm-deploy
-
-      - name: Apply pending billing data migrations
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: 22
-          command_timeout: 10m
-          script: |
-            set +e
-            cd /opt/wacrm/backend || { echo "::error title=Biometric price migration failed::backend directory missing"; exit 1; }
-            OUTPUT=$(PYTHONDONTWRITEBYTECODE=1 ./venv/bin/python migrations/apply_biometric_price_list_2026_migration.py 2>&1)
-            STATUS=$?
-            echo "$OUTPUT"
-            if [ "$STATUS" -ne 0 ]; then
-              MESSAGE=$(printf '%s\n' "$OUTPUT" | tail -n 12 | sed 's/%/%25/g; s/\r/%0D/g' | awk '{printf "%s%%0A", $0}')
-              echo "::error title=Biometric price migration failed::$MESSAGE"
-              exit "$STATUS"
-            fi
