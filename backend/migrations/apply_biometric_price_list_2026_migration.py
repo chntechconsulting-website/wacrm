@@ -15,6 +15,9 @@ Running it more than once is safe: unchanged rows are reported, not rewritten.
 
 import os
 import sys
+from datetime import datetime
+
+from sqlalchemy import text
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -36,6 +39,27 @@ SYNC_FIELDS = (
     "sort_order",
 )
 
+MIGRATION_KEY = "2026_biometric_price_list_v1"
+
+
+def _ensure_migration_tracking(db):
+    db.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS wacrm_schema_migrations ("
+            "migration_key VARCHAR(191) NOT NULL PRIMARY KEY, "
+            "applied_at DATETIME NOT NULL)"
+        )
+    )
+
+
+def _is_applied(db) -> bool:
+    _ensure_migration_tracking(db)
+    row = db.execute(
+        text("SELECT 1 FROM wacrm_schema_migrations WHERE migration_key = :key"),
+        {"key": MIGRATION_KEY},
+    ).first()
+    return row is not None
+
 
 def apply_migration():
     print("Applying 2026 biometric device price list migration...")
@@ -53,6 +77,10 @@ def apply_migration():
     unchanged = 0
 
     try:
+        if _is_applied(db):
+            print(f"Migration {MIGRATION_KEY} already applied. Nothing to do.")
+            return
+
         for bundle in device_bundles:
             row = (
                 db.query(WAHRMSBundle)
@@ -84,23 +112,30 @@ def apply_migration():
             else:
                 unchanged += 1
 
-        db.commit()
-
         total_devices = (
             db.query(WAHRMSBundle)
             .filter(WAHRMSBundle.bundle_code.in_(device_codes))
             .count()
-        )
-        print(
-            "Done. "
-            f"inserted={inserted}, updated={updated}, "
-            f"unchanged={unchanged}, device_rows={total_devices}/{len(device_codes)}"
         )
         if total_devices != len(device_codes):
             raise RuntimeError(
                 "Biometric device bundle count mismatch after migration: "
                 f"{total_devices} != {len(device_codes)}"
             )
+
+        db.execute(
+            text(
+                "INSERT INTO wacrm_schema_migrations (migration_key, applied_at) "
+                "VALUES (:key, :applied_at)"
+            ),
+            {"key": MIGRATION_KEY, "applied_at": datetime.utcnow()},
+        )
+        db.commit()
+        print(
+            "Done. "
+            f"inserted={inserted}, updated={updated}, "
+            f"unchanged={unchanged}, device_rows={total_devices}/{len(device_codes)}"
+        )
     except Exception:
         db.rollback()
         raise

@@ -44,3 +44,16 @@ jobs:
           script: |
             set -eu
             sudo /usr/local/sbin/wacrm-deploy
+
+      - name: Apply pending billing data migrations
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          command_timeout: 10m
+          script: |
+            set -eu
+            cd /opt/wacrm/backend
+            sudo env PYTHONDONTWRITEBYTECODE=1 ./venv/bin/python migrations/apply_biometric_price_list_2026_migration.py
