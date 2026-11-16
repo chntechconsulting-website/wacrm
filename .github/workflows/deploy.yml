@@ -56,4 +56,4 @@ jobs:
           script: |
             set -eu
             cd /opt/wacrm/backend
-            sudo env PYTHONDONTWRITEBYTECODE=1 ./venv/bin/python migrations/apply_biometric_price_list_2026_migration.py
+            PYTHONDONTWRITEBYTECODE=1 ./venv/bin/python migrations/apply_biometric_price_list_2026_migration.py
