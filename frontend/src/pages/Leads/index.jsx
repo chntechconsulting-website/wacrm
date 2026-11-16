@@ -338,6 +338,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [creatingQuotation, setCreatingQuotation] = useState(false);
   const [syncingQuotation, setSyncingQuotation] = useState(false);
   const [quotationMessage, setQuotationMessage] = useState('');
+  const [linkedQuotations, setLinkedQuotations] = useState([]);
+  const [linkedQuotationsLoading, setLinkedQuotationsLoading] = useState(false);
 
   // Follow-up Date Prompt Modal State
   const [showFollowupPromptModal, setShowFollowupPromptModal] = useState(false);
@@ -418,6 +420,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         setQuotationMessage(`Synced status: ${res.data.quotation_status}`);
         fetchLeads(true);
         setSelectedLead(prev => prev ? ({ ...prev, ...res.data }) : null);
+        fetchLinkedQuotations(lead.id);
         setTimeout(() => setQuotationMessage(''), 4000);
       }
     } catch (err) {
@@ -469,6 +472,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
         ? `Draft ${docType} #${newDoc?.number || ''} saved successfully!`
         : `Issued ${docType} #${newDoc?.number || ''} for Rs. ${amount.toLocaleString('en-IN')}!`
     );
+    if (selectedLead?.id) {
+      fetchLinkedQuotations(selectedLead.id);
+    }
     setTimeout(() => setQuotationMessage(''), 5000);
   };
 
@@ -508,6 +514,31 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setLeadCallLogs(res.data?.items || []);
     } catch (e) {
       console.error("Failed to load call logs for lead:", e);
+    }
+  };
+
+  const fetchLinkedQuotations = async (leadId) => {
+    if (!leadId) {
+      setLinkedQuotations([]);
+      return;
+    }
+    try {
+      setLinkedQuotationsLoading(true);
+      const res = await API.get('/integrations/waquote/documents', {
+        params: { leadId, limit: 100 }
+      });
+      if (res.data?.ok) {
+        setLinkedQuotations(res.data.documents || []);
+      } else {
+        setLinkedQuotations([]);
+      }
+    } catch (e) {
+      // Finance/Support users may not have access to billing documents; the
+      // lead drawer must keep working without the linked quotation panel.
+      console.warn('Failed to load linked quotations for lead:', e);
+      setLinkedQuotations([]);
+    } finally {
+      setLinkedQuotationsLoading(false);
     }
   };
 
@@ -786,6 +817,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     try {
       setSelectedLead(null); // Instantly clear previous lead data to prevent stale activity display
       setNoteText('');
+      setLinkedQuotations([]);
       setDrawerTab('overview');
       setShowDetailDrawer(true);
 
@@ -798,6 +830,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       leadData.activities = actRes.data || leadData.activities || [];
       setSelectedLead(leadData);
       fetchLeadCallLogs(lead.id);
+      fetchLinkedQuotations(lead.id);
     } catch (err) {
       console.error(err);
       setError('Failed to load lead timeline details.');
@@ -3540,7 +3573,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           <h4 style={{ fontSize: '0.92rem', fontWeight: '800', color: '#166534', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <FileText size={16} style={{ color: '#15803d' }} /> WA Quote Documents & Invoicing
                           </h4>
-                          {selectedLead.quotetask_quotation_id && (
+                          {(selectedLead.quotetask_quotation_id || linkedQuotations.length > 0) && (
                             <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '10px', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: '700' }}>
                               LINKED
                             </span>
@@ -3550,6 +3583,63 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         {quotationMessage && (
                           <div style={{ background: '#dcfce7', color: '#15803d', padding: '6px 10px', borderRadius: '6px', marginBottom: '10px', fontSize: '0.8rem', fontWeight: '600' }}>
                             {quotationMessage}
+                          </div>
+                        )}
+
+                        {(linkedQuotationsLoading || linkedQuotations.length > 0) && (
+                          <div style={{ marginBottom: '14px', background: '#ffffff', border: '1px solid #d1fae5', borderRadius: '10px', padding: '10px 12px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Linked Quotations{linkedQuotations.length > 0 ? ` (${linkedQuotations.length})` : ''}
+                              </span>
+                              {linkedQuotationsLoading && <RefreshCw size={12} className="spin" style={{ color: '#16a34a' }} />}
+                            </div>
+                            {linkedQuotationsLoading && linkedQuotations.length === 0 ? (
+                              <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Loading linked quotations…</div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {linkedQuotations.map((doc) => {
+                                  const docType = (doc.docType || 'quotation').toLowerCase();
+                                  const docStatus = String(doc.status || 'issued').toLowerCase();
+                                  const docAmount = doc.financials?.grandTotal ?? doc.grandTotal ?? 0;
+                                  const docId = doc.rawId || String(doc.id || '').replace('local_', '');
+                                  const typeLabel = docType === 'proforma' ? 'Proforma' : docType === 'invoice' ? 'Invoice' : 'Quotation';
+                                  return (
+                                    <div key={doc.id || docId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '7px 9px', borderRadius: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+                                      <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                          <FileText size={12} style={{ color: docType === 'proforma' ? '#7c3aed' : '#16a34a' }} />
+                                          {typeLabel} #{doc.number}
+                                          <span style={{
+                                            fontSize: '0.64rem',
+                                            padding: '1px 6px',
+                                            borderRadius: '8px',
+                                            textTransform: 'uppercase',
+                                            fontWeight: 800,
+                                            backgroundColor: docStatus === 'draft' ? '#f1f5f9' : (docStatus === 'cancelled' ? '#fee2e2' : '#dcfce7'),
+                                            color: docStatus === 'draft' ? '#475569' : (docStatus === 'cancelled' ? '#b91c1c' : '#15803d')
+                                          }}>
+                                            {docStatus}
+                                          </span>
+                                        </div>
+                                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
+                                          {doc.issueDateFormatted || '—'} • ₹{Number(docAmount).toLocaleString('en-IN')}
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="btn btn-outline"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem', padding: '4px 9px', backgroundColor: '#ffffff' }}
+                                        onClick={() => navigate(`/waquotes?doc=${encodeURIComponent(docId)}`)}
+                                        title="Open this quotation"
+                                      >
+                                        <ExternalLink size={12} /> Open
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         )}
 

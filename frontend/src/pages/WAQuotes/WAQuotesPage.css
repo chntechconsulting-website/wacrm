@@ -513,3 +513,199 @@
   background-color: #ccfbf1;
   border-color: #5eead4;
 }
+
+/* LINKED CRM LEAD */
+.waquotes-lead-link-card {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+
+.waquotes-lead-link-card.is-linked {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.waquotes-lead-link-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.waquotes-lead-link-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.waquotes-lead-linked-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #15803d;
+  background: #dcfce7;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.waquotes-link-lead-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #ffffff;
+  background: #0f766e;
+  border: 1px solid #0f766e;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.waquotes-link-lead-btn:hover {
+  background: #115e59;
+  border-color: #115e59;
+}
+
+.waquotes-lead-link-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.waquotes-lead-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 170px;
+}
+
+.waquotes-lead-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.waquotes-lead-identity > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.waquotes-lead-identity strong {
+  font-size: 0.88rem;
+  color: #0f172a;
+}
+
+.waquotes-lead-identity span {
+  font-size: 0.74rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.waquotes-lead-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.waquotes-lead-meta > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: #475569;
+  min-width: 0;
+}
+
+.waquotes-lead-meta svg {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.waquotes-lead-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waquotes-open-lead-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #ffffff;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.waquotes-open-lead-btn:hover {
+  background: #f0fdfa;
+}
+
+.waquotes-lead-link-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.waquotes-lead-link-empty > span {
+  flex: 1;
+  min-width: 220px;
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  .waquotes-lead-link-body {
+    align-items: flex-start;
+  }
+
+  .waquotes-open-lead-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.waquotes-lead-unlinked-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  background: #e2e8f0;
+  padding: 3px 9px;
+  border-radius: 999px;
+}

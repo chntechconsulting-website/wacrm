@@ -22,10 +22,12 @@ import {
   Phone,
   ArrowUpRight,
   Plus,
-  Pencil
+  Pencil,
+  Link2
 } from 'lucide-react';
 import QuotationModal from '../../components/Billing/QuotationModal';
 import DocumentPdfPreviewModal from '../../components/Billing/PdfPreviewModal';
+import LinkQuotationToLeadModal from '../../components/Billing/LinkQuotationToLeadModal';
 import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
@@ -41,6 +43,11 @@ const formatINR = (val) => {
     maximumFractionDigits: 0
   }).format(val);
 };
+
+const documentKey = (document) =>
+  String(document?.rawId ?? document?.id ?? '')
+    .replace('local_', '')
+    .trim();
 
 const formatDocDate = (formatted, raw) => {
   if (formatted && typeof formatted === 'string' && formatted !== '—') return formatted;
@@ -89,9 +96,21 @@ const WAQuotesPage = () => {
   const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
   const [showPdfPreviewModal, setShowPdfPreviewModal] = useState(false);
 
+  // Existing quotation -> existing lead linking
+  const [showLinkLeadModal, setShowLinkLeadModal] = useState(false);
+
   const { user } = useAuth();
   const userRole = (user?.role || '').toUpperCase();
   const isFinance = userRole === 'FINANCE';
+  const canLinkToLead =
+    !isFinance &&
+    !userRole.startsWith('SUPPORT') &&
+    (userRole === 'ADMIN' || userRole.includes('SALES'));
+  const canLinkSelectedDoc =
+    canLinkToLead &&
+    ['quotation', 'proforma'].includes(
+      (selectedDoc?.docType || 'quotation').toLowerCase()
+    );
 
   const fetchSummary = async () => {
     try {
@@ -186,6 +205,33 @@ const WAQuotesPage = () => {
     const params = new URLSearchParams(location.search);
     const leadIdParam = params.get('leadId');
     const createType = params.get('create');
+    const qParam = params.get('q');
+    const docParam = params.get('doc');
+
+    if (qParam !== null) {
+      setSearchQuery(qParam);
+    }
+
+    // Deep-link a specific document, e.g. from the linked quotations list in
+    // the lead drawer. This opens the existing detail modal without a reload.
+    if (docParam) {
+      let cancelled = false;
+      const openDocumentFromUrl = async () => {
+        try {
+          const cleanId = String(docParam).replace('local_', '').trim();
+          const res = await API.get(`/integrations/waquote/documents/${cleanId}`);
+          if (!cancelled && res.data?.ok && res.data.document) {
+            setSelectedDoc(res.data.document);
+          }
+        } catch (err) {
+          console.error('Failed to open quotation from URL:', err);
+        }
+      };
+      openDocumentFromUrl();
+      return () => {
+        cancelled = true;
+      };
+    }
 
     if (leadIdParam) {
       const fetchLeadQuotationContext = async () => {
@@ -354,6 +400,30 @@ const WAQuotesPage = () => {
     if (location.search) {
       navigate('/waquotes', { replace: true });
     }
+  };
+
+  const handleQuotationLinked = (payload) => {
+    const updated = payload?.document;
+    setShowLinkLeadModal(false);
+    if (updated) {
+      const updatedKey = documentKey(updated);
+      setSelectedDoc((previous) => {
+        if (!previous || documentKey(previous) !== updatedKey) return previous;
+        return { ...previous, ...updated };
+      });
+      setDocuments((previous) =>
+        previous.map((document) =>
+          documentKey(document) === updatedKey
+            ? { ...document, ...updated }
+            : document
+        )
+      );
+    }
+    setActionToast({
+      type: 'success',
+      text: payload?.message || 'Quotation linked to lead successfully.'
+    });
+    setTimeout(() => setActionToast(null), 6000);
   };
 
   const handleGenerateProforma = async (quote) => {
@@ -1072,6 +1142,72 @@ const WAQuotesPage = () => {
                 )}
               </div>
 
+              {/* Linked CRM lead */}
+              <div className={`waquotes-lead-link-card${selectedDoc.lead ? ' is-linked' : ''}`}>
+                <div className="waquotes-lead-link-head">
+                  <span className="waquotes-lead-link-title">
+                    <Link2 size={15} />
+                    CRM Lead
+                  </span>
+                  {selectedDoc.lead ? (
+                    <span className="waquotes-lead-linked-badge">Linked</span>
+                  ) : (
+                    <span className="waquotes-lead-unlinked-badge">Not linked</span>
+                  )}
+                </div>
+
+                {selectedDoc.lead ? (
+                  <div className="waquotes-lead-link-body">
+                    <div className="waquotes-lead-identity">
+                      <span className="waquotes-lead-avatar" aria-hidden="true">
+                        {(selectedDoc.lead.name || '?').trim().charAt(0).toUpperCase()}
+                      </span>
+                      <div>
+                        <strong>{selectedDoc.lead.name || 'Unnamed Lead'}</strong>
+                        <span>Lead #{selectedDoc.lead.id}</span>
+                      </div>
+                    </div>
+                    <div className="waquotes-lead-meta">
+                      {selectedDoc.lead.company && (
+                        <div><Building2 size={13} /><span>{selectedDoc.lead.company}</span></div>
+                      )}
+                      {selectedDoc.lead.phone && (
+                        <div><Phone size={13} /><span>{selectedDoc.lead.phone}</span></div>
+                      )}
+                      {selectedDoc.lead.email && (
+                        <div><Mail size={13} /><span>{selectedDoc.lead.email}</span></div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm waquotes-open-lead-btn"
+                      onClick={() => navigate(`/leads?openLeadId=${selectedDoc.lead.id}`)}
+                    >
+                      <ExternalLink size={13} />
+                      Open Lead
+                    </button>
+                  </div>
+                ) : (
+                  <div className="waquotes-lead-link-empty">
+                    <span>
+                      {canLinkSelectedDoc
+                        ? 'This quotation is not linked to a CRM lead. Link it to keep the lead timeline and contact details in sync.'
+                        : 'This quotation is not linked to a CRM lead.'}
+                    </span>
+                    {canLinkSelectedDoc && (
+                      <button
+                        type="button"
+                        className="btn btn-sm waquotes-link-lead-btn"
+                        onClick={() => setShowLinkLeadModal(true)}
+                      >
+                        <Link2 size={14} />
+                        Link to Lead
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Destination ERP Integration Card for Proformas */}
               {(selectedDoc.docType || selectedDoc.doc_type || '').toLowerCase() === 'proforma' && (
                 <div style={{
@@ -1263,6 +1399,15 @@ const WAQuotesPage = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Link Existing Quotation to CRM Lead */}
+      {showLinkLeadModal && selectedDoc && (
+        <LinkQuotationToLeadModal
+          document={selectedDoc}
+          onClose={() => setShowLinkLeadModal(false)}
+          onLinked={handleQuotationLinked}
+        />
       )}
 
       {/* Lead Context Loading Spinner Overlay */}

@@ -22,7 +22,8 @@ from services.permission_service import (
     is_finance_team,
     user_has_permission,
     apply_billing_scope_filter,
-    is_user_authorized_for_billing_doc
+    is_user_authorized_for_billing_doc,
+    get_user_view_scope,
 )
 from services.hierarchy_service import (
     normalize_role,
@@ -44,6 +45,11 @@ from services.billing_catalog import (
     WAHRMS_PACKAGE_CODES
 )
 from services.billing_terms import default_terms_for_category
+from services.quotation_lead_link_service import (
+    find_matching_leads,
+    link_quotation_to_lead,
+    serialize_lead_brief,
+)
 from utils.document_status import (
     invoice_document_status,
     normalize_invoice_document_status,
@@ -62,6 +68,10 @@ class LineItemInput(BaseModel):
     gstRate: float = 0.18
     discount: float = 0.0
     amount: Optional[float] = 0.0
+
+class LinkLeadRequest(BaseModel):
+    lead_id: int
+
 
 class CreateDocumentRequest(BaseModel):
     doc_type: str = "quotation" # quotation, proforma, invoice, po
@@ -104,6 +114,117 @@ class CreateDocumentRequest(BaseModel):
     pdf_url: Optional[str] = ""
     company_id: Optional[str] = "wahrms"
     company: Optional[Dict[str, Any]] = None
+
+def _resolve_quotation_document(doc_id: str, db: Session) -> Quotation:
+    clean_id = str(doc_id or "").replace("local_", "").strip()
+    record = None
+    if clean_id.isdigit():
+        record = db.query(Quotation).filter(Quotation.id == int(clean_id)).first()
+    if not record:
+        record = db.query(Quotation).filter(Quotation.doc_number == str(doc_id).strip()).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return record
+
+
+def _sales_lead_scope_query(db: Session, current_user: User):
+    """Apply the same Sales lead visibility rules used by GET /leads."""
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Support team cannot search or link Sales leads.",
+        )
+    if is_finance_team(current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Finance team cannot link Sales quotations to leads.",
+        )
+    if not user_has_permission(current_user, "leads", "view", db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: You do not have permission to view leads.",
+        )
+
+    query = db.query(Lead)
+    scope = get_user_view_scope(current_user, "leads", db)
+    if scope == "none":
+        return query.filter(Lead.id == -1)
+    if scope == "own":
+        employee = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        if not employee:
+            return query.filter(Lead.id == -1)
+        return query.filter(Lead.assigned_to == employee.id)
+    if scope == "team":
+        team_ids = get_team_employee_ids_from_user(current_user, db)
+        return query.filter(or_(Lead.assigned_to.in_(team_ids), Lead.assigned_to == None))
+    return query
+
+
+def _serialize_document_detail(r: Quotation, db: Session) -> Dict[str, Any]:
+    issue_formatted = r.issue_date.strftime("%d/%m/%Y") if r.issue_date else "—"
+    due_formatted = r.due_date.strftime("%d/%m/%Y") if r.due_date else "—"
+    total_val = float(r.grand_total or 0.0)
+    paid_val = float(r.amount_paid or 0.0)
+    balance_val = max(0.0, total_val - paid_val)
+    linked_lead = None
+    if r.lead_id:
+        linked_lead = db.query(Lead).filter(Lead.id == r.lead_id).first()
+
+    return {
+        "id": f"local_{r.id}",
+        "rawId": r.id,
+        "number": r.doc_number,
+        "docType": r.doc_type,
+        "status": invoice_document_status(r),
+        "paymentStatus": r.payment_status,
+        "issueDate": int(r.issue_date.timestamp() * 1000) if r.issue_date else None,
+        "issueDateFormatted": issue_formatted,
+        "dueDateFormatted": due_formatted,
+        "grandTotal": total_val,
+        "taxTotal": float(r.tax_total or 0.0),
+        "subtotal": float(r.subtotal or 0.0),
+        "financials": {
+            "grandTotal": total_val,
+            "subtotal": float(r.subtotal or 0.0),
+            "taxAmount": float(r.tax_total or 0.0),
+            "totalPaid": paid_val,
+            "balance": balance_val,
+        },
+        "customer": {
+            "name": r.customer_name,
+            "companyName": r.company_name,
+            "phone": r.phone,
+            "email": r.email,
+            "address": {
+                "line1": r.address or "",
+                "state": r.state or "Tamil Nadu",
+                "stateCode": r.state_code or "33",
+            },
+            "gstin": r.gstin or "",
+        },
+        "lineItems": r.line_items or [],
+        "selectedBundle": r.selected_bundle,
+        "productCategory": getattr(r, "product_category", "wahrms") or "wahrms",
+        "sourceQuotationId": r.source_quotation_id,
+        "sourceQuotationNumber": r.source_quotation_number,
+        "termsAndConditions": r.terms_and_conditions or "",
+        "notes": r.notes or "",
+        "preparedBy": r.prepared_by or "",
+        "pdfUrl": r.pdf_url,
+        "leadId": r.lead_id,
+        "lead": serialize_lead_brief(linked_lead),
+        "isLinkedToLead": bool(r.lead_id),
+        "customerId": r.customer_id,
+        "destinationSyncStatus": getattr(r, "destination_sync_status", "PENDING") or "PENDING",
+        "externalClientId": getattr(r, "external_client_id", None),
+        "externalProformaId": getattr(r, "external_proforma_id", None),
+        "destinationSyncedAt": r.destination_synced_at.strftime("%d/%m/%Y %H:%M") if getattr(r, "destination_synced_at", None) else None,
+        "destinationSyncError": getattr(r, "destination_sync_error", None),
+        "destinationSyncAttempts": getattr(r, "destination_sync_attempts", 0) or 0,
+        "source": "Local CRM",
+    }
+
 
 @router.post("/test")
 def test_waquote_connection(
@@ -556,6 +677,13 @@ def list_waquote_documents(
     limit_val = limit if isinstance(limit, int) else 50
     total_count = q.count()
     local_records = q.order_by(desc(Quotation.created_at)).offset((page_val - 1) * limit_val).limit(limit_val).all()
+    linked_lead_ids = {r.lead_id for r in local_records if r.lead_id}
+    linked_leads = {}
+    if linked_lead_ids:
+        linked_leads = {
+            lead.id: lead
+            for lead in db.query(Lead).filter(Lead.id.in_(linked_lead_ids)).all()
+        }
     local_formatted = []
     for r in local_records:
         issue_formatted = r.issue_date.strftime("%d/%m/%Y") if r.issue_date else "—"
@@ -606,6 +734,8 @@ def list_waquote_documents(
             "preparedBy": r.prepared_by or "",
             "pdfUrl": r.pdf_url,
             "leadId": r.lead_id,
+            "lead": serialize_lead_brief(linked_leads.get(r.lead_id)),
+            "isLinkedToLead": bool(r.lead_id),
             "customerId": r.customer_id,
             "destinationSyncStatus": getattr(r, "destination_sync_status", "PENDING") or "PENDING",
             "externalClientId": getattr(r, "external_client_id", None),
@@ -1052,14 +1182,7 @@ def get_waquote_document(
     """
     Fetches a single document's itemized lines, installments, and PDF links from local CRM database.
     """
-    clean_id = doc_id.replace("local_", "").strip()
-    r = None
-    if clean_id.isdigit():
-        r = db.query(Quotation).filter(Quotation.id == int(clean_id)).first()
-    if not r:
-        r = db.query(Quotation).filter(Quotation.doc_number == doc_id.strip()).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Document not found.")
+    r = _resolve_quotation_document(doc_id, db)
 
     if not is_user_authorized_for_billing_doc(current_user, r, db, "view"):
         raise HTTPException(
@@ -1067,65 +1190,131 @@ def get_waquote_document(
             detail="Access denied: You are not authorized to view this billing document."
         )
 
-    issue_formatted = r.issue_date.strftime("%d/%m/%Y") if r.issue_date else "—"
-    due_formatted = r.due_date.strftime("%d/%m/%Y") if r.due_date else "—"
-    total_val = float(r.grand_total or 0.0)
-    paid_val = float(r.amount_paid or 0.0)
-    balance_val = max(0.0, total_val - paid_val)
+    return {"ok": True, "document": _serialize_document_detail(r, db)}
+
+@router.get("/documents/{doc_id}/lead-matches")
+def get_document_lead_matches(
+    doc_id: str,
+    search: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Suggest CRM leads for an existing quotation.
+
+    The response is advisory only. It never links a document; the caller must
+    choose a lead and confirm through the link endpoint.
+    """
+    document = _resolve_quotation_document(doc_id, db)
+    if not is_user_authorized_for_billing_doc(current_user, document, db, "view"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to view this billing document.",
+        )
+
+    base_query = _sales_lead_scope_query(db, current_user)
+    matches = find_matching_leads(
+        db,
+        document,
+        base_query,
+        search=search,
+        limit=limit,
+    )
+    linked_lead = None
+    if document.lead_id:
+        linked_lead = db.query(Lead).filter(Lead.id == document.lead_id).first()
+    for item in matches:
+        item["isCurrentLead"] = bool(
+            linked_lead and item.get("lead", {}).get("id") == linked_lead.id
+        )
+
+    suggested_lead_id = None
+    if not document.lead_id and len(matches) == 1 and matches[0]["matchScore"] >= 80:
+        suggested_lead_id = matches[0]["lead"]["id"]
 
     return {
         "ok": True,
         "document": {
-            "id": f"local_{r.id}",
-            "number": r.doc_number,
-            "docType": r.doc_type,
-            "status": invoice_document_status(r),
-            "paymentStatus": r.payment_status,
-            "issueDate": int(r.issue_date.timestamp() * 1000) if r.issue_date else None,
-            "issueDateFormatted": issue_formatted,
-            "dueDateFormatted": due_formatted,
-            "grandTotal": total_val,
-            "taxTotal": float(r.tax_total or 0.0),
-            "subtotal": float(r.subtotal or 0.0),
-            "financials": {
-                "grandTotal": total_val,
-                "subtotal": float(r.subtotal or 0.0),
-                "taxAmount": float(r.tax_total or 0.0),
-                "totalPaid": paid_val,
-                "balance": balance_val
-            },
-            "customer": {
-                "name": r.customer_name,
-                "companyName": r.company_name,
-                "phone": r.phone,
-                "email": r.email,
-                "address": {
-                    "line1": r.address or "",
-                    "state": r.state or "Tamil Nadu",
-                    "stateCode": r.state_code or "33"
-                },
-                "gstin": r.gstin or ""
-            },
-            "lineItems": r.line_items or [],
-            "selectedBundle": r.selected_bundle,
-            "productCategory": getattr(r, 'product_category', 'wahrms') or 'wahrms',
-            "sourceQuotationId": r.source_quotation_id,
-            "sourceQuotationNumber": r.source_quotation_number,
-            "termsAndConditions": r.terms_and_conditions or "",
-            "notes": r.notes or "",
-            "preparedBy": r.prepared_by or "",
-            "pdfUrl": r.pdf_url,
-            "leadId": r.lead_id,
-            "customerId": r.customer_id,
-            "destinationSyncStatus": getattr(r, "destination_sync_status", "PENDING") or "PENDING",
-            "externalClientId": getattr(r, "external_client_id", None),
-            "externalProformaId": getattr(r, "external_proforma_id", None),
-            "destinationSyncedAt": r.destination_synced_at.strftime("%d/%m/%Y %H:%M") if getattr(r, "destination_synced_at", None) else None,
-            "destinationSyncError": getattr(r, "destination_sync_error", None),
-            "destinationSyncAttempts": getattr(r, "destination_sync_attempts", 0) or 0,
-            "source": "Local CRM"
-        }
+            "id": f"local_{document.id}",
+            "rawId": document.id,
+            "number": document.doc_number,
+            "docType": document.doc_type,
+        },
+        "linkedLead": serialize_lead_brief(linked_lead),
+        "suggestions": matches,
+        "matchCount": len(matches),
+        "suggestedLeadId": suggested_lead_id,
+        "requiresConfirmation": True,
     }
+
+
+@router.post("/documents/{doc_id}/link-lead")
+def link_document_to_lead(
+    doc_id: str,
+    payload: LinkLeadRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Link an existing billing document to a visible CRM lead.
+
+    Idempotent for the same lead. A document already linked to a different lead
+    is rejected until it is explicitly handled, preventing silent rewrites.
+    """
+    document = _resolve_quotation_document(doc_id, db)
+    if not is_user_authorized_for_billing_doc(current_user, document, db, "edit"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You are not authorized to link this billing document.",
+        )
+    if int(payload.lead_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail="A valid lead_id is required.")
+    if document.lead_id and document.lead_id != payload.lead_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This document is already linked to Lead #{document.lead_id}. "
+                "Unlink it through the existing record before linking another lead."
+            ),
+        )
+
+    lead = (
+        _sales_lead_scope_query(db, current_user)
+        .filter(Lead.id == payload.lead_id)
+        .first()
+    )
+    if not lead:
+        raise HTTPException(
+            status_code=404,
+            detail="Lead not found or you do not have access to it.",
+        )
+
+    employee = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    try:
+        result = link_quotation_to_lead(
+            db,
+            document,
+            lead,
+            actor_user=current_user,
+            actor_employee=employee,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    updated_document = _serialize_document_detail(result["quotation"], db)
+    message = (
+        f"Quotation #{document.doc_number} is already linked to Lead #{lead.id}."
+        if result["alreadyLinked"]
+        else f"Quotation #{document.doc_number} linked to {lead.name} successfully."
+    )
+    return {
+        "ok": True,
+        "alreadyLinked": result["alreadyLinked"],
+        "changedFields": result["changedFields"],
+        "message": message,
+        "lead": serialize_lead_brief(result["lead"]),
+        "document": updated_document,
+    }
+
 
 @router.put("/documents/{doc_id}")
 def update_waquote_document(
