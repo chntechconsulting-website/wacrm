@@ -173,7 +173,6 @@ export function generateBillingPdf(docData, download = true) {
     .trim()
     .toLowerCase() === 'biometric';
   const isBiometricPO = isPO && isBiometric;
-  const documentBank = isBiometric ? BIOMETRIC_BANK : company.bank;
   const isRedThemed = isQuotation || isProforma;
 
   const headerWord = isProforma
@@ -195,6 +194,7 @@ export function generateBillingPdf(docData, download = true) {
       ...(matchedCompany.address || {})
     }
   };
+  const documentBank = isBiometric ? BIOMETRIC_BANK : company.bank;
 
   const isIntra = (docData.taxMode || 'intra') === 'intra';
 
