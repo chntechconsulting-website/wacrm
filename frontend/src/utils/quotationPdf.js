@@ -32,7 +32,7 @@ const CONTENT_WIDTH = 539; // Portrait A4 width (595) minus 28pt margins on eith
 // Biometric hardware POs are billed to the dedicated Axis Bank collection
 // account. Quotations, proformas and invoices keep using the company profile
 // bank details from billingMoney.js.
-const BIOMETRIC_PO_BANK = {
+export const BIOMETRIC_PO_BANK = {
   accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
   bankName: 'AXIS BANK',
   accountNumber: '921020014696411',

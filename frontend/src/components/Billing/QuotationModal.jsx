@@ -33,7 +33,7 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS } from '../../utils/quotationPdf';
+import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS, BIOMETRIC_PO_BANK } from '../../utils/quotationPdf';
 import {
   calculateBundleQuantity,
   createBundleSubscriptionFields,
@@ -582,6 +582,9 @@ export default function QuotationModal({
 
 
   const activeCompany = COMPANIES.find(c => c.id === selectedCompanyId) || COMPANIES[0];
+  const isBiometricDoc = String(productCategory || '').trim().toLowerCase() === 'biometric';
+  const isBiometricPO = docType === 'po' && isBiometricDoc;
+  const bankSnapshot = isBiometricPO ? BIOMETRIC_PO_BANK : activeCompany.bank;
 
   // Initialize line items
   const [lineItems, setLineItems] = useState(() => {
@@ -2108,10 +2111,10 @@ export default function QuotationModal({
                 />
               </div>
 
-              {docType === 'proforma' && (
+              {(docType === 'proforma' || docType === 'po') && (
                 <div style={{ background: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '10px', padding: '12px', fontSize: '0.82rem', color: '#991b1b' }}>
                   <strong>Bank Account Snapshot:</strong><br />
-                  Bank: {COMPANY_DEFAULTS.bank.bankName} • A/C: {COMPANY_DEFAULTS.bank.accountNumber} ({COMPANY_DEFAULTS.bank.accountType}) • IFSC: {COMPANY_DEFAULTS.bank.ifsc}
+                  Bank: {bankSnapshot.bankName} • A/C: {bankSnapshot.accountNumber} ({bankSnapshot.accountType}) • IFSC: {bankSnapshot.ifsc}
                 </div>
               )}
             </div>
