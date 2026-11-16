@@ -36,21 +36,22 @@ export default function DocumentPdfPreviewModal({
       setError(null);
 
       const dType = (docData.docType || docData.doc_type || 'quotation').toLowerCase();
+      const isPoDoc = dType === 'po' || dType === 'purchase_order';
       const rawId = docData.id || docData.docId;
       const cleanId = rawId ? String(rawId).replace('local_', '').trim() : null;
 
       let fetchedBlob = null;
 
-      // Strategy 1: If document has a valid server ID and is not draft preview, try server download
-      if (cleanId && !String(cleanId).startsWith('DRAFT') && !String(cleanId).startsWith('PREVIEW') && !docData.isDraftPreview) {
+      // Strategy 1: If document has a valid server ID and is not draft preview, try server download.
+      // POs are always generated client-side: the backend has no PO renderer and its
+      // quotation endpoint would return a quotation-styled PDF.
+      if (!isPoDoc && cleanId && !String(cleanId).startsWith('DRAFT') && !String(cleanId).startsWith('PREVIEW') && !docData.isDraftPreview) {
         try {
           let endpoint;
           if (dType === 'invoice') {
             endpoint = `/integrations/waquote/invoices/${cleanId}/download`;
           } else if (dType === 'proforma') {
             endpoint = `/integrations/waquote/proformas/${cleanId}/download`;
-          } else if (dType === 'po' || dType === 'purchase_order') {
-            endpoint = `/integrations/waquote/quotations/${cleanId}/download`;
           } else {
             endpoint = `/integrations/waquote/quotations/${cleanId}/download`;
           }

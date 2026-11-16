@@ -29,6 +29,17 @@ const BRAND = {
 
 const CONTENT_WIDTH = 539; // Portrait A4 width (595) minus 28pt margins on either side
 
+// Biometric hardware POs are billed to the dedicated Axis Bank collection
+// account. Quotations, proformas and invoices keep using the company profile
+// bank details from billingMoney.js.
+const BIOMETRIC_PO_BANK = {
+  accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
+  bankName: 'AXIS BANK',
+  accountNumber: '921020014696411',
+  ifsc: 'UTIB0003702',
+  accountType: 'Current'
+};
+
 export const WAHRMS_TERMS_AND_CONDITIONS = [
   '1. Prices are subject to applicable GST as specified.',
   '2. Software activation and onboarding will begin upon PO confirmation and receipt of payment.',
@@ -158,6 +169,10 @@ export function generateBillingPdf(docData, download = true) {
   const isProforma = docType === 'proforma';
   const isInvoice = docType === 'invoice';
   const isPO = docType === 'po';
+  const isBiometric = String(docData.productCategory || docData.product_category || '')
+    .trim()
+    .toLowerCase() === 'biometric';
+  const isBiometricPO = isPO && isBiometric;
   const isRedThemed = isQuotation || isProforma;
 
   const headerWord = isProforma
@@ -650,6 +665,51 @@ export function generateBillingPdf(docData, download = true) {
     margin: [0, 4, 0, 6]
   };
 
+  // Biometric Purchase Orders use their own Axis Bank collection account and
+  // point the customer to the Scan & Pay page that follows.
+  const biometricPoPaymentBlock = {
+    stack: [
+      { text: 'PAYMENT DETAILS', style: 'sectionHeading', margin: [0, 8, 0, 4] },
+      { text: BIOMETRIC_PO_BANK.accountName, style: 'panelName', fontSize: 10.5, margin: [0, 0, 0, 4] },
+      {
+        table: {
+          widths: ['auto', 'auto'],
+          body: [
+            [{ text: 'Bank:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.bankName, style: 'p1BankVal' }],
+            [{ text: 'A/c:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.accountNumber, style: 'p1BankVal' }],
+            [{ text: 'IFSC:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.ifsc, style: 'p1BankVal' }],
+            [{ text: 'Type:', style: 'p1BankLabel' }, { text: BIOMETRIC_PO_BANK.accountType, style: 'p1BankVal' }]
+          ]
+        },
+        layout: {
+          hLineWidth: () => 0,
+          vLineWidth: () => 0,
+          paddingTop: () => 2,
+          paddingBottom: () => 2,
+          paddingLeft: () => 0,
+          paddingRight: () => 8
+        },
+        margin: [0, 2, 0, 6]
+      },
+      {
+        text: '* For UPI / QR Code payment, please refer to Page 2.',
+        style: 'poPaymentNote',
+        margin: [0, 4, 0, 0]
+      }
+    ],
+    margin: [0, 4, 0, 6]
+  };
+
+  const biometricPoQrPage = isBiometricPO ? {
+    pageBreak: 'before',
+    stack: [
+      { text: 'SCAN & PAY', style: 'scanToPayTitle', alignment: 'center', margin: [0, 0, 0, 2] },
+      { text: 'UPI / QR CODE PAYMENT', style: 'docTitle', alignment: 'center', margin: [0, 0, 0, 8] },
+      { image: CHN_QR_CARD_BASE64, width: 465, alignment: 'center' }
+    ],
+    margin: [0, 6, 0, 0]
+  } : null;
+
   // ---------- Bank Details (Only if Invoice or explicitly requested, Quotations don't show by default) ---
   const showBank = (!isProforma && (isInvoice || Boolean(docData.showBankDetails)));
   const bankPanel = showBank ? {
@@ -742,6 +802,7 @@ export function generateBillingPdf(docData, download = true) {
     p1BankLabel: { fontSize: 9, color: BRAND.ink500 },
     p1BankVal: { fontSize: 9.5, bold: true, color: BRAND.ink900 },
     qrPageRef: { fontSize: 8, bold: true, color: BRAND.brand700 },
+    poPaymentNote: { fontSize: 9, bold: true, color: BRAND.ink900 },
     scanToPayTitle: { fontSize: 16, bold: true, color: BRAND.brand700, characterSpacing: 0.5 },
     scanToPayDocNo: { fontSize: 10.5, color: BRAND.ink700 },
     scanToPayAmount: { fontSize: 12.5, bold: true, color: BRAND.ink900 },
@@ -768,7 +829,15 @@ export function generateBillingPdf(docData, download = true) {
     content.push(proformaPaymentBlock);
   } else {
     if (termsBlock) content.push(termsBlock);
-    if (bankPanel) content.push(bankPanel);
+    if (isBiometricPO) {
+      content.push(biometricPoPaymentBlock);
+    } else if (bankPanel) {
+      content.push(bankPanel);
+    }
+  }
+
+  if (biometricPoQrPage) {
+    content.push(biometricPoQrPage);
   }
 
   const docDefinition = {
