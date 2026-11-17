@@ -446,6 +446,23 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         leading=11,
         textColor=INK_700
     )
+    # Bottom payment/signature columns are narrower than the main panels.
+    # Use a compact body style so bank details and the signatory company name
+    # stay on their intended lines instead of wrapping mid-label.
+    style_bank_body = ParagraphStyle(
+        "BankBody",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=10.5,
+        textColor=INK_700
+    )
+    style_sign_head = ParagraphStyle(
+        "SignHead",
+        parent=style_panel_title,
+        fontSize=7.5,
+        leading=10
+    )
 
     story = []
 
@@ -725,38 +742,45 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
 
     if is_proforma:
         payment_title = "PAYMENT DETAILS" if is_biometric else f"PAYMENT DETAILS ({document_bank['bank_name'].upper()})"
-        branch_line = (
-            f" &nbsp;&nbsp;|&nbsp;&nbsp; <b>Branch:</b> {document_bank['branch']}"
-            if document_bank.get("branch") else ""
-        )
         bank_flowable = [
             Paragraph(f"<b>{payment_title}</b>", style_panel_title),
-            Paragraph(f"<b>A/c Name:</b> {document_bank['account_name']}", style_panel_body),
-            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']} &nbsp;&nbsp;|&nbsp;&nbsp; <b>A/c No:</b> {document_bank['account_number']}", style_panel_body),
-            Paragraph(f"<b>IFSC:</b> {document_bank['ifsc']}{branch_line}", style_panel_body),
-            Paragraph(f"<b>Type:</b> {document_bank['account_type']}", style_panel_body),
+            Paragraph(f"<b>A/c Name:</b> {document_bank['account_name']}", style_bank_body),
+            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}", style_bank_body),
+            Paragraph(f"<b>A/c No:</b> {document_bank['account_number']}", style_bank_body),
+            Paragraph(f"<b>IFSC:</b> {document_bank['ifsc']}", style_bank_body),
         ]
+        if document_bank.get("branch"):
+            bank_flowable.append(
+                Paragraph(f"<b>Branch:</b> {document_bank['branch']}", style_bank_body)
+            )
+        bank_flowable.append(
+            Paragraph(f"<b>Type:</b> {document_bank['account_type']}", style_bank_body)
+        )
     elif is_invoice:
         bank_flowable = [
             Paragraph("<b>COMPANY BANK DETAILS</b>", style_panel_title),
-            Paragraph(f"<b>A/c Name:</b> {document_bank['account_name']}", style_panel_body),
-            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}<br/><b>A/c No:</b> {document_bank['account_number']}<br/><b>IFSC:</b> {document_bank['ifsc']}", style_panel_body),
+            Paragraph(f"<b>A/c Name:</b> {document_bank['account_name']}", style_bank_body),
+            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}", style_bank_body),
+            Paragraph(f"<b>A/c No:</b> {document_bank['account_number']}", style_bank_body),
+            Paragraph(f"<b>IFSC:</b> {document_bank['ifsc']}", style_bank_body),
             Spacer(1, 1 * mm),
             Paragraph("<font color='#1e3a8a'><b>Official Statutory Tax Invoice</b></font>", style_notes)
         ]
     else:
         bank_flowable = [
             Paragraph("<b>BANK DETAILS</b>", style_panel_title),
-            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}<br/><b>A/c No:</b> {document_bank['account_number']}<br/><b>IFSC:</b> {document_bank['ifsc']}", style_panel_body)
+            Paragraph(f"<b>Bank:</b> {document_bank['bank_name']}", style_bank_body),
+            Paragraph(f"<b>A/c No:</b> {document_bank['account_number']}", style_bank_body),
+            Paragraph(f"<b>IFSC:</b> {document_bank['ifsc']}", style_bank_body),
         ]
 
     sign_flowable = [
-        Paragraph(f"For <b>{COMPANY_INFO['legal_name']}</b>", style_panel_title),
+        Paragraph(f"For <b>{COMPANY_INFO['legal_name']}</b>", style_sign_head),
         Spacer(1, 12 * mm),
         Paragraph("<b>Authorized Signatory</b>", style_panel_body)
     ]
 
-    bottom_table = Table([[terms_flowable, bank_flowable, sign_flowable]], colWidths=[70 * mm, 64 * mm, 48 * mm])
+    bottom_table = Table([[terms_flowable, bank_flowable, sign_flowable]], colWidths=[62 * mm, 70 * mm, 50 * mm])
     bottom_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING', (0, 0), (-1, -1), 2),
