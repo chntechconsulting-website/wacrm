@@ -341,7 +341,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=18,
         leading=22,
-        textColor=accent_color
+        textColor=primary_color
     )
     style_panel_title = ParagraphStyle(
         "PanelTitle",
