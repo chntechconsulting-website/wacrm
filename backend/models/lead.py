@@ -65,6 +65,13 @@ class Lead(Base):
     # Support-handoff ownership.
     trial_support_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
 
+    # Authoritative permanent Support owner for a converted customer. It is a
+    # separate column so reassigning Support never overwrites the Sales owner
+    # (``assigned_to``). The transactional support assignment service keeps
+    # this column, the latest Support handoff and the active
+    # ``SupportClientAssignment`` row in sync.
+    support_employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+
     assigned_to = Column(Integer, ForeignKey("employees.id"), index=True, nullable=True)
     assigned_by = Column(Integer, ForeignKey("employees.id"), nullable=True)
     assigned_at = Column(DateTime, nullable=True)
@@ -95,6 +102,7 @@ class Lead(Base):
     assigned_employee = relationship("Employee", foreign_keys=[assigned_to])
     assigned_by_employee = relationship("Employee", foreign_keys=[assigned_by])
     trial_support_employee = relationship("Employee", foreign_keys=[trial_support_employee_id])
+    support_employee = relationship("Employee", foreign_keys=[support_employee_id])
     activities = relationship("LeadActivity", back_populates="lead", cascade="all, delete-orphan")
     assignments = relationship("LeadAssignment", back_populates="lead", cascade="all, delete-orphan")
     status_history = relationship("LeadStatusHistory", back_populates="lead", cascade="all, delete-orphan")

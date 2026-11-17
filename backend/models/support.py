@@ -277,3 +277,107 @@ class SupportCoverageAssignment(Base):
             "end_reason": self.end_reason,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class SupportClientAssignment(Base):
+    """Current and historical Support ownership for one customer.
+
+    Exactly one row per lead may be ``ACTIVE``; every reassignment closes the
+    previous active row and inserts a new one in the same database transaction.
+    The row is the durable assignment mapping the Support dashboards read, so a
+    reassignment is visible to the new owner and hidden from the previous owner
+    without relying on ``Lead.assigned_to`` (which belongs to Sales).
+    """
+
+    __tablename__ = "support_client_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False, index=True)
+    customer_id = Column(
+        Integer, ForeignKey("customers.id"), nullable=True, index=True
+    )
+    support_handoff_id = Column(
+        Integer, ForeignKey("support_handoffs.id"), nullable=True, index=True
+    )
+
+    employee_id = Column(
+        Integer, ForeignKey("employees.id"), nullable=False, index=True
+    )
+    previous_employee_id = Column(
+        Integer, ForeignKey("employees.id"), nullable=True, index=True
+    )
+    assigned_by_employee_id = Column(
+        Integer, ForeignKey("employees.id"), nullable=True, index=True
+    )
+    assigned_by_user_id = Column(
+        Integer, ForeignKey("users.id"), nullable=True, index=True
+    )
+
+    # MANUAL_ASSIGN, MANUAL_REASSIGN, COVERAGE, MIGRATION
+    source = Column(String(30), default="MANUAL_ASSIGN", nullable=False)
+    reason = Column(Text, nullable=True)
+    # ACTIVE, ENDED
+    status = Column(String(20), default="ACTIVE", nullable=False, index=True)
+
+    assigned_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
+    ended_at = Column(DateTime, nullable=True)
+    end_reason = Column(String(100), nullable=True)
+
+    created_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
+    updated_at = Column(
+        DateTime, default=get_ist_now, onupdate=get_ist_now, nullable=False
+    )
+
+    lead = relationship("Lead", foreign_keys=[lead_id])
+    customer = relationship("Customer", foreign_keys=[customer_id])
+    support_handoff = relationship("SupportHandoff", foreign_keys=[support_handoff_id])
+    employee = relationship("Employee", foreign_keys=[employee_id])
+    previous_employee = relationship("Employee", foreign_keys=[previous_employee_id])
+    assigned_by_employee = relationship(
+        "Employee", foreign_keys=[assigned_by_employee_id]
+    )
+    assigned_by_user = relationship("User", foreign_keys=[assigned_by_user_id])
+
+    __table_args__ = (
+        Index(
+            "ix_support_client_assignments_lead_status",
+            "lead_id",
+            "status",
+        ),
+        Index(
+            "ix_support_client_assignments_employee_status",
+            "employee_id",
+            "status",
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "lead_id": self.lead_id,
+            "customer_id": self.customer_id,
+            "support_handoff_id": self.support_handoff_id,
+            "employee_id": self.employee_id,
+            "employee_name": self.employee.name if self.employee else None,
+            "previous_employee_id": self.previous_employee_id,
+            "previous_employee_name": (
+                self.previous_employee.name if self.previous_employee else None
+            ),
+            "assigned_by_employee_id": self.assigned_by_employee_id,
+            "assigned_by_employee_name": (
+                self.assigned_by_employee.name
+                if self.assigned_by_employee
+                else None
+            ),
+            "assigned_by_user_id": self.assigned_by_user_id,
+            "assigned_by_username": (
+                self.assigned_by_user.username if self.assigned_by_user else None
+            ),
+            "reason": self.reason,
+            "source": self.source,
+            "status": self.status,
+            "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
+            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
+            "end_reason": self.end_reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

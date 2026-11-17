@@ -18,7 +18,12 @@ from models.employee import Employee
 from models.followup import Followup
 from models.lead import Lead
 from models.monitoring import EmployeePresence
-from models.support import EmployeeLeave, SupportCoverageAssignment, SupportInteraction
+from models.support import (
+    EmployeeLeave,
+    SupportClientAssignment,
+    SupportCoverageAssignment,
+    SupportInteraction,
+)
 from models.user import User
 from models.workflow import SupportHandoff
 from services.followup_visibility_service import apply_followup_department_filters
@@ -179,8 +184,14 @@ def get_employee_availability(db: Session, employee: Employee) -> Dict[str, Any]
 
 
 def permanent_owner_id(lead: Optional[Lead], handoff: Optional[SupportHandoff]) -> Optional[int]:
+    # The dedicated Support owner column is authoritative; handoff and trial
+    # ownership are retained as backwards-compatible fallbacks.
+    if lead and getattr(lead, "support_employee_id", None):
+        return lead.support_employee_id
     if handoff and handoff.assigned_agent_id:
         return handoff.assigned_agent_id
+    if lead and getattr(lead, "trial_support_employee_id", None):
+        return lead.trial_support_employee_id
     if lead and lead.assigned_to:
         return lead.assigned_to
     return None
@@ -450,6 +461,33 @@ def serialize_customer_profile(
     coverage = active_coverage_for_lead(db, lead.id) if lead else None
     handling = coverage.backup_employee if coverage else permanent
 
+    assignment_rows = []
+    if lead:
+        assignment_rows = (
+            db.query(SupportClientAssignment)
+            .filter(SupportClientAssignment.lead_id == lead.id)
+            .order_by(
+                SupportClientAssignment.assigned_at.asc(),
+                SupportClientAssignment.id.asc(),
+            )
+            .all()
+        )
+    active_assignment = next(
+        (row for row in reversed(assignment_rows) if row.status == "ACTIVE"),
+        None,
+    )
+    ended_assignments = [row for row in assignment_rows if row.status != "ACTIVE"]
+    previous_assignment = ended_assignments[-1] if ended_assignments else None
+    first_assignment = assignment_rows[0] if assignment_rows else None
+    original_id = (
+        first_assignment.employee_id if first_assignment else permanent_id
+    )
+    original = (
+        first_assignment.employee
+        if first_assignment and first_assignment.employee
+        else permanent
+    )
+
     name = (
         (customer.contact_name if customer else None)
         or (handoff.customer_name if handoff else None)
@@ -497,10 +535,80 @@ def serialize_customer_profile(
             or (lead.requirement_notes if lead else None)
         ),
         "support_status": handoff.support_status if handoff else None,
-        "original_support_employee_id": permanent_id,
-        "original_support_employee_name": permanent.name if permanent else None,
+        "original_support_employee_id": original_id,
+        "original_support_employee_name": original.name if original else None,
         "current_handling_employee_id": handling.id if handling else None,
         "current_handling_employee_name": handling.name if handling else None,
+        "support_employee_id": permanent_id,
+        "support_employee_name": permanent.name if permanent else None,
+        "support_assignment": (
+            {
+                "id": active_assignment.id,
+                "employee_id": active_assignment.employee_id,
+                "employee_name": (
+                    active_assignment.employee.name
+                    if active_assignment.employee
+                    else None
+                ),
+                "previous_employee_id": active_assignment.previous_employee_id,
+                "previous_employee_name": (
+                    active_assignment.previous_employee.name
+                    if active_assignment.previous_employee
+                    else None
+                ),
+                "assigned_by_employee_id": active_assignment.assigned_by_employee_id,
+                "assigned_by_employee_name": (
+                    active_assignment.assigned_by_employee.name
+                    if active_assignment.assigned_by_employee
+                    else None
+                ),
+                "assigned_by_user_id": active_assignment.assigned_by_user_id,
+                "assigned_by_username": (
+                    active_assignment.assigned_by_user.username
+                    if active_assignment.assigned_by_user
+                    else None
+                ),
+                "reason": active_assignment.reason,
+                "source": active_assignment.source,
+                "assigned_at": (
+                    active_assignment.assigned_at.isoformat()
+                    if active_assignment.assigned_at
+                    else None
+                ),
+            }
+            if active_assignment
+            else None
+        ),
+        "previous_support_assignment": (
+            {
+                "id": previous_assignment.id,
+                "employee_id": previous_assignment.employee_id,
+                "employee_name": (
+                    previous_assignment.employee.name
+                    if previous_assignment.employee
+                    else None
+                ),
+                "previous_employee_id": previous_assignment.previous_employee_id,
+                "previous_employee_name": (
+                    previous_assignment.previous_employee.name
+                    if previous_assignment.previous_employee
+                    else None
+                ),
+                "reason": previous_assignment.reason,
+                "assigned_at": (
+                    previous_assignment.assigned_at.isoformat()
+                    if previous_assignment.assigned_at
+                    else None
+                ),
+                "ended_at": (
+                    previous_assignment.ended_at.isoformat()
+                    if previous_assignment.ended_at
+                    else None
+                ),
+            }
+            if previous_assignment
+            else None
+        ),
         "backup_employee_id": coverage.backup_employee_id if coverage else None,
         "backup_employee_name": (
             coverage.backup_employee.name if coverage and coverage.backup_employee else None
@@ -543,6 +651,15 @@ def build_customer_history(
         .order_by(desc(SupportCoverageAssignment.id))
         .all()
     )
+    assignment_history = (
+        db.query(SupportClientAssignment)
+        .filter(SupportClientAssignment.lead_id == lead.id)
+        .order_by(
+            SupportClientAssignment.assigned_at.asc(),
+            SupportClientAssignment.id.asc(),
+        )
+        .all()
+    )
     # Only Support-owned follow-ups belong in the Support customer history.
     # Sales follow-up notes stay private to Sales even after a handover.
     open_followups_query = db.query(Followup).filter(
@@ -574,6 +691,7 @@ def build_customer_history(
             for row in open_followups
         ],
         "coverage_history": [row.to_dict() for row in coverage_history],
+        "assignment_history": [row.to_dict() for row in assignment_history],
         "unresolved_problems": (
             [summary["current_unresolved_issue"]]
             if summary.get("current_unresolved_issue")

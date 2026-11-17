@@ -315,7 +315,8 @@ async def startup_db_client():
                     "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL",
                     "trial_start_date": "DATE NULL",
                     "trial_end_date": "DATE NULL",
-                    "trial_support_employee_id": "INT NULL"
+                    "trial_support_employee_id": "INT NULL",
+                    "support_employee_id": "INT NULL"
                 }
                 for col_name, col_type in missing_cols.items():
                     if col_name not in columns:
@@ -352,6 +353,68 @@ async def startup_db_client():
                         print("Added leads.trial_support_employee_id index.")
                 except Exception as ex:
                     print(f"Leads trial_support_employee_id index check: {ex}")
+                try:
+                    has_support_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_support_employee_id'"
+                    )).scalar())
+                    if not has_support_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD INDEX ix_leads_support_employee_id (support_employee_id)"
+                        ))
+                        conn.commit()
+                        print("Added leads.support_employee_id index.")
+                except Exception as ex:
+                    print(f"Leads support_employee_id index check: {ex}")
+
+                # One-time, idempotent Support ownership backfill. Existing
+                # converted customers keep their current handoff owner, but the
+                # dedicated owner column and active assignment mapping are
+                # populated so reassignment/history work without breaking the
+                # assignment that is already in production.
+                try:
+                    conn.execute(text(
+                        "UPDATE leads l "
+                        "JOIN ( "
+                        "  SELECT sh.lead_id, sh.assigned_agent_id "
+                        "  FROM support_handoffs sh "
+                        "  JOIN ( "
+                        "    SELECT lead_id, MAX(id) AS max_id "
+                        "    FROM support_handoffs GROUP BY lead_id "
+                        "  ) latest ON latest.max_id = sh.id "
+                        ") h ON h.lead_id = l.id "
+                        "SET l.support_employee_id = h.assigned_agent_id "
+                        "WHERE l.support_employee_id IS NULL "
+                        "  AND h.assigned_agent_id IS NOT NULL "
+                        "  AND UPPER(l.status) IN ('CONVERTED_TO_SUPPORT','CONVERTED TO SUPPORT')"
+                    ))
+                    conn.execute(text(
+                        "INSERT INTO support_client_assignments "
+                        "(lead_id, customer_id, support_handoff_id, employee_id, "
+                        " previous_employee_id, assigned_by_employee_id, assigned_by_user_id, "
+                        " source, reason, status, assigned_at, ended_at, end_reason, "
+                        " created_at, updated_at) "
+                        "SELECT l.id, sh.customer_id, sh.id, sh.assigned_agent_id, "
+                        "       NULL, sh.support_manager_id, NULL, "
+                        "       'MIGRATION', 'Backfilled existing Support assignment', "
+                        "       'ACTIVE', COALESCE(sh.updated_at, sh.created_at), NULL, NULL, "
+                        "       COALESCE(sh.created_at, sh.updated_at), COALESCE(sh.updated_at, sh.created_at) "
+                        "FROM leads l "
+                        "JOIN support_handoffs sh ON sh.id = ( "
+                        "  SELECT MAX(sh2.id) FROM support_handoffs sh2 WHERE sh2.lead_id = l.id "
+                        ") "
+                        "WHERE l.support_employee_id = sh.assigned_agent_id "
+                        "  AND sh.assigned_agent_id IS NOT NULL "
+                        "  AND NOT EXISTS ( "
+                        "    SELECT 1 FROM support_client_assignments sca "
+                        "    WHERE sca.lead_id = l.id AND sca.status = 'ACTIVE' "
+                        "  )"
+                    ))
+                    conn.commit()
+                except Exception as ex:
+                    print(f"Support assignment backfill skipped: {ex}")
             except Exception as ex:
                 print(f"Leads column sync check: {ex}")
 

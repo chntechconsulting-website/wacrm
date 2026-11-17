@@ -384,6 +384,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [supportRemarks, setSupportRemarks] = useState('');
   const [supportAssignError, setSupportAssignError] = useState('');
   const [assigningSupport, setAssigningSupport] = useState(false);
+  // Reassignment support: current owner + mandatory audit reason.
+  const [supportAssignReason, setSupportAssignReason] = useState('');
+  const [supportAssignState, setSupportAssignState] = useState(null);
+  const [supportAssignStateLoading, setSupportAssignStateLoading] = useState(false);
 
   const handleCreateQuoteTaskQuotation = async (lead) => {
     if (!lead) return;
@@ -1069,6 +1073,23 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
+  const loadSupportAssignmentState = async (leadId) => {
+    if (!leadId || !canAssignSupport) return;
+    setSupportAssignStateLoading(true);
+    try {
+      const res = await API.get(`/leads/${leadId}/support-assignment`);
+      setSupportAssignState(res.data || null);
+      if (res.data?.support_employee_id) {
+        setSupportAgentId(String(res.data.support_employee_id));
+      }
+    } catch (err) {
+      console.error('Failed to load Support assignment state:', err);
+      setSupportAssignState(null);
+    } finally {
+      setSupportAssignStateLoading(false);
+    }
+  };
+
   const openSupportAssignModal = (lead, overrides = {}) => {
     if (!lead?.id) return;
     const convertedLead = {
@@ -1084,11 +1105,14 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       convertedLead.support_assigned_to ? String(convertedLead.support_assigned_to) : ''
     );
     setSupportRemarks('');
+    setSupportAssignReason('');
+    setSupportAssignState(null);
     setSupportAssignError('');
     setSupportTeamMembers([]);
     setShowSupportAssignModal(true);
     if (canAssignSupport) {
       loadSupportTeamMembers();
+      loadSupportAssignmentState(convertedLead.id);
     }
   };
 
@@ -1097,6 +1121,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     setSupportAssignLead(null);
     setSupportAgentId('');
     setSupportRemarks('');
+    setSupportAssignReason('');
+    setSupportAssignState(null);
     setSupportAssignError('');
   };
 
@@ -1105,9 +1131,22 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     if (!supportAssignLead) return;
 
     const currentStatus = normalizeLeadStatusValue(supportAssignLead.status);
-    if (currentStatus !== 'CONVERTED_TO_SUPPORT') {
+    const assignmentEnabled =
+      currentStatus === 'CONVERTED_TO_SUPPORT' ||
+      Boolean(
+        supportAssignLead.support_handoff_id ||
+          supportAssignState?.assignment_enabled
+      );
+    if (!assignmentEnabled) {
       setSupportAssignError(
-        'Support assignment is available only after the deal is explicitly converted to Support.'
+        'Support assignment is available only after the deal is handed over to Support.'
+      );
+      return;
+    }
+    if (supportAssignState && supportAssignState.can_reassign === false) {
+      setSupportAssignError(
+        supportAssignState.reassign_blocked_reason ||
+          'You cannot reassign this client.'
       );
       return;
     }
@@ -1116,16 +1155,42 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       return;
     }
 
+    const currentOwnerId =
+      supportAssignState?.support_employee_id ||
+      supportAssignLead.support_assigned_to ||
+      null;
+    const isReassignment = Boolean(currentOwnerId) &&
+      Number(supportAgentId) !== Number(currentOwnerId);
+
+    if (currentOwnerId && Number(supportAgentId) === Number(currentOwnerId)) {
+      setSupportAssignError(
+        `${supportAssignState?.support_employee_name || supportAssignLead.support_assigned_to_name || 'This Support employee'} is already the assigned owner. Select a different employee to reassign.`
+      );
+      return;
+    }
+    if (isReassignment && !supportAssignReason.trim()) {
+      setSupportAssignError(
+        'A reassignment reason is required when moving a client to another Support employee.'
+      );
+      return;
+    }
+
     setAssigningSupport(true);
     setSupportAssignError('');
     try {
       const payload = { assigned_agent_id: parseInt(supportAgentId, 10) };
-      if (supportRemarks.trim()) payload.remarks = supportRemarks.trim();
+      if (isReassignment) {
+        payload.reason = supportAssignReason.trim();
+      } else if (supportRemarks.trim()) {
+        payload.remarks = supportRemarks.trim();
+      }
       const res = await API.put(`/leads/${supportAssignLead.id}/support-assign`, payload);
 
       const updatedLead = {
         support_assigned_to: res.data?.assigned_agent_id,
         support_assigned_to_name: res.data?.assigned_agent_name,
+        support_employee_id: res.data?.assigned_agent_id,
+        support_employee_name: res.data?.assigned_agent_name,
         support_assigned_at: res.data?.support_assigned_at,
         support_manager_id: res.data?.support_manager_id,
         support_manager_name: res.data?.support_manager_name,
@@ -1135,7 +1200,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setSuccess(
         res.data?.already_assigned
           ? `Lead #${supportAssignLead.id} is already assigned to ${updatedLead.support_assigned_to_name || 'this Support Executive'}.`
-          : `Lead #${supportAssignLead.id} assigned to Support Executive ${updatedLead.support_assigned_to_name || ''} successfully.`
+          : res.data?.reassigned
+            ? `Lead #${supportAssignLead.id} reassigned to Support Executive ${updatedLead.support_assigned_to_name || ''} successfully.`
+            : `Lead #${supportAssignLead.id} assigned to Support Executive ${updatedLead.support_assigned_to_name || ''} successfully.`
       );
       closeSupportAssignModal();
       window.dispatchEvent(new Event('leadStatsUpdated'));
@@ -1710,6 +1777,20 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   // Records range shown under the table (e.g. "Showing 1-150 of 850")
   const rangeStart = total === 0 ? 0 : (page - 1) * LEADS_PAGE_SIZE + 1;
   const rangeEnd = Math.min(page * LEADS_PAGE_SIZE, total);
+
+  // Support assignment / reassignment projections for the conversion modal.
+  const supportCurrentOwnerId =
+    supportAssignState?.support_employee_id ||
+    supportAssignLead?.support_assigned_to ||
+    null;
+  const supportCurrentOwnerName =
+    supportAssignState?.support_employee_name ||
+    supportAssignLead?.support_assigned_to_name ||
+    null;
+  const supportIsReassignment =
+    Boolean(supportCurrentOwnerId) &&
+    Boolean(supportAgentId) &&
+    Number(supportAgentId) !== Number(supportCurrentOwnerId);
 
   return (
     <div className="page-container">
@@ -3233,7 +3314,14 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         </button>
                       )}
 
-                      {canAssignSupport && ['CONVERTED_TO_SUPPORT', 'CONVERTED TO SUPPORT'].includes((selectedLead.status || '').toUpperCase()) && (
+                      {canAssignSupport && (
+                        ['CONVERTED_TO_SUPPORT', 'CONVERTED TO SUPPORT'].includes((selectedLead.status || '').toUpperCase()) ||
+                        Boolean(
+                          selectedLead.support_handoff_id ||
+                            selectedLead.is_converted_to_support ||
+                            selectedLead.converted_to_support_at
+                        )
+                      ) && (
                         <button
                           type="button"
                           onClick={() => openSupportAssignModal(selectedLead)}
@@ -4486,17 +4574,17 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
               <div>
                 <h3 style={{ fontSize: '1.18rem', fontWeight: 800, color: 'var(--text-main, #0f172a)', margin: 0 }}>
-                  Support Assignment &middot; Lead #{supportAssignLead.id}
+                  {supportCurrentOwnerId ? 'Support Reassignment' : 'Support Assignment'} &middot; Lead #{supportAssignLead.id}
                 </h3>
                 <div style={{ marginTop: '7px' }}>
                   <span style={{
                     display: 'inline-flex', alignItems: 'center', gap: '5px',
                     fontSize: '0.73rem', fontWeight: 800,
                     padding: '4px 9px', borderRadius: '12px',
-                    backgroundColor: supportAssignLead.support_assigned_to ? '#dcfce7' : '#fef3c7',
-                    color: supportAssignLead.support_assigned_to ? '#166534' : '#92400e'
+                    backgroundColor: supportCurrentOwnerId ? '#dcfce7' : '#fef3c7',
+                    color: supportCurrentOwnerId ? '#166534' : '#92400e'
                   }}>
-                    {supportAssignLead.support_assigned_to ? 'Support Assigned' : 'Pending Support Assignment'}
+                    {supportCurrentOwnerId ? 'Support Assigned' : 'Pending Support Assignment'}
                   </span>
                 </div>
               </div>
@@ -4537,6 +4625,26 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>#{supportAssignLead.id}</div>
               </div>
               <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Current Support Assignee</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: supportCurrentOwnerId ? '#0f172a' : '#b45309' }}>
+                  {supportAssignStateLoading
+                    ? 'Loading...'
+                    : (supportCurrentOwnerName || 'Unassigned')}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Previous Support Assignee</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                  {supportAssignState?.current?.previous_employee_name || '—'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Support Manager</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
+                  {supportAssignState?.support_manager_name || supportAssignLead.support_manager_name || 'N/A'}
+                </div>
+              </div>
+              <div>
                 <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Current Sales Manager</div>
                 <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a' }}>
                   {supportAssignLead.sales_manager_name || 'Not Assigned'}
@@ -4570,7 +4678,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
               <form onSubmit={handleAssignSupport}>
                 <div style={{ marginBottom: '14px' }}>
                   <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
-                    Support Team Employee *
+                    {supportCurrentOwnerId ? 'Reassign To Support Employee *' : 'Support Team Employee *'}
                   </label>
                   <select
                     value={supportAgentId}
@@ -4578,7 +4686,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                       setSupportAgentId(e.target.value);
                       if (supportAssignError) setSupportAssignError('');
                     }}
-                    disabled={supportMembersLoading || assigningSupport}
+                    disabled={supportMembersLoading || supportAssignStateLoading || assigningSupport}
                     style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff' }}
                   >
                     <option value="">
@@ -4600,19 +4708,62 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                   )}
                 </div>
 
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
-                    Conversion Remarks <span style={{ color: '#94a3b8', fontWeight: 500 }}>(optional)</span>
-                  </label>
-                  <textarea
-                    value={supportRemarks}
-                    onChange={(e) => setSupportRemarks(e.target.value)}
-                    rows={3}
-                    maxLength={2000}
-                    placeholder="Add handover notes for the Support team..."
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', resize: 'vertical', fontFamily: 'inherit' }}
-                  />
-                </div>
+                {supportIsReassignment ? (
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
+                      Reassignment Reason *
+                    </label>
+                    <textarea
+                      value={supportAssignReason}
+                      onChange={(e) => {
+                        setSupportAssignReason(e.target.value);
+                        if (supportAssignError) setSupportAssignError('');
+                      }}
+                      rows={3}
+                      maxLength={2000}
+                      placeholder="Explain why this client is being moved to another Support employee (required)..."
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fca5a5', resize: 'vertical', fontFamily: 'inherit' }}
+                    />
+                    <small style={{ color: '#b91c1c', fontSize: '0.73rem', marginTop: '5px', display: 'block', fontWeight: 600 }}>
+                      A reassignment reason is mandatory. It is stored in the client's permanent assignment history.
+                    </small>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
+                      Conversion Remarks <span style={{ color: '#94a3b8', fontWeight: 500 }}>(optional)</span>
+                    </label>
+                    <textarea
+                      value={supportRemarks}
+                      onChange={(e) => setSupportRemarks(e.target.value)}
+                      rows={3}
+                      maxLength={2000}
+                      placeholder="Add handover notes for the Support team..."
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', resize: 'vertical', fontFamily: 'inherit' }}
+                    />
+                  </div>
+                )}
+
+                {supportAssignState?.history?.length > 1 && (
+                  <div style={{ marginBottom: '14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px' }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '6px' }}>
+                      Recent Assignment History
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '150px', overflowY: 'auto' }}>
+                      {supportAssignState.history.slice().reverse().slice(0, 4).map((row, index) => (
+                        <div
+                          key={row.id || `${row.employee_id}-${row.assigned_at || index}`}
+                          style={{ fontSize: '0.75rem', color: '#475569', borderBottom: '1px dashed #e2e8f0', paddingBottom: '5px' }}
+                        >
+                          <strong style={{ color: '#0f172a' }}>{row.employee_name || `Employee #${row.employee_id}`}</strong>
+                          {' · '}{row.assigned_at ? formatLeadReceived(row.assigned_at).full : 'N/A'}
+                          {row.previous_employee_name ? ` · previous: ${row.previous_employee_name}` : ''}
+                          {row.reason ? ` · reason: ${row.reason}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {supportAssignError && (
                   <div style={{
@@ -4628,14 +4779,22 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap', marginTop: '20px' }}>
                   <button type="button" className="btn btn-outline" onClick={closeSupportAssignModal} disabled={assigningSupport}>
-                    {supportAssignLead.support_assigned_to ? 'Close' : 'Assign Later'}
+                    {supportCurrentOwnerId ? 'Close' : 'Assign Later'}
                   </button>
                   <button
                     type="submit"
                     className="btn btn-primary"
-                    disabled={assigningSupport || supportMembersLoading || !supportAgentId}
+                    disabled={
+                      assigningSupport ||
+                      supportMembersLoading ||
+                      supportAssignStateLoading ||
+                      !supportAgentId ||
+                      (supportIsReassignment && !supportAssignReason.trim())
+                    }
                   >
-                    {assigningSupport ? 'Assigning...' : 'Assign to Support'}
+                    {assigningSupport
+                      ? (supportIsReassignment ? 'Reassigning...' : 'Assigning...')
+                      : (supportIsReassignment ? 'Reassign Employee' : 'Assign to Support')}
                   </button>
                 </div>
               </form>

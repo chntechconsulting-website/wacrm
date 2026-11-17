@@ -9,11 +9,16 @@ from database import SessionLocal
 from models.user import User
 from models.employee import Employee
 from models.lead import Lead, LeadAssignment, LeadStatusHistory
+from models.activity import LeadActivity
+from models.audit_log import AuditLog
+from models.notification import Notification
+from models.support import SupportClientAssignment
 from models.workflow import SupportHandoff
 from routers.leads import (
     get_support_assigned_leads,
     get_support_team_members,
     assign_support_lead,
+    get_support_assignment,
     get_lead,
     update_lead,
     change_lead_status,
@@ -167,7 +172,72 @@ class TestSupportAssignedLeads(unittest.TestCase):
             self.db.refresh(self.sales_only_lead)
 
     def tearDown(self):
-        self.db.close()
+        # The shared test fixtures are reused between runs. Remove only the
+        # reassignment artifacts this test class can create and restore the
+        # baseline Support owner so repeated runs stay deterministic.
+        db = self.db
+        for lead, owner, handoff in (
+            (self.lead_a, self.emp_sup_a, self.handoff_a),
+            (self.lead_b, self.emp_sup_b, self.handoff_b),
+        ):
+            db.query(SupportClientAssignment).filter(
+                SupportClientAssignment.lead_id == lead.id,
+                SupportClientAssignment.source.in_(
+                    ["MANUAL_REASSIGN", "MANUAL_ASSIGN", "SYNC"]
+                ),
+            ).delete(synchronize_session=False)
+            db.query(Notification).filter(
+                Notification.notification_type == "SUPPORT_REASSIGNMENT",
+                Notification.link_url.like(f"%openLeadId={lead.id}"),
+            ).delete(synchronize_session=False)
+            db.query(LeadAssignment).filter(
+                LeadAssignment.lead_id == lead.id,
+                LeadAssignment.notes.like("Support client reassigned%"),
+            ).delete(synchronize_session=False)
+            db.query(LeadActivity).filter(
+                LeadActivity.lead_id == lead.id,
+                LeadActivity.activity_type == "SUPPORT_REASSIGNED",
+            ).delete(synchronize_session=False)
+            db.query(AuditLog).filter(
+                AuditLog.action == "SUPPORT_REASSIGN",
+                AuditLog.entity_id == str(lead.id),
+            ).delete(synchronize_session=False)
+
+            lead.support_employee_id = owner.id
+            lead.assigned_to = owner.id
+            handoff.assigned_agent_id = owner.id
+            handoff.assigned_agent_name = owner.name
+
+            rows = (
+                db.query(SupportClientAssignment)
+                .filter(SupportClientAssignment.lead_id == lead.id)
+                .order_by(SupportClientAssignment.id.asc())
+                .all()
+            )
+            if rows:
+                keep = rows[0]
+                keep.employee_id = owner.id
+                keep.status = "ACTIVE"
+                keep.ended_at = None
+                keep.end_reason = None
+                for extra in rows[1:]:
+                    db.delete(extra)
+            else:
+                db.add(
+                    SupportClientAssignment(
+                        lead_id=lead.id,
+                        customer_id=handoff.customer_id,
+                        support_handoff_id=handoff.id,
+                        employee_id=owner.id,
+                        source="MIGRATION",
+                        status="ACTIVE",
+                        assigned_at=datetime.utcnow(),
+                    )
+                )
+
+        self.lead_a.status = "PENDING_ONBOARDING"
+        db.commit()
+        db.close()
 
     def test_01_support_exec_a_sees_only_own_assigned_leads(self):
         """Support Executive A must see Lead A, but NOT Lead B."""
@@ -302,14 +372,17 @@ class TestSupportAssignedLeads(unittest.TestCase):
 
     def test_09_support_manager_can_reassign_agent(self):
         """Support Manager can assign/reassign a Support Executive after conversion."""
-        # Support assignment is intentionally gated on the explicit Sales
-        # conversion status.
+        # Explicit conversion is one valid path into Support. Test 11 covers
+        # handed-over customers whose Sales status remains WON.
         self.lead_a.status = "CONVERTED_TO_SUPPORT"
         self.db.commit()
 
         res = assign_support_lead(
             lead_id=self.lead_a.id,
-            payload={"assigned_agent_id": self.emp_sup_b.id},
+            payload={
+                "assigned_agent_id": self.emp_sup_b.id,
+                "reason": "Reassignment regression test",
+            },
             db=self.db,
             current_user=self.sup_mgr_user
         )
@@ -320,7 +393,10 @@ class TestSupportAssignedLeads(unittest.TestCase):
         # Reassign back to Exec A
         res2 = assign_support_lead(
             lead_id=self.lead_a.id,
-            payload={"assigned_agent_id": self.emp_sup_a.id},
+            payload={
+                "assigned_agent_id": self.emp_sup_a.id,
+                "reason": "Restore original executive",
+            },
             db=self.db,
             current_user=self.sup_mgr_user
         )
@@ -348,6 +424,35 @@ class TestSupportAssignedLeads(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             get_support_team_members(db=self.db, current_user=self.sales_exec)
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_11_handed_over_won_lead_can_be_reassigned(self):
+        """A handed-over customer stays assignable even if Sales status is WON."""
+        self.lead_a.status = "WON"
+        self.db.commit()
+
+        state = get_support_assignment(
+            lead_id=self.lead_a.id,
+            db=self.db,
+            current_user=self.sup_mgr_user,
+        )
+        self.assertTrue(
+            state["assignment_enabled"],
+            "A Support handoff must enable assignment even when Sales status is WON",
+        )
+        self.assertTrue(state["can_reassign"])
+        self.assertFalse(state["is_converted_to_support"])
+
+        res = assign_support_lead(
+            lead_id=self.lead_a.id,
+            payload={
+                "assigned_agent_id": self.emp_sup_b.id,
+                "reason": "WON handoff reassignment regression",
+            },
+            db=self.db,
+            current_user=self.sup_mgr_user,
+        )
+        self.assertTrue(res["success"])
+        self.assertEqual(res["assigned_agent_id"], self.emp_sup_b.id)
 
 if __name__ == "__main__":
     unittest.main()

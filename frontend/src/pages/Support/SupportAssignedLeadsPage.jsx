@@ -33,7 +33,8 @@ import {
   Briefcase,
   ShieldCheck,
   MessageSquare,
-  History
+  History,
+  ArrowRightLeft
 } from 'lucide-react';
 
 // Support status is independent from the Sales lead status. The backend
@@ -71,6 +72,24 @@ const supportStatusLabel = (value) => {
   const canonical = normalizeSupportStatus(value);
   const option = SUPPORT_STATUS_OPTIONS.find((item) => item.value === canonical);
   return option?.label || canonical.replace(/_/g, ' ');
+};
+
+// Support actions must follow the Support handoff, not only the Sales status
+// label. Legitimate handovers can stay at WON (for example a paid finance
+// handoff), and those customers are already visible in the Support queue.
+const isSupportAssignmentReady = (lead) => {
+  if (!lead) return false;
+  if (
+    normalizeSupportStatus(lead.sales_status || lead.status || '') ===
+    'CONVERTED_TO_SUPPORT'
+  ) {
+    return true;
+  }
+  return Boolean(
+    lead.support_handoff_id ||
+      lead.support_employee_id ||
+      lead.converted_to_support_at
+  );
 };
 
 const OPEN_SUPPORT_STATUSES = [
@@ -129,6 +148,13 @@ export default function SupportAssignedLeadsPage() {
   const [assignModalLead, setAssignModalLead] = useState(null);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [savingAssign, setSavingAssign] = useState(false);
+  const [assignReason, setAssignReason] = useState('');
+  const [assignState, setAssignState] = useState(null);
+  const [assignStateLoading, setAssignStateLoading] = useState(false);
+
+  // Current owner + full reassignment history for the open drawer.
+  const [drawerAssignment, setDrawerAssignment] = useState(null);
+  const [drawerAssignmentLoading, setDrawerAssignmentLoading] = useState(false);
 
   // Toast Notification
   const [toastMessage, setToastMessage] = useState(null);
@@ -244,10 +270,39 @@ export default function SupportAssignedLeadsPage() {
     }
   };
 
+  // Load the authoritative current Support owner and reassignment history.
+  // Used by the drawer so a reassignment is reflected immediately without a
+  // page reload.
+  const loadDrawerAssignment = useCallback(async (leadId) => {
+    if (!leadId) return;
+    setDrawerAssignmentLoading(true);
+    try {
+      const res = await API.get(`/leads/${leadId}/support-assignment`);
+      setDrawerAssignment(res.data || null);
+      if (res.data?.support_employee_id) {
+        patchLeadRow(leadId, {
+          assigned_support_executive_id: res.data.support_employee_id,
+          assigned_support_executive_name: res.data.support_employee_name,
+          support_employee_id: res.data.support_employee_id,
+          support_employee_name: res.data.support_employee_name,
+          support_manager_id: res.data.support_manager_id,
+          support_manager_name: res.data.support_manager_name,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load Support assignment state:', err);
+      setDrawerAssignment(null);
+    } finally {
+      setDrawerAssignmentLoading(false);
+    }
+  }, []);
+
   const handleOpenLeadDrawer = (lead) => {
     setSelectedLead(lead);
     setActiveDrawerTab('overview');
+    setDrawerAssignment(null);
     fetchLeadActivities(lead.id);
+    loadDrawerAssignment(lead.id);
   };
 
   // Support status change. This deliberately uses the Support-only endpoint
@@ -326,40 +381,132 @@ export default function SupportAssignedLeadsPage() {
     }
   };
 
-  // Assign Support Agent (Support Manager & Admin). The backend additionally
-  // enforces that the deal is explicitly CONVERTED_TO_SUPPORT and that the
-  // target is an active Support Executive.
-  const handleSaveAssign = async () => {
-    if (!selectedAgentId) return;
-    const salesStatus = normalizeSupportStatus(
-      assignModalLead?.sales_status || assignModalLead?.status || ''
+  // Open the assignment dialog. The backend state is authoritative, so the
+  // dialog always shows the real current owner even when the row is stale.
+  const openAssignModal = async (lead) => {
+    if (!lead) return;
+    setAssignModalLead(lead);
+    setAssignReason('');
+    setAssignState(null);
+    setSelectedAgentId(
+      lead.assigned_support_executive_id ? String(lead.assigned_support_executive_id) : ''
     );
-    if (salesStatus !== 'CONVERTED_TO_SUPPORT') {
-      showToast('Support assignment is enabled only after the deal is converted to Support.');
+    setAssignStateLoading(true);
+    try {
+      const res = await API.get(`/leads/${lead.id}/support-assignment`);
+      setAssignState(res.data || null);
+      if (res.data?.support_employee_id) {
+        setSelectedAgentId(String(res.data.support_employee_id));
+      }
+    } catch (err) {
+      console.error('Failed to load Support assignment state:', err);
+      showToast(err.response?.data?.detail || 'Failed to load current Support assignment.');
+    } finally {
+      setAssignStateLoading(false);
+    }
+  };
+
+  const closeAssignModal = () => {
+    if (savingAssign) return;
+    setAssignModalLead(null);
+    setSelectedAgentId('');
+    setAssignReason('');
+    setAssignState(null);
+  };
+
+  // Assign / Reassign Support Agent (Support Manager & Admin). The backend
+  // additionally enforces that the deal is explicitly CONVERTED_TO_SUPPORT,
+  // that the target is an active Support Executive, and that a reassignment
+  // carries a reason.
+  const handleSaveAssign = async () => {
+    if (!selectedAgentId || !assignModalLead) return;
+    const assignmentEnabled =
+      isSupportAssignmentReady(assignModalLead) ||
+      Boolean(assignState?.assignment_enabled);
+    if (!assignmentEnabled) {
+      showToast(
+        'Support assignment becomes available after the deal is handed over to Support.'
+      );
       return;
     }
+    if (assignState && assignState.can_reassign === false) {
+      showToast(
+        assignState.reassign_blocked_reason ||
+          'You cannot reassign this client.'
+      );
+      return;
+    }
+
+    const currentOwnerId =
+      assignState?.support_employee_id ||
+      assignModalLead.assigned_support_executive_id ||
+      null;
+    const isReassignment = Boolean(currentOwnerId) &&
+      Number(selectedAgentId) !== Number(currentOwnerId);
+
+    if (isReassignment && !assignReason.trim()) {
+      showToast(
+        'A reassignment reason is required when moving a client to another Support employee.'
+      );
+      return;
+    }
+
+    const targetMember = teamMembers.find(
+      member => Number(member.id) === Number(selectedAgentId)
+    );
+    if (currentOwnerId && Number(selectedAgentId) === Number(currentOwnerId)) {
+      showToast('This client is already assigned to the selected Support employee.');
+      return;
+    }
+
     setSavingAssign(true);
     try {
-      const res = await API.put(`/leads/${assignModalLead.id}/support-assign`, {
-        assigned_agent_id: parseInt(selectedAgentId, 10)
-      });
+      const payload = { assigned_agent_id: parseInt(selectedAgentId, 10) };
+      if (isReassignment) {
+        payload.reason = assignReason.trim();
+      } else if (assignReason.trim()) {
+        payload.remarks = assignReason.trim();
+      }
+
+      const res = await API.put(
+        `/leads/${assignModalLead.id}/support-assign`,
+        payload
+      );
+
+      const newOwnerName =
+        res.data?.assigned_agent_name || targetMember?.name || null;
+      const reassigned = Boolean(res.data?.reassigned);
       showToast(
         res.data?.already_assigned
           ? 'This Support Executive is already assigned.'
-          : 'Lead assigned to support executive.'
+          : reassigned
+            ? `Client reassigned to ${newOwnerName || 'the selected Support employee'}.`
+            : `Client assigned to ${newOwnerName || 'the selected Support employee'}.`
       );
+
       patchLeadRow(assignModalLead.id, {
         assigned_support_executive_id: res.data?.assigned_agent_id,
-        assigned_support_executive_name: res.data?.assigned_agent_name,
+        assigned_support_executive_name: newOwnerName,
         support_assigned_to: res.data?.assigned_agent_id,
-        support_assigned_to_name: res.data?.assigned_agent_name,
+        support_assigned_to_name: newOwnerName,
+        support_employee_id: res.data?.assigned_agent_id,
+        support_employee_name: newOwnerName,
         support_assigned_at: res.data?.support_assigned_at,
         support_manager_id: res.data?.support_manager_id,
         support_manager_name: res.data?.support_manager_name,
         support_assignment_status: 'ASSIGNED'
       });
+
+      const assignedLeadId = assignModalLead.id;
       setAssignModalLead(null);
       setSelectedAgentId('');
+      setAssignReason('');
+      setAssignState(null);
+      if (selectedLead?.id === assignedLeadId) {
+        loadDrawerAssignment(assignedLeadId);
+      }
+      // Keep every Support/Sales dashboard number in sync without a full page
+      // reload or logout.
       window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
       console.error('Failed to assign support agent:', err);
@@ -387,6 +534,22 @@ export default function SupportAssignedLeadsPage() {
     l => OPEN_SUPPORT_STATUSES.includes(normalizeSupportStatus(l.support_status || l.onboarding_status))
   ).length;
   const kpiHighPriorityCount = leads.filter(l => (l.priority || '').toUpperCase() === 'HIGH').length;
+
+  const assignCurrentOwnerId =
+    assignState?.support_employee_id ||
+    assignModalLead?.assigned_support_executive_id ||
+    null;
+  const assignCurrentOwnerName =
+    assignState?.support_employee_name ||
+    assignModalLead?.assigned_support_executive_name ||
+    null;
+  const assignReady =
+    isSupportAssignmentReady(assignModalLead) ||
+    Boolean(assignState?.assignment_enabled);
+  const assignIsReassignment =
+    Boolean(assignCurrentOwnerId) &&
+    Boolean(selectedAgentId) &&
+    Number(selectedAgentId) !== Number(assignCurrentOwnerId);
 
   return (
     <div className="support-leads-container">
@@ -819,25 +982,25 @@ export default function SupportAssignedLeadsPage() {
                           </button>
 
                           {isManager && (() => {
-                            const assignmentSalesStatus = normalizeSupportStatus(
-                              lead.sales_status || lead.status || ''
-                            );
-                            const isConverted = assignmentSalesStatus === 'CONVERTED_TO_SUPPORT';
+                            const assignmentEnabled = isSupportAssignmentReady(lead);
                             return (
                               <button
                                 type="button"
                                 className="action-btn-icon"
-                                title={isConverted
-                                  ? 'Assign Support Agent'
-                                  : 'Support assignment is enabled only after the Sales team converts the deal to Support'}
-                                disabled={!isConverted}
+                                title={assignmentEnabled
+                                  ? (lead.assigned_support_executive_id
+                                      ? 'Reassign Client'
+                                      : 'Assign Client')
+                                  : 'Support assignment becomes available after the deal is handed over to Support'}
+                                disabled={!assignmentEnabled}
                                 onClick={() => {
-                                  if (!isConverted) return;
-                                  setAssignModalLead(lead);
-                                  setSelectedAgentId(lead.assigned_support_executive_id || '');
+                                  if (!assignmentEnabled) return;
+                                  openAssignModal(lead);
                                 }}
                               >
-                                <UserPlus size={15} />
+                                {lead.assigned_support_executive_id
+                                  ? <ArrowRightLeft size={15} />
+                                  : <UserPlus size={15} />}
                               </button>
                             );
                           })()}
@@ -1044,12 +1207,141 @@ export default function SupportAssignedLeadsPage() {
 
                   <div className="detail-item">
                     <span className="detail-label">Assigned Support Executive</span>
-                    <span className="detail-value">{selectedLead.assigned_support_executive_name || 'Unassigned'}</span>
+                    <span className="detail-value">
+                      {drawerAssignment?.support_employee_name ||
+                        selectedLead.assigned_support_executive_name ||
+                        'Unassigned'}
+                    </span>
                   </div>
 
                   <div className="detail-item">
                     <span className="detail-label">Assigned Support Manager</span>
                     <span className="detail-value">{selectedLead.assigned_support_manager_name || 'N/A'}</span>
+                  </div>
+
+                  <div className="detail-item full-width" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                      <span className="detail-label" style={{ fontWeight: 700 }}>
+                        Support Assignment &amp; Reassignment History
+                      </span>
+                      {isManager && (drawerAssignmentLoading || drawerAssignment?.assignment_enabled) && (
+                        <button
+                          type="button"
+                          className="support-btn-reset"
+                          style={{
+                            padding: '5px 10px',
+                            fontSize: '12px',
+                            opacity: drawerAssignmentLoading || !drawerAssignment?.can_reassign ? 0.55 : 1,
+                            cursor: drawerAssignmentLoading || !drawerAssignment?.can_reassign ? 'not-allowed' : 'pointer'
+                          }}
+                          disabled={drawerAssignmentLoading || !drawerAssignment?.can_reassign}
+                          title={
+                            drawerAssignment?.reassign_blocked_reason ||
+                            'Reassign this client to another Support employee'
+                          }
+                          onClick={() => openAssignModal(selectedLead)}
+                        >
+                          <ArrowRightLeft size={13} />
+                          <span>Reassign Client</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {drawerAssignmentLoading ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', fontSize: '12px' }}>
+                        <RefreshCw size={14} className="spin-icon" />
+                        <span>Loading assignment history...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginBottom: '10px' }}>
+                          <div>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Current Assignee</div>
+                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                              {drawerAssignment?.support_employee_name || selectedLead.assigned_support_executive_name || 'Unassigned'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Previous Assignee</div>
+                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                              {drawerAssignment?.current?.previous_employee_name || '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Reassigned By</div>
+                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                              {drawerAssignment?.current?.assigned_by_employee_name ||
+                                drawerAssignment?.current?.assigned_by_username ||
+                                '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Assigned On</div>
+                            <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                              {drawerAssignment?.current?.assigned_at
+                                ? formatLeadReceivedFull(drawerAssignment.current.assigned_at)
+                                : (selectedLead.assignment_date ? formatDateDDMMYYYY(selectedLead.assignment_date) : '—')}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Reassignment Reason</div>
+                          <div style={{ fontSize: '0.8rem', color: '#334155', marginTop: '2px', whiteSpace: 'pre-wrap' }}>
+                            {drawerAssignment?.current?.reason || '—'}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '6px' }}>
+                            Assignment History ({drawerAssignment?.history_count || 0})
+                          </div>
+                          {!drawerAssignment?.history?.length ? (
+                            <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                              No assignment history recorded yet.
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              {drawerAssignment.history.slice().reverse().map((row, index) => (
+                                <div
+                                  key={row.id || `${row.employee_id}-${row.assigned_at || index}`}
+                                  style={{ border: '1px solid #e2e8f0', background: '#ffffff', borderRadius: '8px', padding: '9px 11px', fontSize: '12px' }}
+                                >
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <strong style={{ color: '#0f172a' }}>
+                                      {row.employee_name || `Employee #${row.employee_id}`}
+                                    </strong>
+                                    <span style={{
+                                      padding: '1px 7px',
+                                      borderRadius: '999px',
+                                      fontSize: '10px',
+                                      fontWeight: 800,
+                                      backgroundColor: row.status === 'ACTIVE' ? '#dcfce7' : '#f1f5f9',
+                                      color: row.status === 'ACTIVE' ? '#166534' : '#475569'
+                                    }}>
+                                      {row.status || '—'}
+                                    </span>
+                                  </div>
+                                  <div style={{ color: '#64748b', marginTop: '3px' }}>
+                                    Assigned {row.assigned_at ? formatLeadReceivedFull(row.assigned_at) : 'N/A'}
+                                    {row.ended_at ? ` · Ended ${formatLeadReceivedFull(row.ended_at)}` : ''}
+                                  </div>
+                                  <div style={{ color: '#475569', marginTop: '2px' }}>
+                                    Previous: {row.previous_employee_name || 'Unassigned'}
+                                    {' · '}Assigned by: {row.assigned_by_employee_name || row.assigned_by_username || 'System'}
+                                  </div>
+                                  {row.reason && (
+                                    <div style={{ color: '#334155', marginTop: '2px' }}>
+                                      <strong>Reason:</strong> {row.reason}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="detail-item">
@@ -1314,33 +1606,73 @@ export default function SupportAssignedLeadsPage() {
       )}
 
       {/* ========================================================================= */}
-      {/* ASSIGN SUPPORT AGENT MODAL (Support Manager & Admin) */}
+      {/* ASSIGN / REASSIGN SUPPORT EMPLOYEE MODAL (Support Manager & Admin) */}
       {/* ========================================================================= */}
       {assignModalLead && (
-        <div className="support-modal-backdrop" onClick={() => setAssignModalLead(null)}>
+        <div className="support-modal-backdrop" onClick={closeAssignModal}>
           <div className="support-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>
-                <UserCheck size={18} color="#2563eb" />
-                Assign Support Executive: #{assignModalLead.id}
+                <ArrowRightLeft size={18} color="#2563eb" />
+                {assignCurrentOwnerId ? 'Reassign Client' : 'Assign Client'}: #{assignModalLead.id}
               </h2>
-              <button type="button" className="modal-close-btn" onClick={() => setAssignModalLead(null)}>
+              <button type="button" className="modal-close-btn" onClick={closeAssignModal}>
                 <X size={18} />
               </button>
             </div>
             <div className="modal-body">
-              {normalizeSupportStatus(assignModalLead.sales_status || assignModalLead.status || '') !== 'CONVERTED_TO_SUPPORT' && (
+              {!assignReady && (
                 <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '0.82rem', fontWeight: 600 }}>
-                  Support assignment is disabled until Sales marks the deal WON and explicitly converts it to Support.
+                  Support assignment becomes available after the deal is won and handed over to Support.
                 </div>
               )}
+
+              {assignState?.reassign_blocked_reason && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '0.82rem', fontWeight: 600 }}>
+                  {assignState.reassign_blocked_reason}
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px 14px', marginBottom: '14px' }}>
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Client</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                    {assignModalLead.company_name || assignModalLead.company || assignModalLead.name || 'N/A'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Current Assignee</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: assignCurrentOwnerId ? '#0f172a' : '#b45309' }}>
+                    {assignStateLoading
+                      ? 'Loading...'
+                      : (assignCurrentOwnerName || 'Unassigned')}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Support Manager</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                    {assignState?.support_manager_name || assignModalLead.assigned_support_manager_name || 'N/A'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Previous Assignee</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a' }}>
+                    {assignState?.current?.previous_employee_name || '—'}
+                  </div>
+                </div>
+              </div>
+
               <div className="form-group">
-                <label>Select Support Executive *</label>
+                <label>{assignCurrentOwnerId ? 'Reassign To Support Employee *' : 'Select Support Executive *'}</label>
                 <select
                   className="form-select"
                   value={selectedAgentId}
                   onChange={(e) => setSelectedAgentId(e.target.value)}
-                  disabled={normalizeSupportStatus(assignModalLead.sales_status || assignModalLead.status || '') !== 'CONVERTED_TO_SUPPORT'}
+                  disabled={
+                    assignStateLoading ||
+                    !assignReady ||
+                    assignState?.can_reassign === false
+                  }
                 >
                   <option value="">-- Choose Support Executive --</option>
                   {teamMembers.map(tm => (
@@ -1350,15 +1682,82 @@ export default function SupportAssignedLeadsPage() {
                   ))}
                 </select>
                 <small style={{ color: '#64748b', marginTop: '6px', display: 'block' }}>
-                  Only active Support Executives are eligible. Sales employees, Managers/Admins and inactive users are excluded.
+                  Only active Support Executives in your authorized team are eligible. Sales employees, Managers/Admins and inactive users are excluded.
                 </small>
               </div>
+
+              <div className="form-group">
+                <label>
+                  {assignIsReassignment ? 'Reassignment Reason *' : 'Assignment Remarks (optional)'}
+                </label>
+                <textarea
+                  className="form-textarea"
+                  rows={3}
+                  maxLength={2000}
+                  value={assignReason}
+                  onChange={(e) => setAssignReason(e.target.value)}
+                  placeholder={
+                    assignIsReassignment
+                      ? 'Explain why this client is being moved to another Support employee (required)...'
+                      : 'Optional handover notes for the Support employee...'
+                  }
+                />
+                <small style={{ color: assignIsReassignment ? '#b91c1c' : '#64748b', marginTop: '6px', display: 'block', fontWeight: assignIsReassignment ? 600 : 400 }}>
+                  {assignIsReassignment
+                    ? 'A reason is mandatory for every reassignment and is stored in the client history.'
+                    : 'Remarks are optional for the first Support assignment.'}
+                </small>
+              </div>
+
+              {assignState?.history?.length > 0 && (
+                <div style={{ marginTop: '4px' }}>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '6px' }}>
+                    Recent Assignment History
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '170px', overflowY: 'auto' }}>
+                    {assignState.history.slice().reverse().slice(0, 5).map((row, index) => (
+                      <div
+                        key={row.id || `${row.employee_id}-${row.assigned_at || index}`}
+                        style={{ border: '1px solid #e2e8f0', background: '#ffffff', borderRadius: '8px', padding: '8px 10px', fontSize: '11.5px' }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                          <strong style={{ color: '#0f172a' }}>
+                            {row.employee_name || `Employee #${row.employee_id}`}
+                          </strong>
+                          <span style={{
+                            padding: '1px 7px',
+                            borderRadius: '999px',
+                            fontSize: '10px',
+                            fontWeight: 800,
+                            backgroundColor: row.status === 'ACTIVE' ? '#dcfce7' : '#f1f5f9',
+                            color: row.status === 'ACTIVE' ? '#166534' : '#475569'
+                          }}>
+                            {row.status || '—'}
+                          </span>
+                        </div>
+                        <div style={{ color: '#64748b', marginTop: '2px' }}>
+                          {row.assigned_at ? formatLeadReceivedFull(row.assigned_at) : 'N/A'}
+                          {row.previous_employee_name ? ` · from ${row.previous_employee_name}` : ''}
+                          {row.assigned_by_employee_name || row.assigned_by_username
+                            ? ` · by ${row.assigned_by_employee_name || row.assigned_by_username}`
+                            : ''}
+                        </div>
+                        {row.reason && (
+                          <div style={{ color: '#334155', marginTop: '2px' }}>
+                            <strong>Reason:</strong> {row.reason}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button
                 type="button"
                 className="modal-btn-cancel"
-                onClick={() => setAssignModalLead(null)}
+                onClick={closeAssignModal}
                 disabled={savingAssign}
               >
                 Cancel
@@ -1369,11 +1768,16 @@ export default function SupportAssignedLeadsPage() {
                 onClick={handleSaveAssign}
                 disabled={
                   savingAssign ||
+                  assignStateLoading ||
                   !selectedAgentId ||
-                  normalizeSupportStatus(assignModalLead.sales_status || assignModalLead.status || '') !== 'CONVERTED_TO_SUPPORT'
+                  !assignReady ||
+                  assignState?.can_reassign === false ||
+                  (assignIsReassignment && !assignReason.trim())
                 }
               >
-                {savingAssign ? 'Assigning...' : 'Assign Executive'}
+                {savingAssign
+                  ? (assignIsReassignment ? 'Reassigning...' : 'Assigning...')
+                  : (assignIsReassignment ? 'Reassign Client' : 'Assign Client')}
               </button>
             </div>
           </div>

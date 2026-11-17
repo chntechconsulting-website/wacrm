@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta, timezone
 import logging
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from models.role import Role, RolePermission
 from models.user import User
@@ -1128,7 +1129,6 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
         return False
 
     from models.workflow import SupportHandoff
-    from models.lead import LeadAssignment
     from models.support import SupportCoverageAssignment
     from utils.timezone import get_ist_now
 
@@ -1155,32 +1155,42 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
     if active_coverage:
         return True
 
+    from utils.lead_status import is_converted_to_support_status
+
+    support_owner_id = getattr(lead, "support_employee_id", None)
+    is_converted = is_converted_to_support_status(lead.status)
+
     if canonical_role == ROLE_SUPPORT_MANAGER:
         team_emp_ids = get_team_employee_ids_from_user(user, db)
         if emp.id not in team_emp_ids:
             team_emp_ids.append(emp.id)
 
+        # The dedicated owner column is authoritative after reassignment. It
+        # prevents the previous employee's legacy Lead.assigned_to value from
+        # leaking the client back into their queue.
+        if support_owner_id:
+            return support_owner_id in team_emp_ids
+
         if handoff:
-            if handoff.support_manager_id == emp.id or (handoff.support_manager_id and handoff.support_manager_id in team_emp_ids):
+            if handoff.support_manager_id == emp.id:
                 return True
-            if handoff.assigned_agent_id and handoff.assigned_agent_id in team_emp_ids:
+            if handoff.support_manager_id and handoff.support_manager_id in team_emp_ids:
                 return True
+            if handoff.assigned_agent_id:
+                return handoff.assigned_agent_id in team_emp_ids
             # Converted deals wait unassigned for a Support Manager to pick an
             # executive. Any Support Manager may see and assign them, while
             # still not seeing ordinary Sales-owned leads before conversion.
-            from utils.lead_status import is_converted_to_support_status
-            if not handoff.assigned_agent_id and is_converted_to_support_status(lead.status):
+            if is_converted:
                 return True
 
-        if lead.assigned_to and lead.assigned_to in team_emp_ids:
-            return True
-
-        # Trial customers handed to a Support employee of this team before the
-        # deal is converted are visible to that employee's Support Manager.
-        # When the modal stored this manager directly, the id matches emp.id
-        # (which is part of team_emp_ids), so the assignee always sees it.
-        if getattr(lead, "trial_support_employee_id", None) and lead.trial_support_employee_id in team_emp_ids:
-            return True
+        # Pre-conversion (trial) ownership. Converted customers must never be
+        # authorized through the Sales owner or a stale trial owner.
+        if not is_converted:
+            if lead.assigned_to and lead.assigned_to in team_emp_ids:
+                return True
+            if getattr(lead, "trial_support_employee_id", None) and lead.trial_support_employee_id in team_emp_ids:
+                return True
 
         team_coverage = (
             db.query(SupportCoverageAssignment.id)
@@ -1199,18 +1209,24 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
         return False
 
     elif canonical_role == ROLE_SUPPORT_EXECUTIVE:
-        if handoff and handoff.assigned_agent_id == emp.id:
-            return True
+        if support_owner_id:
+            return support_owner_id == emp.id
 
-        if lead.assigned_to == emp.id:
-            return True
+        if handoff and handoff.assigned_agent_id:
+            return handoff.assigned_agent_id == emp.id
 
-        # The Support Manager selected in the Set Trial Period modal owns the
-        # trial customer from that moment, before any Won -> Support handoff.
-        # Older rows may still hold a Support Executive id, which is accepted
-        # unchanged so an existing assignment is never orphaned.
-        if getattr(lead, "trial_support_employee_id", None) == emp.id:
-            return True
+        # Pre-conversion (trial) ownership. A converted lead with no handoff
+        # owner falls back to the legacy direct Support assignment only.
+        if not is_converted:
+            if lead.assigned_to == emp.id:
+                return True
+            if getattr(lead, "trial_support_employee_id", None) == emp.id:
+                return True
+        else:
+            legacy_support_owner = lead.assigned_to == emp.id
+            if legacy_support_owner:
+                # Old rows may still hold the Support owner on assigned_to.
+                return True
 
         return False
 
@@ -1259,52 +1275,81 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
     lead_ids = set()
     today = get_ist_now().date()
 
+    from utils.lead_status import is_converted_to_support_status
+
+    # Only the latest handoff per lead is authoritative. Older re-inquiry
+    # handovers must not keep granting access to a previous Support employee.
+    latest_handoff_ids = (
+        db.query(func.max(SupportHandoff.id).label("id"))
+        .group_by(SupportHandoff.lead_id)
+        .subquery()
+    )
+    latest_handoffs = (
+        db.query(
+            SupportHandoff.lead_id,
+            SupportHandoff.support_manager_id,
+            SupportHandoff.assigned_agent_id,
+        )
+        .join(latest_handoff_ids, SupportHandoff.id == latest_handoff_ids.c.id)
+        .all()
+    )
+
     if canonical_role == ROLE_SUPPORT_MANAGER:
         team_emp_ids = get_team_employee_ids_from_user(user, db)
         if emp.id not in team_emp_ids:
             team_emp_ids.append(emp.id)
 
-        # 1. Handoffs where support_manager_id is in team or assigned_agent_id is in team
-        h_leads = db.query(SupportHandoff.lead_id).filter(
-            or_(
-                SupportHandoff.support_manager_id.in_(team_emp_ids),
-                SupportHandoff.assigned_agent_id.in_(team_emp_ids)
-            )
-        ).all()
-        for h in h_leads:
-            if h[0]:
-                lead_ids.add(h[0])
-
-        # 1b. Converted deals that are still waiting for a Support Executive.
-        # They are intentionally visible to Support Managers so the explicit
-        # conversion step can be completed without assigning ownership early.
-        from utils.lead_status import is_converted_to_support_status
-        unassigned_converted = (
-            db.query(SupportHandoff.lead_id, Lead.status)
-            .join(Lead, Lead.id == SupportHandoff.lead_id)
-            .filter(SupportHandoff.assigned_agent_id.is_(None))
-            .all()
-        )
-        for lead_id, lead_status in unassigned_converted:
-            if lead_id and is_converted_to_support_status(lead_status):
+        # 1. Latest handoff owned by this manager's team.
+        for lead_id, manager_id, agent_id in latest_handoffs:
+            if not lead_id:
+                continue
+            if manager_id in team_emp_ids:
+                lead_ids.add(lead_id)
+            elif agent_id and agent_id in team_emp_ids:
                 lead_ids.add(lead_id)
 
-        # 2. Leads directly assigned to team members
-        direct_leads = db.query(Lead.id).filter(Lead.assigned_to.in_(team_emp_ids)).all()
-        for d in direct_leads:
-            lead_ids.add(d[0])
+        # 1b. Converted deals still waiting for a Support Executive are visible
+        # so the manager can complete the explicit assignment.
+        for lead_id, manager_id, agent_id in latest_handoffs:
+            if not lead_id or agent_id:
+                continue
+            lead_status = (
+                db.query(Lead.status).filter(Lead.id == lead_id).scalar()
+            )
+            if is_converted_to_support_status(lead_status):
+                lead_ids.add(lead_id)
 
-        # 2b. Trial customers whose Support owner is a team member
-        trial_support_leads = (
+        # 2. Dedicated Support owner column.
+        support_owner_leads = (
             db.query(Lead.id)
+            .filter(Lead.support_employee_id.in_(team_emp_ids))
+            .all()
+        )
+        for row in support_owner_leads:
+            if row[0]:
+                lead_ids.add(row[0])
+
+        # 3. Pre-conversion trial/direct ownership. Converted leads must never
+        # be authorized through Lead.assigned_to (the previous owner leak).
+        direct_leads = (
+            db.query(Lead.id, Lead.status)
+            .filter(Lead.assigned_to.in_(team_emp_ids))
+            .all()
+        )
+        for lead_id, lead_status in direct_leads:
+            if lead_id and not is_converted_to_support_status(lead_status):
+                lead_ids.add(lead_id)
+
+        trial_support_leads = (
+            db.query(Lead.id, Lead.status)
             .filter(Lead.trial_support_employee_id.in_(team_emp_ids))
             .all()
         )
-        for t in trial_support_leads:
-            if t[0]:
-                lead_ids.add(t[0])
+        for lead_id, lead_status in trial_support_leads:
+            if lead_id and not is_converted_to_support_status(lead_status):
+                lead_ids.add(lead_id)
 
-        # 3. Temporary coverage handled by any team member
+        # 4. Temporary coverage handled by any team member.
         coverage_leads = (
             db.query(SupportCoverageAssignment.lead_id)
             .filter(
@@ -1320,28 +1365,42 @@ def get_support_authorized_lead_ids(user: User, db: Session) -> Optional[List[in
                 lead_ids.add(row[0])
 
     elif canonical_role == ROLE_SUPPORT_EXECUTIVE:
-        # 1. Handoffs where assigned_agent_id == emp.id
-        h_leads = db.query(SupportHandoff.lead_id).filter(SupportHandoff.assigned_agent_id == emp.id).all()
-        for h in h_leads:
-            if h[0]:
-                lead_ids.add(h[0])
-
-        # 2. Leads directly assigned to emp
-        direct_leads = db.query(Lead.id).filter(Lead.assigned_to == emp.id).all()
-        for d in direct_leads:
-            lead_ids.add(d[0])
-
-        # 2b. Trial customers where this employee is the selected Support owner
-        trial_support_leads = (
+        # 1. Dedicated Support owner column (authoritative after reassignment).
+        support_owner_leads = (
             db.query(Lead.id)
+            .filter(Lead.support_employee_id == emp.id)
+            .all()
+        )
+        for row in support_owner_leads:
+            if row[0]:
+                lead_ids.add(row[0])
+
+        # 2. Latest handoff assigned to this employee.
+        for lead_id, _manager_id, agent_id in latest_handoffs:
+            if lead_id and agent_id == emp.id:
+                lead_ids.add(lead_id)
+
+        # 3. Pre-conversion direct/trial ownership only. A converted customer
+        # is owned by support_employee_id/handoff, never by Sales assigned_to.
+        direct_leads = (
+            db.query(Lead.id, Lead.status)
+            .filter(Lead.assigned_to == emp.id)
+            .all()
+        )
+        for lead_id, lead_status in direct_leads:
+            if lead_id and not is_converted_to_support_status(lead_status):
+                lead_ids.add(lead_id)
+
+        trial_support_leads = (
+            db.query(Lead.id, Lead.status)
             .filter(Lead.trial_support_employee_id == emp.id)
             .all()
         )
-        for t in trial_support_leads:
-            if t[0]:
-                lead_ids.add(t[0])
+        for lead_id, lead_status in trial_support_leads:
+            if lead_id and not is_converted_to_support_status(lead_status):
+                lead_ids.add(lead_id)
 
-        # 3. Customers temporarily covered during the permanent owner's leave
+        # 4. Customers temporarily covered during the owner's leave.
         coverage_leads = (
             db.query(SupportCoverageAssignment.lead_id)
             .filter(

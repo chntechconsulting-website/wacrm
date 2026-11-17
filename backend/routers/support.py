@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -206,33 +206,57 @@ def _validate_backup_employee(
 def _assigned_customers_for_employee(db: Session, employee_id: int) -> List[Dict[str, Any]]:
     """Customers whose permanent Support owner is this employee.
 
-    Returns one row per lead, using the latest handover when legacy data has
-    more than one. No customer or handover row is created.
+    Ownership is resolved from the dedicated Support owner column and the
+    latest handoff, so a reassignment immediately removes the client from the
+    previous employee and adds it to the new employee. No customer or handover
+    row is created.
     """
-    handoffs = (
-        db.query(SupportHandoff)
-        .outerjoin(Lead, SupportHandoff.lead_id == Lead.id)
-        .filter(
-            or_(
-                SupportHandoff.assigned_agent_id == employee_id,
-                Lead.assigned_to == employee_id,
-            )
-        )
-        .order_by(desc(SupportHandoff.id))
+    candidate_ids = set()
+
+    owner_rows = (
+        db.query(Lead.id)
+        .filter(Lead.support_employee_id == employee_id)
         .all()
     )
-    seen = set()
+    candidate_ids.update(row[0] for row in owner_rows if row[0])
+
+    latest_handoff_ids = (
+        db.query(func.max(SupportHandoff.id).label("id"))
+        .group_by(SupportHandoff.lead_id)
+        .subquery()
+    )
+    handoff_rows = (
+        db.query(SupportHandoff.lead_id)
+        .join(latest_handoff_ids, SupportHandoff.id == latest_handoff_ids.c.id)
+        .filter(SupportHandoff.assigned_agent_id == employee_id)
+        .all()
+    )
+    candidate_ids.update(row[0] for row in handoff_rows if row[0])
+
+    # Legacy direct assignment, verified against the authoritative owner below.
+    legacy_rows = (
+        db.query(Lead.id)
+        .filter(Lead.assigned_to == employee_id)
+        .all()
+    )
+    candidate_ids.update(row[0] for row in legacy_rows if row[0])
+
     results: List[Dict[str, Any]] = []
-    for handoff in handoffs:
-        if handoff.lead_id in seen:
-            continue
-        lead = db.query(Lead).filter(Lead.id == handoff.lead_id).first()
+    for lead_id in sorted(candidate_ids):
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
         if not lead:
+            continue
+        handoff = (
+            db.query(SupportHandoff)
+            .filter(SupportHandoff.lead_id == lead_id)
+            .order_by(desc(SupportHandoff.id))
+            .first()
+        )
+        if not handoff:
             continue
         owner = permanent_owner_id(lead, handoff)
         if owner != employee_id:
             continue
-        seen.add(handoff.lead_id)
         customer = None
         if handoff.customer_id:
             customer = db.query(Customer).filter(Customer.id == handoff.customer_id).first()

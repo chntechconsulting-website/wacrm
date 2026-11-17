@@ -427,6 +427,23 @@ def build_lead_out(
         support_manager_id = support_handoff.support_manager_id
         support_manager_name = support_handoff.support_manager_name
 
+    # The dedicated Support owner column is authoritative after a
+    # reassignment. It keeps the newest employee visible even on pages that do
+    # not load the handoff relation, while `Lead.assigned_to` remains Sales.
+    support_owner_id = getattr(lead, "support_employee_id", None)
+    if support_owner_id:
+        support_owner = (
+            db.query(Employee).filter(Employee.id == support_owner_id).first()
+            if db else None
+        )
+        support_assigned_to = support_owner_id
+        support_assigned_to_name = support_owner.name if support_owner else None
+        if support_owner and not support_manager_id:
+            owner_manager = _resolve_employee_manager(support_owner, db)
+            if owner_manager:
+                support_manager_id = owner_manager.id
+                support_manager_name = owner_manager.name
+
     # Legacy rows assigned a Support employee directly still display correctly
     # in the read-only Sales projection. New assignments never overwrite
     # Lead.assigned_to, so this fallback is strictly backwards compatible.
@@ -1343,14 +1360,24 @@ def get_support_assigned_leads(
 
     # Optional filter by assigned_agent_id (for Manager/Admin)
     if assigned_agent_id:
-        handoff_leads_for_agent = select(SupportHandoff.lead_id).where(
-            SupportHandoff.assigned_agent_id == assigned_agent_id
+        latest_handoff_ids = (
+            db.query(func.max(SupportHandoff.id).label("id"))
+            .group_by(SupportHandoff.lead_id)
+            .subquery()
+        )
+        latest_handoff_leads = (
+            select(SupportHandoff.lead_id)
+            .join(latest_handoff_ids, SupportHandoff.id == latest_handoff_ids.c.id)
+            .where(SupportHandoff.assigned_agent_id == assigned_agent_id)
         )
         query = query.filter(
             or_(
-                Lead.assigned_to == assigned_agent_id,
+                Lead.support_employee_id == assigned_agent_id,
                 Lead.trial_support_employee_id == assigned_agent_id,
-                Lead.id.in_(handoff_leads_for_agent)
+                Lead.id.in_(latest_handoff_leads),
+                (
+                    Lead.assigned_to == assigned_agent_id
+                    ) & Lead.support_employee_id.is_(None),
             )
         )
 
@@ -1432,6 +1459,9 @@ def get_support_assigned_leads(
     # Batch-resolve support managers for the visible page.
     exec_ids = set()
     for l in leads:
+        if getattr(l, "support_employee_id", None):
+            exec_ids.add(l.support_employee_id)
+            continue
         h = handoffs_map.get(l.id)
         if h and h.assigned_agent_id:
             exec_ids.add(h.assigned_agent_id)
@@ -1466,7 +1496,12 @@ def get_support_assigned_leads(
         assigned_exec_id = None
         assigned_exec_name = None
         trial_assignee = None
-        if h and h.assigned_agent_id:
+        support_owner_id = getattr(l, "support_employee_id", None)
+        if support_owner_id:
+            assigned_exec_id = support_owner_id
+            owner_emp = execs_by_id.get(support_owner_id)
+            assigned_exec_name = owner_emp.name if owner_emp else None
+        elif h and h.assigned_agent_id:
             assigned_exec_id = h.assigned_agent_id
             assigned_exec_name = h.assigned_agent_name
         elif getattr(l, "trial_support_employee_id", None):
@@ -1557,6 +1592,8 @@ def get_support_assigned_leads(
             "requirement_notes": l.requirement_notes,
             "assigned_support_executive_id": assigned_exec_id,
             "assigned_support_executive_name": assigned_exec_name,
+            "support_employee_id": support_owner_id,
+            "support_employee_name": assigned_exec_name if support_owner_id else None,
             "assigned_support_manager_id": assigned_mgr_id,
             "assigned_support_manager_name": assigned_mgr_name,
             "assignment_date": assignment_date,
@@ -1659,17 +1696,40 @@ def get_support_team_members(
     department.
     """
     norm_role = normalize_role(current_user.role)
-    if norm_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+    if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Sales users cannot view Support team members."
+            detail="Access forbidden: Only Support team and Admin can view Support team members."
         )
+
+    current_emp = get_employee_for_user(current_user, db)
+    team_ids = None
+    if norm_role == ROLE_SUPPORT_MANAGER:
+        team_ids = set(get_team_employee_ids_from_user(current_user, db))
+        if current_emp:
+            team_ids.add(current_emp.id)
+    elif norm_role == ROLE_SUPPORT_EXECUTIVE and current_emp:
+        if current_emp.manager_id:
+            team_ids = set(get_team_employee_ids(current_emp.manager_id, db))
+        else:
+            team_ids = {current_emp.id}
 
     support_emps = db.query(Employee).filter(
         Employee.department == "SUPPORT",
         Employee.status == "ACTIVE",
         Employee.role.in_(["SUPPORT_EXECUTIVE", "SUPPORT"])
-    ).order_by(Employee.name.asc()).all()
+    )
+    if team_ids is not None:
+        support_emps = support_emps.filter(Employee.id.in_(team_ids))
+    support_emps = support_emps.order_by(Employee.name.asc()).all()
+
+    manager_ids = {e.manager_id for e in support_emps if e.manager_id}
+    managers_by_id = {}
+    if manager_ids:
+        managers_by_id = {
+            manager.id: manager
+            for manager in db.query(Employee).filter(Employee.id.in_(manager_ids)).all()
+        }
 
     return [
         {
@@ -1678,6 +1738,10 @@ def get_support_team_members(
             "role": e.role,
             "department": e.department,
             "manager_id": e.manager_id,
+            "manager_name": (
+                managers_by_id[e.manager_id].name
+                if e.manager_id in managers_by_id else None
+            ),
             "status": e.status
         }
         for e in support_emps
@@ -1769,12 +1833,20 @@ def assign_support_lead(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Assign a Support Executive to a lead that has explicitly been converted to
-    Support. Allowed for Support Managers and Admin only.
+    Assign or reassign a Support Executive to a customer that is already in the
+    Support workflow. A dedicated ``CONVERTED_TO_SUPPORT`` status or an
+    existing Support handoff both qualify; some legitimate handovers keep the
+    Sales status at WON.
 
-    The Sales owner (``Lead.assigned_to``) is never overwritten. Support
-    assignment is written to the Support handoff and to an auditable
-    ``LeadAssignment`` row using the ``MANUAL_SUPPORT`` method.
+    * Admin has global reassignment access.
+    * Support Manager may only reassign within their managed Support team.
+    * The target must be an active Support Executive.
+    * A reassignment (changing the existing owner) requires a reason.
+
+    The whole change is transactional: the previous active assignment is
+    closed, the new one is created, the client/handoff ownership is updated,
+    the history and audit rows are written and the new employee, previous
+    employee and Support Manager are notified in one commit.
     """
     norm_role = normalize_role(current_user.role)
     if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER]:
@@ -1787,15 +1859,6 @@ def assign_support_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    if normalize_lead_status(lead.status) != STATUS_CONVERTED_TO_SUPPORT:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Support assignment is available only after the deal is marked "
-                "Won and then explicitly converted to Support."
-            )
-        )
-
     new_agent_id = payload.get("assigned_agent_id")
     if not new_agent_id:
         raise HTTPException(status_code=400, detail="assigned_agent_id is required")
@@ -1805,9 +1868,12 @@ def assign_support_lead(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="assigned_agent_id must be an integer")
 
-    # Optional conversion remarks entered on the Support Assignment form.
-    # They are stored on the existing Support handoff notes and the auditable
-    # LeadAssignment row, so no schema change is required.
+    raw_reason = (
+        payload.get("reason")
+        or payload.get("reassignment_reason")
+        or ""
+    )
+    reason = str(raw_reason).strip()[:2000]
     raw_remarks = payload.get("remarks") or payload.get("conversion_remarks") or ""
     remarks = str(raw_remarks).strip()[:2000]
 
@@ -1824,116 +1890,173 @@ def assign_support_lead(
         )
 
     from models.workflow import SupportHandoff
+    from services.support_assignment_service import (
+        reassign_support_owner,
+        resolve_current_support_owner,
+    )
+
     handoff = (
         db.query(SupportHandoff)
         .filter(SupportHandoff.lead_id == lead.id)
         .order_by(desc(SupportHandoff.id))
         .first()
     )
+    # A Support handoff is the real signal that the customer is already in the
+    # Support workflow. Some legitimate handovers (for example a paid finance
+    # handoff) keep the Sales status at WON instead of rewriting it to
+    # CONVERTED_TO_SUPPORT, so gating only on Lead.status locked Support
+    # Managers out of customers that are visibly in their onboarding queue.
     if not handoff:
+        if normalize_lead_status(lead.status) != STATUS_CONVERTED_TO_SUPPORT:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Support assignment is available only after the deal is marked "
+                    "Won and then handed over to Support."
+                )
+            )
         raise HTTPException(
             status_code=409,
             detail="No Support handoff exists for this lead. Convert the won deal to Support first."
         )
 
     current_emp = get_employee_for_user(current_user, db)
-    assigner_id = current_emp.id if current_emp else None
+    current_owner_id, owner_source = resolve_current_support_owner(db, lead, handoff)
 
-    # Idempotency: re-submitting the same Support Executive must not create a
-    # duplicate assignment history row or a second notification.
-    if handoff.assigned_agent_id == agent.id:
-        return {
-            "success": True,
-            "already_assigned": True,
-            "lead_id": lead.id,
-            "support_handoff_id": handoff.id,
-            "assigned_agent_id": agent.id,
-            "assigned_agent_name": agent.name,
-            "support_assigned_at": handoff.updated_at.isoformat() if handoff.updated_at else None,
-            "sales_owner_id": lead.assigned_to,
-            "support_manager_id": handoff.support_manager_id,
-            "support_manager_name": handoff.support_manager_name,
-        }
+    # A genuine reassignment always needs an auditable reason. The first
+    # assignment can still be submitted without one.
+    if current_owner_id and current_owner_id != agent.id and not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="A reassignment reason is required when moving a client to another Support employee.",
+        )
 
-    handoff.assigned_agent_id = agent.id
-    handoff.assigned_agent_name = agent.name
-
-    if remarks:
-        existing_notes = (handoff.support_notes or "").strip()
-        if remarks not in existing_notes:
-            handoff.support_notes = (
-                f"{existing_notes}\n{remarks}".strip() if existing_notes else remarks
+    if norm_role == ROLE_SUPPORT_MANAGER:
+        if not current_emp:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No employee profile is linked to this Support Manager account.",
+            )
+        team_ids = set(get_team_employee_ids_from_user(current_user, db))
+        team_ids.add(current_emp.id)
+        if agent.id not in team_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only assign clients to Support Executives in your managed team.",
+            )
+        if current_owner_id and current_owner_id not in team_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This client is outside your managed Support team and cannot be reassigned by you.",
+            )
+        if not is_support_lead_authorized(lead, current_user, db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: This customer is not assigned to your Support team.",
             )
 
-    # Support Manager ownership must be recorded exactly once. Prefer the
-    # Support Manager performing the assignment, otherwise fall back to the
-    # agent's reporting manager.
-    if not handoff.support_manager_id:
-        if norm_role == ROLE_SUPPORT_MANAGER and current_emp:
-            handoff.support_manager_id = current_emp.id
-            handoff.support_manager_name = current_emp.name
-        else:
-            mgr = _resolve_employee_manager(agent, db)
-            if mgr:
-                handoff.support_manager_id = mgr.id
-                handoff.support_manager_name = mgr.name
+    # Preserve the optional conversion remarks from the first assignment. On a
+    # reassignment the dedicated reason is stored instead.
+    effective_reason = reason or (remarks if not current_owner_id else None)
 
-    assignment = LeadAssignment(
-        lead_id=lead.id,
-        assigned_to=agent.id,
-        assigned_by=assigner_id,
-        assigned_at=datetime.utcnow(),
-        assignment_method="MANUAL_SUPPORT",
-        notes=(
-            f"Assigned to Support Executive {agent.name} by {current_user.username} "
-            f"after conversion to Support."
-            + (f" Conversion remarks: {remarks}" if remarks else "")
-        )
+    result = reassign_support_owner(
+        db,
+        lead=lead,
+        handoff=handoff,
+        new_employee=agent,
+        actor_user=current_user,
+        actor_employee=current_emp,
+        reason=effective_reason or None,
+        source="MANUAL_REASSIGN" if current_owner_id else "MANUAL_ASSIGN",
     )
-    db.add(assignment)
+    result["conversion_remarks"] = remarks or None
+    result["owner_source"] = owner_source
+    return result
 
-    log_lead_activity(
-        db=db,
-        lead_id=lead.id,
-        performed_by_id=assigner_id,
-        activity_type="ASSIGNED_TO_SUPPORT",
-        description=(
-            f"Assigned to Support Executive {agent.name} by {current_user.username} "
-            f"after conversion to Support."
-            + (f" Conversion remarks: {remarks}" if remarks else "")
+
+@router.get("/{lead_id}/support-assignment")
+def get_support_assignment(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Current Support owner plus the complete reassignment history.
+
+    Admin can inspect any client. Support Managers and Support Executives can
+    inspect only customers inside their authorized Support scope.
+    """
+    norm_role = normalize_role(current_user.role)
+    if norm_role in [ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Sales users cannot access Support assignment data.",
         )
-    )
-
-    db.commit()
-    db.refresh(lead)
-
-    log_audit(
-        db=db,
-        user_id=current_user.id,
-        username=current_user.username,
-        action="SUPPORT_ASSIGN",
-        entity_type="LEAD",
-        entity_id=lead.id,
-        details=(
-            f"Support Executive {agent.name} assigned to converted Lead #{lead.id} "
-            f"by {current_user.username}."
-            + (f" Conversion remarks: {remarks}" if remarks else "")
+    if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Only Support team and Admin can view Support assignment data.",
         )
-    )
 
-    return {
-        "success": True,
-        "already_assigned": False,
-        "lead_id": lead.id,
-        "support_handoff_id": handoff.id,
-        "assigned_agent_id": agent.id,
-        "assigned_agent_name": agent.name,
-        "support_assigned_at": assignment.assigned_at.isoformat(),
-        "conversion_remarks": remarks or None,
-        "sales_owner_id": lead.assigned_to,
-        "support_manager_id": handoff.support_manager_id,
-        "support_manager_name": handoff.support_manager_name,
-    }
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if norm_role != ROLE_ADMIN and not is_support_lead_authorized(lead, current_user, db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: This customer is not assigned to your Support scope.",
+        )
+
+    from models.workflow import SupportHandoff
+    from services.support_assignment_service import get_assignment_state
+
+    handoff = (
+        db.query(SupportHandoff)
+        .filter(SupportHandoff.lead_id == lead.id)
+        .order_by(desc(SupportHandoff.id))
+        .first()
+    )
+    state = get_assignment_state(db, lead, handoff)
+
+    is_converted = normalize_lead_status(lead.status) == STATUS_CONVERTED_TO_SUPPORT
+    # A handoff is sufficient: it means the customer is already in Support even
+    # when the Sales status stayed at WON instead of CONVERTED_TO_SUPPORT.
+    assignment_enabled = handoff is not None
+    can_reassign = False
+    blocked_reason = None
+    if norm_role == ROLE_ADMIN:
+        can_reassign = assignment_enabled
+        if not assignment_enabled:
+            blocked_reason = (
+                "The deal must be won and handed over to Support before reassignment."
+                if not is_converted
+                else "No Support handoff exists for this lead yet."
+            )
+    elif norm_role == ROLE_SUPPORT_MANAGER:
+        current_emp = get_employee_for_user(current_user, db)
+        team_ids = set(get_team_employee_ids_from_user(current_user, db))
+        if current_emp:
+            team_ids.add(current_emp.id)
+        owner_id = state.get("support_employee_id")
+        can_reassign = bool(
+            assignment_enabled and (owner_id is None or owner_id in team_ids)
+        )
+        if not assignment_enabled:
+            blocked_reason = (
+                "The deal must be won and handed over to Support before reassignment."
+                if not is_converted
+                else "No Support handoff exists for this lead yet."
+            )
+        elif owner_id and owner_id not in team_ids:
+            blocked_reason = "This client is outside your managed Support team."
+    else:
+        blocked_reason = "Only Support Managers and Admin can reassign clients."
+
+    state["can_reassign"] = can_reassign
+    state["assignment_enabled"] = assignment_enabled
+    state["reassign_blocked_reason"] = blocked_reason
+    state["is_converted_to_support"] = is_converted
+    return state
 
 
 @router.put("/{lead_id}/support-status", response_model=SupportHandoffOut)
