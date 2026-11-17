@@ -13,6 +13,12 @@ class CallLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    # Optional Point of Contact used for this call. The parent customer stays
+    # linked through ``lead_id``; this only identifies the person actually
+    # contacted. Nullable because existing/PBX calls have no POC.
+    customer_poc_id = Column(
+        Integer, ForeignKey("customer_pocs.id"), nullable=True, index=True
+    )
     
     provider = Column(String(50), nullable=False)
     provider_call_id = Column(String(100), unique=True, index=True, nullable=False)
@@ -75,3 +81,4 @@ class CallLog(Base):
 
     lead = relationship("Lead", backref="call_logs")
     employee = relationship("Employee", backref="call_logs")
+    customer_poc = relationship("CustomerPOC", foreign_keys=[customer_poc_id])

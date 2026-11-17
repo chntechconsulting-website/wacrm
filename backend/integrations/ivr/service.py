@@ -231,16 +231,32 @@ class IVRService:
         current_employee_id: Optional[int] = None, 
         customer_phone: Optional[str] = None,
         employee_phone: Optional[str] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        customer_poc_id: Optional[int] = None,
     ) -> CallLog:
         """
         Initiates a Click-to-Call bridging the employee's phone and the customer's phone.
         Records entry in database and lead activity log.
+
+        ``customer_poc_id`` is optional CRM context only. It never changes the
+        provider request, station selection, routing or call-control events.
         """
         # 1. Resolve Lead & Customer Phone
         lead = None
         if lead_id:
             lead = db.query(Lead).filter(Lead.id == lead_id).first()
+
+        if customer_poc_id:
+            from services.support_service import find_poc_by_id
+
+            poc = find_poc_by_id(db, customer_poc_id)
+            if poc is None:
+                raise ValueError("Selected customer POC not found.")
+            if lead_id and poc.lead_id != lead_id:
+                raise ValueError("Selected POC does not belong to this lead.")
+            if not lead_id:
+                lead_id = poc.lead_id
+                lead = db.query(Lead).filter(Lead.id == lead_id).first()
 
         target_customer_phone = str(customer_phone or (lead.phone if lead else "")).strip()
         if not target_customer_phone:
@@ -287,6 +303,7 @@ class IVRService:
         call_log = CallLog(
             lead_id=lead_id,
             employee_id=current_employee_id,
+            customer_poc_id=customer_poc_id,
             provider=provider_name,
             provider_call_id=provider_call_id,
             from_number=active_from_number,
@@ -394,6 +411,7 @@ class IVRService:
     def log_manual_call(
         db: Session,
         lead_id: Optional[int] = None,
+        customer_poc_id: Optional[int] = None,
         current_employee_id: Optional[int] = None,
         customer_phone: Optional[str] = None,
         employee_phone: Optional[str] = None,
@@ -735,6 +753,8 @@ class IVRService:
                         existing.to_number = target_phone
                 if lead_id is not None:
                     existing.lead_id = lead_id
+                if customer_poc_id and not existing.customer_poc_id:
+                    existing.customer_poc_id = customer_poc_id
                 existing.call_status = status if native_is_authoritative else existing.call_status
                 existing.duration_seconds = (
                     duration_seconds
@@ -882,6 +902,7 @@ class IVRService:
 
         call_log = CallLog(
             lead_id=lead_id,
+            customer_poc_id=customer_poc_id,
             employee_id=current_employee_id,
             provider=provider_name,
             provider_call_id=provider_call_id,

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import API from '../../services/api';
 import { formatLeadReceivedFull } from '../../utils/dateUtils';
+import { CustomerPOCSummaryList } from './CustomerPOCSection';
 import {
   AlertCircle,
   ArrowUpRight,
@@ -122,6 +123,37 @@ export default function IncomingCallSupportPanel({ incomingAlert }) {
           <span className="backup">Backup coverage: {assignment.backup_employee_name}</span>
         )}
       </div>
+
+      {(context.matched_poc || (context.pocs || []).length > 0) && (
+        <div className="incoming-support-poc">
+          <div className="incoming-support-poc-head">
+            <span>
+              <UserCheck size={12} /> Customer POCs
+            </span>
+            {context.matched_poc && (
+              <span className="matched">Caller matched to this POC</span>
+            )}
+          </div>
+          {context.matched_poc ? (
+            <div className="incoming-support-poc-caller">
+              <strong>{context.matched_poc.name}</strong>
+              {context.matched_poc.designation ? ` · ${context.matched_poc.designation}` : ''}
+              {` · ${context.matched_poc.mobile}`}
+              {context.matched_poc.is_primary ? ' · Primary POC' : ''}
+            </div>
+          ) : context.primary_poc ? (
+            <div className="incoming-support-poc-caller muted-caller">
+              Primary POC: <strong>{context.primary_poc.name}</strong>
+              {` · ${context.primary_poc.mobile}`}
+            </div>
+          ) : null}
+          <CustomerPOCSummaryList
+            pocs={context.pocs || []}
+            matchedPocId={context.matched_poc?.id || null}
+            emptyLabel="No POC recorded for this customer yet."
+          />
+        </div>
+      )}
 
       <div className="incoming-support-row">
         <span>Last conversation</span>

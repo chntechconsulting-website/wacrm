@@ -29,6 +29,7 @@ from models.user import User
 from models.employee import Employee
 from models.lead import Lead
 from models.call_log import CallLog
+from models.support import CustomerPOC
 from models.integration import IntegrationConfig
 from services.auth import get_current_user, get_user_from_token
 from services.permission_service import (
@@ -272,6 +273,7 @@ class CallStatusUpdateRequest(BaseModel):
 
 class ManualCallLogRequest(BaseModel):
     lead_id: Optional[int] = None
+    customer_poc_id: Optional[int] = None
     customer_phone: str
     call_status: str = "COMPLETED"
     duration_seconds: Optional[int] = 0
@@ -351,6 +353,7 @@ def resolve_recording_url(raw_url: Optional[str], db: Session) -> Optional[str]:
 def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
     lead_name = call.lead.name if call.lead else None
     employee_name = call.employee.name if call.employee else None
+    poc = getattr(call, "customer_poc", None)
 
     # Accurately map customer vs employee phone based on numbers and call direction
     raw_from = (call.from_number or "").strip()
@@ -528,7 +531,12 @@ def build_call_log_response(call: CallLog, db: Session) -> CallLogResponse:
         created_at=call.created_at,
         lead_name=lead_name,
         employee_name=employee_name,
-        employee_extension=resolved_ext
+        employee_extension=resolved_ext,
+        customer_poc_id=call.customer_poc_id,
+        poc_name=poc.name if poc else None,
+        poc_phone=poc.mobile if poc else None,
+        poc_designation=poc.designation if poc else None,
+        poc_is_primary=bool(poc.is_primary) if poc else False,
     )
 
 @router.get("/config-status", response_model=IVRConfigStatusResponse)
@@ -888,6 +896,24 @@ def log_manual_call_endpoint(
                         detail="Access denied. You can only log calls for leads assigned to you."
                     )
 
+    customer_poc_id = body.customer_poc_id
+    if customer_poc_id:
+        from services.support_service import find_poc_by_id
+
+        poc = find_poc_by_id(db, customer_poc_id)
+        if poc is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Selected customer POC not found.",
+            )
+        if body.lead_id and poc.lead_id != body.lead_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected POC does not belong to this lead.",
+            )
+        if not body.lead_id:
+            body.lead_id = poc.lead_id
+
     try:
         client_call_id = (body.client_call_id or "").strip() or None
         if client_call_id and len(client_call_id) > 100:
@@ -897,6 +923,7 @@ def log_manual_call_endpoint(
             call_log = IVRService.log_manual_call(
                 db=db,
                 lead_id=body.lead_id,
+                customer_poc_id=customer_poc_id,
                 current_employee_id=employee_id,
                 customer_phone=body.customer_phone,
                 employee_phone=employee_phone,
@@ -918,6 +945,8 @@ def log_manual_call_endpoint(
                 native_call_reference=body.native_call_reference,
             )
         return build_call_log_response(call_log, db)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -1679,6 +1708,7 @@ def list_call_logs(
         s_clean = search.strip()
         s_fmt = f"%{s_clean}%"
         query = query.outerjoin(Lead, CallLog.lead_id == Lead.id).outerjoin(Employee, CallLog.employee_id == Employee.id)
+        query = query.outerjoin(CustomerPOC, CallLog.customer_poc_id == CustomerPOC.id)
         query = query.filter(
             or_(
                 CallLog.from_number.ilike(s_fmt),
@@ -1687,7 +1717,11 @@ def list_call_logs(
                 CallLog.notes.ilike(s_fmt),
                 Lead.name.ilike(s_fmt),
                 Lead.phone.ilike(s_fmt),
-                Employee.name.ilike(s_fmt)
+                Employee.name.ilike(s_fmt),
+                CustomerPOC.name.ilike(s_fmt),
+                CustomerPOC.mobile.ilike(s_fmt),
+                CustomerPOC.alternate_mobile.ilike(s_fmt),
+                CustomerPOC.whatsapp_number.ilike(s_fmt),
             )
         )
 

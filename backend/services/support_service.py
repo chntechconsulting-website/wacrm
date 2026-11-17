@@ -19,6 +19,7 @@ from models.followup import Followup
 from models.lead import Lead
 from models.monitoring import EmployeePresence
 from models.support import (
+    CustomerPOC,
     EmployeeLeave,
     SupportClientAssignment,
     SupportCoverageAssignment,
@@ -29,6 +30,7 @@ from models.workflow import SupportHandoff
 from services.followup_visibility_service import apply_followup_department_filters
 from services.hierarchy_service import DEPT_SUPPORT, normalize_role
 from services.purchase_details_service import build_support_purchase_details
+from utils.phone import normalize_email, normalize_phone
 from utils.timezone import get_ist_now
 
 SUPPORT_ROLES = {"SUPPORT_MANAGER", "SUPPORT_EXECUTIVE", "SUPPORT"}
@@ -295,6 +297,194 @@ def serialize_coverage(coverage: Optional[SupportCoverageAssignment]) -> Optiona
     return coverage.to_dict() if coverage else None
 
 
+# ---------------------------------------------------------------------------
+# Customer Point of Contact (POC)
+# ---------------------------------------------------------------------------
+def poc_scope_conditions(lead_id: int, customer_id: Optional[int] = None):
+    """Rows belonging to this Support lead and/or its linked customer.
+
+    A POC is always stored with the owning Support lead. When the lead is
+    linked to a converted Customer, company-level POCs created from a
+    different lead of the same customer are included as well.
+    """
+    conditions = [CustomerPOC.lead_id == int(lead_id)]
+    if customer_id:
+        conditions.append(CustomerPOC.customer_id == int(customer_id))
+    return or_(*conditions)
+
+
+def list_customer_pocs(
+    db: Session,
+    lead_id: int,
+    customer_id: Optional[int] = None,
+) -> List[CustomerPOC]:
+    if lead_id is None:
+        return []
+    return (
+        db.query(CustomerPOC)
+        .filter(poc_scope_conditions(lead_id, customer_id))
+        .order_by(desc(CustomerPOC.is_primary), CustomerPOC.id.asc())
+        .all()
+    )
+
+
+def batch_customer_pocs(
+    db: Session,
+    lead_ids: Iterable[int],
+) -> Dict[int, List[CustomerPOC]]:
+    """POC rows for a page of Support leads, without N+1 queries."""
+    ids = [int(lead_id) for lead_id in lead_ids if lead_id]
+    if not ids:
+        return {}
+    rows = (
+        db.query(CustomerPOC)
+        .filter(CustomerPOC.lead_id.in_(ids))
+        .order_by(desc(CustomerPOC.is_primary), CustomerPOC.id.asc())
+        .all()
+    )
+    result: Dict[int, List[CustomerPOC]] = {lead_id: [] for lead_id in ids}
+    for row in rows:
+        result.setdefault(row.lead_id, []).append(row)
+    return result
+
+
+def primary_poc_from_list(rows: Iterable[CustomerPOC]) -> Optional[CustomerPOC]:
+    for row in rows or []:
+        if row.is_primary:
+            return row
+    return None
+
+
+def get_primary_poc(
+    db: Session,
+    lead_id: int,
+    customer_id: Optional[int] = None,
+) -> Optional[CustomerPOC]:
+    return primary_poc_from_list(list_customer_pocs(db, lead_id, customer_id))
+
+
+def serialize_poc(poc: Optional[CustomerPOC]) -> Optional[Dict[str, Any]]:
+    return poc.to_dict() if poc else None
+
+
+def find_poc_by_id(db: Session, poc_id: int) -> Optional[CustomerPOC]:
+    if not poc_id:
+        return None
+    return db.query(CustomerPOC).filter(CustomerPOC.id == int(poc_id)).first()
+
+
+def clean_poc_phone(value: Optional[Any]) -> str:
+    return normalize_phone(value)
+
+
+def find_poc_by_phone(db: Session, phone: Optional[Any]) -> Optional[CustomerPOC]:
+    """Resolve an inbound/outbound number to the exact POC that owns it.
+
+    Matching uses the same Indian-number normalization as the rest of the CRM
+    and checks the primary mobile, alternate mobile and WhatsApp number.
+    """
+    clean = normalize_phone(phone)
+    if not clean or len(clean) < 7:
+        return None
+    candidates = (
+        db.query(CustomerPOC)
+        .filter(
+            or_(
+                CustomerPOC.mobile.like(f"%{clean}%"),
+                CustomerPOC.alternate_mobile.like(f"%{clean}%"),
+                CustomerPOC.whatsapp_number.like(f"%{clean}%"),
+            )
+        )
+        .order_by(desc(CustomerPOC.is_primary), desc(CustomerPOC.id))
+        .all()
+    )
+    for poc in candidates:
+        for value in (poc.mobile, poc.alternate_mobile, poc.whatsapp_number):
+            if normalize_phone(value) == clean:
+                return poc
+    if len(clean) >= 10:
+        ten_digit = clean[-10:]
+        for poc in candidates:
+            for value in (poc.mobile, poc.alternate_mobile, poc.whatsapp_number):
+                normalized = normalize_phone(value)
+                if normalized and normalized[-10:] == ten_digit:
+                    return poc
+    return None
+
+
+def find_poc_duplicate(
+    db: Session,
+    lead_id: int,
+    customer_id: Optional[int],
+    mobile: Optional[Any],
+    email: Optional[Any] = None,
+    alternate_mobile: Optional[Any] = None,
+    whatsapp_number: Optional[Any] = None,
+    exclude_id: Optional[int] = None,
+) -> Tuple[Optional[CustomerPOC], Optional[str]]:
+    """Return (existing_poc, field) when a POC duplicate would be created.
+
+    Every phone stored on a POC is checked, so a new alternate/WhatsApp number
+    cannot silently duplicate another contact's primary number either.
+    """
+    clean_email = normalize_email(email)
+    phone_candidates = []
+    for value, label in (
+        (mobile, "mobile"),
+        (alternate_mobile, "alternate mobile"),
+        (whatsapp_number, "WhatsApp number"),
+    ):
+        normalized = normalize_phone(value)
+        if normalized and normalized not in [item[0] for item in phone_candidates]:
+            phone_candidates.append((normalized, label))
+    if not phone_candidates and not clean_email:
+        return None, None
+    query = db.query(CustomerPOC).filter(poc_scope_conditions(lead_id, customer_id))
+    if exclude_id:
+        query = query.filter(CustomerPOC.id != int(exclude_id))
+    for poc in query.order_by(CustomerPOC.id.asc()).all():
+        for normalized, label in phone_candidates:
+            for value in (poc.mobile, poc.alternate_mobile, poc.whatsapp_number):
+                existing = normalize_phone(value)
+                if existing and existing == normalized:
+                    return poc, label
+        if clean_email and normalize_email(poc.email) == clean_email:
+            return poc, "email"
+    return None, None
+
+
+def set_primary_poc(
+    db: Session,
+    lead_id: int,
+    customer_id: Optional[int],
+    poc: CustomerPOC,
+) -> None:
+    """Make exactly one POC primary within the customer scope."""
+    scope = poc_scope_conditions(lead_id, customer_id)
+    db.query(CustomerPOC).filter(
+        scope,
+        CustomerPOC.id != poc.id,
+    ).update({CustomerPOC.is_primary: False}, synchronize_session=False)
+    poc.is_primary = True
+
+
+def ensure_primary_poc(
+    db: Session,
+    lead_id: int,
+    customer_id: Optional[int],
+) -> Optional[CustomerPOC]:
+    """Guarantee a primary row after a data import or manual edit."""
+    rows = list_customer_pocs(db, lead_id, customer_id)
+    primary = primary_poc_from_list(rows)
+    if primary:
+        return primary
+    if not rows:
+        return None
+    first = sorted(rows, key=lambda row: row.id)[0]
+    first.is_primary = True
+    return first
+
+
 def get_interactions_for_customer(
     db: Session,
     customer_id: int,
@@ -326,6 +516,9 @@ def _interaction_brief(interaction: SupportInteraction) -> Dict[str, Any]:
         "id": interaction.id,
         "interaction_type": interaction.interaction_type,
         "interaction_at": interaction.interaction_at.isoformat() if interaction.interaction_at else None,
+        "customer_poc_id": interaction.customer_poc_id,
+        "poc_name": interaction.customer_poc.name if interaction.customer_poc else None,
+        "poc_phone": interaction.customer_poc.mobile if interaction.customer_poc else None,
         "discussion": interaction.discussion,
         "problem_reported": interaction.problem_reported,
         "troubleshooting": interaction.troubleshooting,
@@ -634,6 +827,8 @@ def build_customer_history(
     profile = serialize_customer_profile(
         db, lead, customer, handoff, include_purchase=include_purchase
     )
+    pocs = list_customer_pocs(db, lead.id, customer.id)
+    primary_poc = primary_poc_from_list(pocs)
     now = get_ist_now()
     upcoming = [
         row
@@ -674,6 +869,9 @@ def build_customer_history(
     ).all()
     return {
         **profile,
+        "pocs": [serialize_poc(row) for row in pocs],
+        "primary_poc": serialize_poc(primary_poc),
+        "poc_count": len(pocs),
         "interactions": [row.to_dict() for row in interactions],
         "summary": summary,
         "upcoming_follow_ups": [row.to_dict() for row in upcoming],

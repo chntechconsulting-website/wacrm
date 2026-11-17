@@ -21,6 +21,7 @@ import './SupportHistory.css';
 const EMPTY_FORM = {
   interaction_type: 'MANUAL',
   interaction_at: '',
+  customer_poc_id: '',
   discussion: '',
   problem_reported: '',
   troubleshooting: '',
@@ -68,6 +69,15 @@ const InteractionCard = ({ interaction }) => (
         <UserCheck size={13} /> {interaction.handling_employee_name || 'Support employee'}
       </span>
     </div>
+
+    {interaction.poc_name && (
+      <div className="support-interaction-poc">
+        <UserCheck size={12} />
+        <span>POC</span>
+        <strong>{interaction.poc_name}</strong>
+        {interaction.poc_phone ? <span>· {interaction.poc_phone}</span> : null}
+      </div>
+    )}
 
     <div className="support-interaction-grid">
       {interaction.discussion && (
@@ -223,6 +233,7 @@ export default function SupportInteractionTimeline({
     try {
       const payload = {
         ...form,
+        customer_poc_id: form.customer_poc_id ? Number(form.customer_poc_id) : undefined,
         customer_id: customerId || undefined,
         interaction_at: form.interaction_at ? new Date(form.interaction_at).toISOString() : null,
         follow_up_at: form.follow_up_at ? new Date(form.follow_up_at).toISOString() : null,
@@ -305,6 +316,19 @@ export default function SupportInteractionTimeline({
             {history.company_name || 'Individual customer'}
             {history.phone ? ` • ${history.phone}` : ''}
           </div>
+          {history.primary_poc && (
+            <div className="support-history-poc">
+              <UserCheck size={12} />
+              <span>Primary POC</span>
+              <strong>{history.primary_poc.name}</strong>
+              <span>{history.primary_poc.mobile}</span>
+              {history.poc_count > 1 && (
+                <span className="support-history-poc-count">
+                  +{history.poc_count - 1} more
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="support-history-assignment">
           <span>
@@ -380,7 +404,20 @@ export default function SupportInteractionTimeline({
           <button
             type="button"
             className="support-history-primary-btn"
-            onClick={() => setShowForm((value) => !value)}
+            onClick={() => {
+              setShowForm((value) => {
+                const next = !value;
+                if (next) {
+                  setForm((prev) => ({
+                    ...prev,
+                    customer_poc_id:
+                      prev.customer_poc_id ||
+                      (history.primary_poc?.id ? String(history.primary_poc.id) : ''),
+                  }));
+                }
+                return next;
+              });
+            }}
           >
             <FilePlus2 size={15} /> {showForm ? 'Close form' : 'Add interaction'}
           </button>
@@ -416,6 +453,21 @@ export default function SupportInteractionTimeline({
                 value={form.follow_up_at}
                 onChange={(event) => updateField('follow_up_at', event.target.value)}
               />
+            </label>
+            <label>
+              Customer POC
+              <select
+                value={form.customer_poc_id}
+                onChange={(event) => updateField('customer_poc_id', event.target.value)}
+              >
+                <option value="">Not specified</option>
+                {(history.pocs || []).map((poc) => (
+                  <option key={poc.id} value={poc.id}>
+                    {poc.name} · {poc.mobile}
+                    {poc.is_primary ? ' (Primary)' : ''}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="full">
               Discussion

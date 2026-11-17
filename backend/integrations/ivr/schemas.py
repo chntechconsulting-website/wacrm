@@ -64,6 +64,12 @@ class CallLogResponse(BaseModel):
     lead_name: Optional[str] = None
     employee_name: Optional[str] = None
     employee_extension: Optional[str] = None
+    # Support customer Point of Contact actually called/reached.
+    customer_poc_id: Optional[int] = None
+    poc_name: Optional[str] = None
+    poc_phone: Optional[str] = None
+    poc_designation: Optional[str] = None
+    poc_is_primary: bool = False
 
     class Config:
         from_attributes = True

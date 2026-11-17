@@ -4,7 +4,9 @@ import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY, formatLeadReceivedFull } from '../../utils/dateUtils';
 import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
+import CustomerPOCSection from '../../components/Support/CustomerPOCSection';
 import SupportInteractionTimeline from '../../components/Support/SupportInteractionTimeline';
+import { dialPoc } from '../../utils/pocActions';
 import './SupportAssignedLeadsPage.css';
 
 import {
@@ -808,6 +810,24 @@ export default function SupportAssignedLeadsPage() {
                               <span>{lead.email}</span>
                             </a>
                           )}
+                          {lead.primary_poc && (
+                            <button
+                              type="button"
+                              className="support-poc-inline"
+                              title={`Call primary POC ${lead.primary_poc.name} (${lead.primary_poc.mobile})`}
+                              onClick={() => dialPoc(lead.id, lead, lead.primary_poc)}
+                            >
+                              <span className="support-poc-inline-tag">POC</span>
+                              <span className="support-poc-inline-name">{lead.primary_poc.name}</span>
+                              <span className="support-poc-inline-phone">{lead.primary_poc.mobile}</span>
+                              <Phone size={11} />
+                            </button>
+                          )}
+                          {lead.poc_count > 1 && (
+                            <span className="support-poc-inline-more">
+                              +{lead.poc_count - 1} more POC{lead.poc_count - 1 === 1 ? '' : 's'}
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -1101,6 +1121,7 @@ export default function SupportAssignedLeadsPage() {
 
               {/* Tab 1: Overview & Contact */}
               {activeDrawerTab === 'overview' && (
+                <>
                 <div className="detail-grid">
                   <div className="detail-item">
                     <span className="detail-label">Lead ID</span>
@@ -1361,6 +1382,20 @@ export default function SupportAssignedLeadsPage() {
                     </span>
                   </div>
                 </div>
+                <CustomerPOCSection
+                  leadId={selectedLead.id}
+                  customerId={selectedLead.customer_id}
+                  lead={selectedLead}
+                  canManage
+                  onPocsChanged={(collection) => {
+                    patchLeadRow(selectedLead.id, {
+                      pocs: collection.pocs,
+                      primary_poc: collection.primary_poc,
+                      poc_count: collection.poc_count,
+                    });
+                  }}
+                />
+                </>
               )}
 
               {/* Tab 2: Product & Requirements */}

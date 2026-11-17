@@ -621,6 +621,46 @@
   margin-top: 2px;
 }
 
+.call-log-poc-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  color: #475569;
+}
+
+.call-log-poc-tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.call-log-poc-name {
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.call-log-poc-phone {
+  color: #64748b;
+}
+
+.call-log-poc-primary {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 /* Agent Information */
 .agent-cell {
   display: flex;

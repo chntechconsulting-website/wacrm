@@ -689,7 +689,7 @@ const CRMDialer = () => {
                 <div className="recent-calls-list">
                   {recentCalls.map((call) => {
                     const isInbound = (call.call_direction || '').toUpperCase() === 'INBOUND';
-                    const targetPhone = call.customer_phone || call.to_number || call.from_number;
+                    const targetPhone = call.poc_phone || call.customer_phone || call.to_number || call.from_number;
                     const contactName = call.lead_name || 'Direct Contact';
 
                     return (
@@ -700,6 +700,9 @@ const CRMDialer = () => {
                         <div className="recent-call-details">
                           <span className="recent-contact-name">{contactName}</span>
                           <span className="recent-phone-number">{targetPhone}</span>
+                          {call.poc_name && (
+                            <span className="recent-poc-name">POC · {call.poc_name}</span>
+                          )}
                           <span className="recent-meta-info">
                             {call.call_status} • {call.duration_seconds ? `${call.duration_seconds}s` : '0s'}
                           </span>
@@ -709,9 +712,22 @@ const CRMDialer = () => {
                           className="btn-quick-call"
                           onClick={() => {
                             setPhoneNumber(targetPhone.replace(/^\+91/, '').replace(/[^0-9]/g, ''));
-                            setActiveContact({ name: contactName, phone: targetPhone, id: call.lead_id });
+                            setActiveContact({
+                              name: call.poc_name ? `${contactName} — ${call.poc_name}` : contactName,
+                              phone: targetPhone,
+                              id: call.lead_id,
+                              lead_id: call.lead_id,
+                              customer_poc_id: call.customer_poc_id || null,
+                              entity_type: 'Leads'
+                            });
                             setActiveTab('keypad');
-                            startIvrCall(targetPhone, { id: call.lead_id, name: contactName });
+                            startIvrCall(targetPhone, {
+                              id: call.lead_id,
+                              lead_id: call.lead_id,
+                              name: call.poc_name ? `${contactName} — ${call.poc_name}` : contactName,
+                              customer_poc_id: call.customer_poc_id || null,
+                              entity_type: 'Leads'
+                            });
                           }}
                           title={`Dial ${contactName}`}
                         >

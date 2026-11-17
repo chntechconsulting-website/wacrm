@@ -52,6 +52,11 @@ from services.audit import log_audit
 from services.reinquiry_service import ReInquiryService
 from services.followup_visibility_service import apply_followup_visibility_filter
 from services.purchase_details_service import build_support_purchase_details
+from services.support_service import (
+    batch_customer_pocs,
+    primary_poc_from_list,
+    serialize_poc,
+)
 from services.hierarchy_service import (
     get_team_employee_ids_from_user,
     normalize_role,
@@ -1446,6 +1451,10 @@ def get_support_assigned_leads(
     # Latest handoff per lead in one query (a lead can have re-inquiry handovers).
     handoffs_map = build_support_handoff_map(db, lead_ids_list)
 
+    # POCs for the visible page in one query. Read-only projection; never
+    # mutates the Sales-owned lead/customer contact fields.
+    pocs_map = batch_customer_pocs(db, lead_ids_list)
+
     # Batch activity counts instead of lazy-loading every activity row per lead.
     activity_counts = {}
     if lead_ids_list:
@@ -1560,6 +1569,9 @@ def get_support_assigned_leads(
             and trial_end
             and trial_end < get_ist_now().date()
         )
+        lead_pocs = pocs_map.get(l.id, [])
+        lead_primary_poc = primary_poc_from_list(lead_pocs)
+        serialized_pocs = [serialize_poc(row) for row in lead_pocs]
 
         items.append({
             "id": l.id,
@@ -1610,6 +1622,9 @@ def get_support_assigned_leads(
             "last_updated": l.updated_at.isoformat() if l.updated_at else (l.created_at.isoformat() if l.created_at else None),
             "next_followup_date": l.followup_date.isoformat() if l.followup_date else None,
             "next_followup_time": l.followup_time,
+            "pocs": serialized_pocs,
+            "primary_poc": serialize_poc(lead_primary_poc),
+            "poc_count": len(serialized_pocs),
             "notes": (h.support_notes if h else None) or l.requirement_notes,
             # The drawer lazy-loads the purchase projection from
             # /leads/{id}/purchase-details. Building it for every list row

@@ -24,6 +24,14 @@ from services.doocti_recording_service import (
     extract_recording_url,
 )
 from services.call_sync_service import reconcile_unanswered_calls_with_cdr
+from services.support_service import (
+    find_poc_by_id,
+    find_poc_by_phone,
+    get_primary_poc,
+    list_customer_pocs,
+    primary_poc_from_list,
+    serialize_poc,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +347,10 @@ class DooctiCallLogPayload(BaseModel):
     notes: Optional[str] = None
     entity_id: Optional[str] = None
     entity_type: Optional[str] = "Lead"
+    # Optional Support customer POC used for this call. The parent customer is
+    # still resolved through the POC's lead_id.
+    customer_poc_id: Optional[Any] = None
+    poc_id: Optional[Any] = None
 
 class DooctiLeadUpdatePayload(BaseModel):
     model_config = {"extra": "ignore"}
@@ -405,6 +417,63 @@ def get_lead_by_number(
     if not target_num:
         raise HTTPException(status_code=400, detail="Phone number is required.")
 
+    # 0. A Support customer POC may use a direct number different from the
+    # company main number. Resolve the POC to its parent Lead instead of
+    # creating a duplicate Lead for that number.
+    matched_poc = find_poc_by_phone(db, raw_input_phone)
+    if matched_poc is not None:
+        poc_lead = db.query(Lead).filter(Lead.id == matched_poc.lead_id).first()
+        if poc_lead is not None:
+            lead_owner_name = "Unassigned"
+            if poc_lead.assigned_to:
+                emp = db.query(Employee).filter(Employee.id == poc_lead.assigned_to).first()
+                if emp:
+                    lead_owner_name = emp.name or f"{emp.first_name or ''} {emp.last_name or ''}".strip()
+            from services.product_categorization_service import ProductCategorizationService
+
+            cat_info = ProductCategorizationService.suggest_category_for_lead(poc_lead)
+            lead_pocs = list_customer_pocs(db, poc_lead.id, matched_poc.customer_id)
+            primary_poc = primary_poc_from_list(lead_pocs) or get_primary_poc(
+                db, poc_lead.id, matched_poc.customer_id
+            )
+            lead_data = {
+                "id": poc_lead.id,
+                "customer_id": poc_lead.id,
+                "name": poc_lead.name or "Unnamed Lead",
+                "customer_name": poc_lead.name or "Unnamed Lead",
+                # The dialed number is the POC number, not the company main
+                # number, so click-to-call always reaches the right person.
+                "phone": matched_poc.mobile,
+                "customer_number": matched_poc.mobile,
+                "customer_id_str": str(poc_lead.id),
+                "lead_owner": lead_owner_name,
+                "status": poc_lead.status,
+                "lead_status": poc_lead.status,
+                "queue": "Default",
+                "company": poc_lead.company or "",
+                "entity_type": "Lead",
+                "product_category": poc_lead.product_category or cat_info.get("suggested_category") or "UNCLASSIFIED",
+                "suggested_product_category": cat_info.get("suggested_category") or "UNCLASSIFIED",
+                "product_category_confirmed": bool(poc_lead.product_category_confirmed),
+                "created_at": poc_lead.created_at.isoformat() if poc_lead.created_at else None,
+                "customer_poc_id": matched_poc.id,
+                "poc_id": matched_poc.id,
+                "poc_name": matched_poc.name,
+                "poc_phone": matched_poc.mobile,
+                "poc": serialize_poc(matched_poc),
+                "pocs": [serialize_poc(row) for row in lead_pocs],
+                "primary_poc": serialize_poc(primary_poc),
+                "poc_count": len(lead_pocs),
+            }
+            return {
+                "status": "success",
+                "success": True,
+                "exists": True,
+                "entity_type": "Lead",
+                "lead": lead_data,
+                "data": lead_data,
+            }
+
     # 1. Search in Leads table using robust normalized phone search
     matched_lead = find_existing_lead_by_phone(db, raw_input_phone)
 
@@ -437,6 +506,10 @@ def get_lead_by_number(
             "product_category_confirmed": bool(matched_lead.product_category_confirmed),
             "created_at": matched_lead.created_at.isoformat() if hasattr(matched_lead, 'created_at') and matched_lead.created_at else None
         }
+        lead_pocs = list_customer_pocs(db, matched_lead.id, None)
+        lead_data["pocs"] = [serialize_poc(row) for row in lead_pocs]
+        lead_data["primary_poc"] = serialize_poc(primary_poc_from_list(lead_pocs))
+        lead_data["poc_count"] = len(lead_pocs)
 
         return {
             "status": "success",
@@ -1144,10 +1217,36 @@ async def push_doocti_call_log(
         extension_map=ext_mapping
     )
 
-    # 11. Resolve or Auto-create Lead
+    # 11. Resolve the exact Point of Contact and the parent Lead.
+    # A POC call must belong to the existing customer. Resolving the POC
+    # before the auto-create branch below prevents a duplicate Lead/Customer.
+    resolved_poc = None
+    resolved_poc_id = None
+    explicit_poc_val = raw_data.get("customer_poc_id") or raw_data.get("poc_id")
+    if explicit_poc_val is not None and str(explicit_poc_val).strip().isdigit():
+        resolved_poc = find_poc_by_id(db, int(str(explicit_poc_val).strip()))
+    if resolved_poc is None:
+        poc_phone = customer_phone or clean_target
+        if poc_phone:
+            resolved_poc = find_poc_by_phone(db, poc_phone)
+    if resolved_poc is not None:
+        resolved_poc_id = resolved_poc.id
+
     resolved_lead_id = None
     entity_id_val = raw_data.get("entity_id") or raw_data.get("lead_id")
-    if entity_id_val and str(entity_id_val).isdigit() and int(entity_id_val) > 0:
+    if resolved_poc is not None:
+        poc_lead = db.query(Lead).filter(Lead.id == resolved_poc.lead_id).first()
+        if poc_lead is not None:
+            resolved_lead_id = poc_lead.id
+        else:
+            logger.warning(
+                f"⚠️ [DOOCTI CDR] POC ID={resolved_poc.id} references missing "
+                f"Lead ID={resolved_poc.lead_id}; ignoring POC link."
+            )
+            resolved_poc = None
+            resolved_poc_id = None
+
+    if not resolved_lead_id and entity_id_val and str(entity_id_val).isdigit() and int(entity_id_val) > 0:
         # Verify entity_id actually exists in Lead table
         lead_candidate = db.query(Lead).filter(Lead.id == int(entity_id_val)).first()
         if lead_candidate:
@@ -1498,6 +1597,8 @@ async def push_doocti_call_log(
             existing_log.notes = f"{existing_log.notes or ''}\n{combined_notes}".strip()
         if resolved_lead_id and not existing_log.lead_id:
             existing_log.lead_id = resolved_lead_id
+        if resolved_poc_id and not existing_log.customer_poc_id:
+            existing_log.customer_poc_id = resolved_poc_id
         if resolved_emp_id:
             # Update employee_id if previously unset, or if incoming event carries verified agent extension/email
             if not existing_log.employee_id or (station_str or agent_email or explicit_emp_id):
@@ -1528,6 +1629,7 @@ async def push_doocti_call_log(
             call_entry = CallLog(
                 lead_id=resolved_lead_id,
                 employee_id=resolved_emp_id,
+                customer_poc_id=resolved_poc_id,
                 provider="DOOCTI",
                 provider_call_id=call_id,
                 from_number=from_num,
@@ -1599,6 +1701,8 @@ async def push_doocti_call_log(
                     )
                 if resolved_lead_id and not existing_log.lead_id:
                     existing_log.lead_id = resolved_lead_id
+                if resolved_poc_id and not existing_log.customer_poc_id:
+                    existing_log.customer_poc_id = resolved_poc_id
                 if resolved_emp_id and not existing_log.employee_id:
                     existing_log.employee_id = resolved_emp_id
                 db.commit()
@@ -1610,11 +1714,16 @@ async def push_doocti_call_log(
 
     # 13. Append activity to lead history
     if resolved_lead_id:
+        poc_suffix = (
+            f", POC={resolved_poc.name} ({resolved_poc.mobile})"
+            if resolved_poc is not None
+            else ""
+        )
         activity = LeadActivity(
             lead_id=resolved_lead_id,
             performed_by=resolved_emp_id,
             activity_type="CALL_COMPLETED",
-            description=f"DooCTI call logged: Status={raw_status} ({status_str}), Duration={dur_sec}s, Agent={agent_name or station_str or 'Agent'}. Recording: {rec_url or 'N/A'}"
+            description=f"DooCTI call logged: Status={raw_status} ({status_str}), Duration={dur_sec}s, Agent={agent_name or station_str or 'Agent'}{poc_suffix}. Recording: {rec_url or 'N/A'}"
         )
         db.add(activity)
         db.commit()
@@ -1632,6 +1741,10 @@ async def push_doocti_call_log(
         "call_log_id": call_entry.id,
         "employee_id": resolved_emp_id,
         "lead_id": resolved_lead_id,
+        "customer_poc_id": call_entry.customer_poc_id or resolved_poc_id,
+        "poc_name": resolved_poc.name if resolved_poc else None,
+        "poc_phone": resolved_poc.mobile if resolved_poc else None,
+        "poc_is_primary": bool(resolved_poc.is_primary) if resolved_poc else False,
         "product_category": call_entry.product_category or lead_product_cat or "UNCLASSIFIED",
         "call_status": call_entry.call_status or status_str,
         "duration": call_entry.duration_seconds or 0,
@@ -2311,6 +2424,16 @@ def initiate_doocti_call(
     cust_phone = body.get("customer_phone") or body.get("phone") or body.get("phone_number")
     lead_id = body.get("lead_id")
     notes = body.get("notes")
+    raw_poc_id = body.get("customer_poc_id") or body.get("poc_id")
+    customer_poc_id = None
+    if raw_poc_id not in (None, ""):
+        try:
+            customer_poc_id = int(raw_poc_id)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="customer_poc_id must be an integer.",
+            )
 
     try:
         call_log = IVRService.initiate_call(
@@ -2319,7 +2442,8 @@ def initiate_doocti_call(
             current_employee_id=emp_id,
             customer_phone=cust_phone,
             employee_phone=emp_phone,
-            notes=notes
+            notes=notes,
+            customer_poc_id=customer_poc_id,
         )
         return build_call_log_response(call_log, db)
     except IVRNotConfiguredException as e:

@@ -9,6 +9,7 @@ by a separate, auditable coverage row.
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -38,6 +39,9 @@ class SupportInteraction(Base):
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
+    customer_poc_id = Column(
+        Integer, ForeignKey("customer_pocs.id"), nullable=True, index=True
+    )
     support_handoff_id = Column(
         Integer, ForeignKey("support_handoffs.id"), nullable=True, index=True
     )
@@ -78,6 +82,7 @@ class SupportInteraction(Base):
 
     customer = relationship("Customer", foreign_keys=[customer_id])
     lead = relationship("Lead", foreign_keys=[lead_id])
+    customer_poc = relationship("CustomerPOC", foreign_keys=[customer_poc_id])
     support_handoff = relationship("SupportHandoff", foreign_keys=[support_handoff_id])
     original_employee = relationship("Employee", foreign_keys=[original_employee_id])
     handling_employee = relationship("Employee", foreign_keys=[handling_employee_id])
@@ -98,6 +103,11 @@ class SupportInteraction(Base):
             "id": self.id,
             "customer_id": self.customer_id,
             "lead_id": self.lead_id,
+            "customer_poc_id": self.customer_poc_id,
+            "poc_name": self.customer_poc.name if self.customer_poc else None,
+            "poc_phone": (
+                self.customer_poc.mobile if self.customer_poc else None
+            ),
             "support_handoff_id": self.support_handoff_id,
             "interaction_type": self.interaction_type,
             "interaction_at": self.interaction_at.isoformat() if self.interaction_at else None,
@@ -126,6 +136,91 @@ class SupportInteraction(Base):
             "department": self.department,
             "client_reference": self.client_reference,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class CustomerPOC(Base):
+    """One point of contact for a Support customer / company.
+
+    The table is additive: the main customer contact stored on
+    ``Customer``/``Lead`` is never overwritten. Multiple POCs can exist for
+    the same customer, with exactly one primary POC enforced by the API.
+    """
+
+    __tablename__ = "customer_pocs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # ``lead_id`` is mandatory so a Support lead without a converted Customer
+    # can still own POCs. ``customer_id`` is the linked company when present.
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+
+    name = Column(String(150), nullable=False)
+    mobile = Column(String(30), nullable=False, index=True)
+    alternate_mobile = Column(String(30), nullable=True)
+    whatsapp_number = Column(String(30), nullable=True)
+    email = Column(String(255), nullable=True, index=True)
+    designation = Column(String(120), nullable=True)
+    department = Column(String(120), nullable=True)
+    # CALL, WHATSAPP, EMAIL
+    preferred_contact_method = Column(
+        String(20), default="CALL", nullable=False, index=True
+    )
+    notes = Column(Text, nullable=True)
+    is_primary = Column(Boolean, default=False, nullable=False, index=True)
+
+    created_by_employee_id = Column(
+        Integer, ForeignKey("employees.id"), nullable=True, index=True
+    )
+    updated_by_employee_id = Column(
+        Integer, ForeignKey("employees.id"), nullable=True, index=True
+    )
+    created_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
+    updated_at = Column(
+        DateTime, default=get_ist_now, onupdate=get_ist_now, nullable=False
+    )
+
+    lead = relationship("Lead", foreign_keys=[lead_id])
+    customer = relationship("Customer", foreign_keys=[customer_id])
+    created_by_employee = relationship(
+        "Employee", foreign_keys=[created_by_employee_id]
+    )
+    updated_by_employee = relationship(
+        "Employee", foreign_keys=[updated_by_employee_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "lead_id", "mobile", name="uq_customer_pocs_lead_mobile"
+        ),
+        Index("ix_customer_pocs_lead_primary", "lead_id", "is_primary"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "lead_id": self.lead_id,
+            "customer_id": self.customer_id,
+            "name": self.name,
+            "mobile": self.mobile,
+            "alternate_mobile": self.alternate_mobile,
+            "whatsapp_number": self.whatsapp_number,
+            "email": self.email,
+            "designation": self.designation,
+            "department": self.department,
+            "preferred_contact_method": self.preferred_contact_method or "CALL",
+            "notes": self.notes,
+            "is_primary": bool(self.is_primary),
+            "created_by_employee_id": self.created_by_employee_id,
+            "created_by_employee_name": (
+                self.created_by_employee.name if self.created_by_employee else None
+            ),
+            "updated_by_employee_id": self.updated_by_employee_id,
+            "updated_by_employee_name": (
+                self.updated_by_employee.name if self.updated_by_employee else None
+            ),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

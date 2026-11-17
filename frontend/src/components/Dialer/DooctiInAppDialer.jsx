@@ -935,6 +935,7 @@ const DooctiInAppDialer = () => {
     // 2. Log CDR to CRM backend if phone has digits
     if (cleanPhone && cleanPhone.length >= 6 && cleanPhone !== userExt) {
       const resolvedEntityId = session?.contactData?.id || session?.contactData?.lead_id || matchedLead?.id || null;
+      const resolvedPocId = session?.contactData?.customer_poc_id || session?.contactData?.poc_id || null;
       const pushPayload = {
         uniqueid: session?.callId || `doocti_${userExt}_${cleanPhone}_${Date.now()}`,
         phone_number: cleanPhone,
@@ -947,6 +948,7 @@ const DooctiInAppDialer = () => {
         call_direction: session?.direction || (isDirectionInbound ? 'INBOUND' : 'OUTBOUND'),
         entity_id: resolvedEntityId,
         entity_type: 'Lead',
+        customer_poc_id: resolvedPocId,
         start_time: session?.startTime ? new Date(session.startTime).toISOString() : new Date().toISOString(),
         answer_time: (wasAnswered && answerTime) ? new Date(answerTime).toISOString() : null,
         end_time: new Date(endTime).toISOString()
@@ -1850,7 +1852,7 @@ const DooctiInAppDialer = () => {
                     </div>
                   ) : (
                     filteredRecentCalls.map((item) => {
-                      const phone = item.customer_phone || item.to_number || item.from_number || 'Unknown';
+                      const phone = item.poc_phone || item.customer_phone || item.to_number || item.from_number || 'Unknown';
                       const name = item.lead_name || 'Customer';
                       const isMissed = ['MISSED', 'NO_ANSWER', 'FAILED', 'BUSY'].includes((item.call_status || '').toUpperCase());
                       const isIncoming = (item.call_direction || '').toUpperCase() === 'INBOUND';
@@ -1878,6 +1880,11 @@ const DooctiInAppDialer = () => {
 
                             <div className="call-number-row">
                               <span className="call-contact-phone">{phone}</span>
+                              {item.poc_name && (
+                                <span className="call-poc-tag" title={`POC linked to this call: ${item.poc_name}`}>
+                                  POC · {item.poc_name}
+                                </span>
+                              )}
                             </div>
 
                             <div className="call-meta-row">
@@ -1906,7 +1913,13 @@ const DooctiInAppDialer = () => {
                               className="btn-call-redial"
                               onClick={() => {
                                 setDialNumber(phone);
-                                dialLead(phone, { name: item.lead_name, id: item.lead_id });
+                                dialLead(phone, {
+                                  name: item.poc_name ? `${name} — ${item.poc_name}` : name,
+                                  id: item.lead_id,
+                                  lead_id: item.lead_id,
+                                  customer_poc_id: item.customer_poc_id || null,
+                                  entity_type: 'Leads'
+                                });
                               }}
                               title={`Dial ${name} (${phone})`}
                             >

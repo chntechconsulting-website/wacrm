@@ -520,11 +520,30 @@
 }
 
 .call-number-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   font-size: 0.74rem;
   font-weight: 600;
   color: #475569;
   letter-spacing: 0.02em;
   margin-bottom: 3px;
+}
+
+.call-poc-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .call-meta-row {

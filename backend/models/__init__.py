@@ -29,6 +29,7 @@ from models.whatsapp_coexistence import (
 )
 from models.finance import Payment, CustomerSubscription, SubscriptionHistory, RefundRequest
 from models.support import (
+    CustomerPOC,
     EmployeeLeave,
     SupportClientAssignment,
     SupportCoverageAssignment,
@@ -80,6 +81,7 @@ __all__ = [
     "SubscriptionHistory",
     "RefundRequest",
     "SupportInteraction",
+    "CustomerPOC",
     "EmployeeLeave",
     "SupportCoverageAssignment",
     "SupportClientAssignment",

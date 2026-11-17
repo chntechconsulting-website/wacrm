@@ -772,23 +772,32 @@ const CallLogsPage = () => {
   };
 
   const handleCallBackTarget = (log) => {
-    const phone = log.customer_phone || log.to_number || log.from_number;
+    const phone = log.poc_phone || log.customer_phone || log.to_number || log.from_number;
+    const displayName = log.lead_name
+      ? (log.poc_name ? `${log.lead_name} — ${log.poc_name}` : log.lead_name)
+      : (log.poc_name || 'Lead #' + (log.lead_id || ''));
     if (window.dooctiDial) {
       window.dooctiDial(phone, {
         id: log.lead_id,
-        name: log.lead_name || 'Lead #' + (log.lead_id || ''),
-        phone: phone
+        lead_id: log.lead_id,
+        name: displayName,
+        phone: phone,
+        customer_poc_id: log.customer_poc_id || null,
+        entity_type: 'Leads'
       });
     } else if (window.crmDial) {
       window.crmDial(phone, {
         id: log.lead_id,
-        name: log.lead_name || 'Lead #' + (log.lead_id || ''),
-        phone: phone
+        lead_id: log.lead_id,
+        name: displayName,
+        phone: phone,
+        customer_poc_id: log.customer_poc_id || null,
+        entity_type: 'Leads'
       });
     } else {
       setSelectedCallTarget({
         id: log.lead_id,
-        name: log.lead_name || 'Lead #' + log.lead_id,
+        name: displayName,
         phone: phone
       });
       setShowCallModal(true);
@@ -1302,6 +1311,21 @@ const CallLogsPage = () => {
                                 )}
                               </button>
                             </div>
+                            {log.poc_name && (
+                              <div
+                                className="call-log-poc-line"
+                                title={`POC linked to this call: ${log.poc_name}${log.poc_phone ? ` (${log.poc_phone})` : ''}`}
+                              >
+                                <span className="call-log-poc-tag">POC</span>
+                                <span className="call-log-poc-name">{log.poc_name}</span>
+                                {log.poc_phone && (
+                                  <span className="call-log-poc-phone">· {log.poc_phone}</span>
+                                )}
+                                {log.poc_is_primary && (
+                                  <span className="call-log-poc-primary">Primary</span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>

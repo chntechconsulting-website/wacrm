@@ -998,6 +998,16 @@
   color: #64748b;
 }
 
+.recent-poc-name {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #1d4ed8;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .recent-meta-info,
 .contact-company {
   font-size: 0.68rem;

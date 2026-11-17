@@ -24,14 +24,22 @@ from models.activity import LeadActivity
 from models.customer import Customer
 from models.employee import Employee
 from models.lead import Lead
-from models.support import EmployeeLeave, SupportCoverageAssignment, SupportInteraction
+from models.support import (
+    CustomerPOC,
+    EmployeeLeave,
+    SupportCoverageAssignment,
+    SupportInteraction,
+)
 from models.user import User
 from models.workflow import SupportHandoff
 from schemas.support import (
     VALID_INTERACTION_TYPES,
     VALID_LEAVE_STATUSES,
     VALID_LEAVE_TYPES,
+    VALID_PREFERRED_CONTACT_METHODS,
     CoverageAssignRequest,
+    CustomerPOCCreate,
+    CustomerPOCUpdate,
     EmployeeLeaveCreate,
     EmployeeLeaveDecision,
     SupportInteractionCreate,
@@ -47,20 +55,32 @@ from services.support_service import (
     active_coverage_query,
     build_customer_history,
     build_support_summary,
+    clean_poc_phone,
     employee_on_approved_leave,
+    find_poc_by_id,
+    find_poc_by_phone,
+    find_poc_duplicate,
     get_employee_availability,
     get_employee_for_user,
     get_interactions_for_customer,
     is_support_actor,
     is_support_manager_or_admin,
+    list_customer_pocs,
     permanent_owner_id,
+    primary_poc_from_list,
     resolve_support_customer,
     serialize_coverage,
     serialize_customer_profile,
     serialize_leave,
+    serialize_poc,
+    set_primary_poc,
     today_ist,
 )
-from utils.phone import find_existing_customer_by_phone, find_existing_lead_by_phone
+from utils.phone import (
+    find_existing_customer_by_phone,
+    find_existing_lead_by_phone,
+    normalize_email,
+)
 from utils.timezone import get_ist_now
 
 router = APIRouter(prefix="/support", tags=["Support History & Coverage"])
@@ -366,6 +386,48 @@ def _normalise_datetime(value: Optional[datetime]) -> Optional[datetime]:
 
         value = value.astimezone(IST_TIMEZONE).replace(tzinfo=None)
     return value
+
+
+def _clean_poc_text(value: Optional[str]) -> Optional[str]:
+    text = (value or "").strip()
+    return text or None
+
+
+def _validate_preferred_method(value: Optional[str]) -> str:
+    method = (value or "CALL").strip().upper()
+    if method not in VALID_PREFERRED_CONTACT_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail="preferred_contact_method must be CALL, WHATSAPP or EMAIL.",
+        )
+    return method
+
+
+def _validate_poc_email(value: Optional[str]) -> Optional[str]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if not normalize_email(text):
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    return text.lower()
+
+
+def _poc_collection_response(
+    db: Session,
+    lead: Lead,
+    customer: Optional[Customer],
+) -> Dict[str, Any]:
+    pocs = list_customer_pocs(db, lead.id, customer.id if customer else None)
+    primary = primary_poc_from_list(pocs)
+    serialized = [serialize_poc(row) for row in pocs]
+    return {
+        "lead_id": lead.id,
+        "customer_id": customer.id if customer else None,
+        "items": serialized,
+        "pocs": serialized,
+        "primary_poc": serialize_poc(primary),
+        "poc_count": len(serialized),
+    }
 
 
 def _leave_in_scope(
@@ -870,6 +932,286 @@ def get_customer_support_history(
     return build_customer_history(db, lead, customer, handoff)
 
 
+@router.get("/customers/{lead_id}/pocs")
+def get_customer_pocs(
+    lead_id: int,
+    customer_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List the POCs of an authorized Support customer.
+
+    Admin sees any customer; Support Executives/Managers only their authorized
+    Support scope. Sales users are rejected by ``_require_support_access``.
+    """
+    _require_support_access(current_user, db)
+    lead, customer, _handoff = _load_support_customer(
+        db, lead_id=lead_id, customer_id=customer_id, require_customer=False
+    )
+    _assert_customer_access(lead, current_user, db)
+    return _poc_collection_response(db, lead, customer)
+
+
+@router.post("/customers/{lead_id}/pocs", status_code=status.HTTP_201_CREATED)
+def create_customer_poc(
+    lead_id: int,
+    payload: CustomerPOCCreate,
+    customer_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    actor = _require_support_access(current_user, db)
+    lead, customer, _handoff = _load_support_customer(
+        db, lead_id=lead_id, customer_id=customer_id, require_customer=False
+    )
+    _assert_customer_access(lead, current_user, db)
+
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="POC name is required.")
+    mobile = clean_poc_phone(payload.mobile)
+    if not mobile or len(mobile) < 7:
+        raise HTTPException(status_code=400, detail="A valid POC mobile number is required.")
+    alternate_mobile = (
+        clean_poc_phone(payload.alternate_mobile)
+        if (payload.alternate_mobile or "").strip()
+        else None
+    )
+    if (payload.alternate_mobile or "").strip() and (
+        not alternate_mobile or len(alternate_mobile) < 7
+    ):
+        raise HTTPException(
+            status_code=400, detail="A valid alternate mobile number is required."
+        )
+    whatsapp_number = (
+        clean_poc_phone(payload.whatsapp_number)
+        if (payload.whatsapp_number or "").strip()
+        else None
+    )
+    if (payload.whatsapp_number or "").strip() and (
+        not whatsapp_number or len(whatsapp_number) < 7
+    ):
+        raise HTTPException(
+            status_code=400, detail="A valid WhatsApp number is required."
+        )
+    email = _validate_poc_email(payload.email)
+    preferred = _validate_preferred_method(payload.preferred_contact_method)
+
+    scope_customer_id = customer.id if customer else None
+    duplicate, field = find_poc_duplicate(
+        db,
+        lead.id,
+        scope_customer_id,
+        mobile,
+        email,
+        alternate_mobile=alternate_mobile,
+        whatsapp_number=whatsapp_number,
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A Point of Contact with this {field} already exists for this "
+                f"customer ({duplicate.name})."
+            ),
+        )
+
+    pocs_before = list_customer_pocs(db, lead.id, scope_customer_id)
+    poc = CustomerPOC(
+        lead_id=lead.id,
+        customer_id=scope_customer_id,
+        name=name,
+        mobile=mobile,
+        alternate_mobile=alternate_mobile,
+        whatsapp_number=whatsapp_number,
+        email=email,
+        designation=_clean_poc_text(payload.designation),
+        department=_clean_poc_text(payload.department),
+        preferred_contact_method=preferred,
+        notes=_clean_poc_text(payload.notes),
+        is_primary=False,
+        created_by_employee_id=actor.id if actor else None,
+        updated_by_employee_id=actor.id if actor else None,
+    )
+    db.add(poc)
+    db.flush()
+
+    if payload.is_primary or not pocs_before:
+        set_primary_poc(db, lead.id, scope_customer_id, poc)
+
+    _add_support_audit_activity(
+        db,
+        lead_id=lead.id,
+        employee_id=actor.id if actor else None,
+        customer_id=scope_customer_id,
+        activity_type="SUPPORT_POC_CREATED",
+        description=(
+            f"Customer POC '{poc.name}' ({poc.mobile}) added"
+            f"{' as primary POC' if poc.is_primary else ''}."
+        ),
+        related_entity_type="CUSTOMER_POC",
+        related_entity_id=poc.id,
+    )
+    db.commit()
+    db.refresh(poc)
+
+    response = _poc_collection_response(db, lead, customer)
+    response["poc"] = serialize_poc(poc)
+    return response
+
+
+@router.put("/pocs/{poc_id}")
+def update_customer_poc(
+    poc_id: int,
+    payload: CustomerPOCUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    actor = _require_support_access(current_user, db)
+    poc = find_poc_by_id(db, poc_id)
+    if poc is None:
+        raise HTTPException(status_code=404, detail="Customer POC not found.")
+    lead = db.query(Lead).filter(Lead.id == poc.lead_id).first()
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Linked Support lead not found.")
+    customer = (
+        db.query(Customer).filter(Customer.id == poc.customer_id).first()
+        if poc.customer_id
+        else None
+    )
+    _assert_customer_access(lead, current_user, db)
+
+    fields = payload.model_fields_set
+
+    if "name" in fields:
+        name = (payload.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="POC name is required.")
+        poc.name = name
+
+    new_mobile = poc.mobile
+    if "mobile" in fields:
+        new_mobile = clean_poc_phone(payload.mobile)
+        if not new_mobile or len(new_mobile) < 7:
+            raise HTTPException(
+                status_code=400, detail="A valid POC mobile number is required."
+            )
+
+    if "alternate_mobile" in fields:
+        raw = (payload.alternate_mobile or "").strip()
+        new_alt = clean_poc_phone(raw) if raw else None
+        if raw and (not new_alt or len(new_alt) < 7):
+            raise HTTPException(
+                status_code=400, detail="A valid alternate mobile number is required."
+            )
+        poc.alternate_mobile = new_alt
+
+    if "whatsapp_number" in fields:
+        raw = (payload.whatsapp_number or "").strip()
+        new_wa = clean_poc_phone(raw) if raw else None
+        if raw and (not new_wa or len(new_wa) < 7):
+            raise HTTPException(
+                status_code=400, detail="A valid WhatsApp number is required."
+            )
+        poc.whatsapp_number = new_wa
+
+    if "email" in fields:
+        poc.email = _validate_poc_email(payload.email)
+
+    if "designation" in fields:
+        poc.designation = _clean_poc_text(payload.designation)
+    if "department" in fields:
+        poc.department = _clean_poc_text(payload.department)
+    if "notes" in fields:
+        poc.notes = _clean_poc_text(payload.notes)
+    if "preferred_contact_method" in fields:
+        poc.preferred_contact_method = _validate_preferred_method(
+            payload.preferred_contact_method
+        )
+
+    duplicate, field = find_poc_duplicate(
+        db,
+        poc.lead_id,
+        poc.customer_id,
+        new_mobile,
+        poc.email,
+        alternate_mobile=poc.alternate_mobile,
+        whatsapp_number=poc.whatsapp_number,
+        exclude_id=poc.id,
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Another Point of Contact with this {field} already exists "
+                f"for this customer ({duplicate.name})."
+            ),
+        )
+    poc.mobile = new_mobile
+
+    # Explicitly removing the only primary flag is not allowed; choose another
+    # POC as primary instead. Setting ``true`` safely demotes the old one.
+    if payload.is_primary is True:
+        set_primary_poc(db, poc.lead_id, poc.customer_id, poc)
+
+    poc.updated_by_employee_id = actor.id if actor else None
+    _add_support_audit_activity(
+        db,
+        lead_id=lead.id,
+        employee_id=actor.id if actor else None,
+        customer_id=poc.customer_id,
+        activity_type="SUPPORT_POC_UPDATED",
+        description=f"Customer POC '{poc.name}' ({poc.mobile}) details updated.",
+        related_entity_type="CUSTOMER_POC",
+        related_entity_id=poc.id,
+    )
+    db.commit()
+    db.refresh(poc)
+
+    response = _poc_collection_response(db, lead, customer)
+    response["poc"] = serialize_poc(poc)
+    return response
+
+
+@router.put("/pocs/{poc_id}/primary")
+def set_customer_poc_primary(
+    poc_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    actor = _require_support_access(current_user, db)
+    poc = find_poc_by_id(db, poc_id)
+    if poc is None:
+        raise HTTPException(status_code=404, detail="Customer POC not found.")
+    lead = db.query(Lead).filter(Lead.id == poc.lead_id).first()
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Linked Support lead not found.")
+    customer = (
+        db.query(Customer).filter(Customer.id == poc.customer_id).first()
+        if poc.customer_id
+        else None
+    )
+    _assert_customer_access(lead, current_user, db)
+
+    set_primary_poc(db, poc.lead_id, poc.customer_id, poc)
+    poc.updated_by_employee_id = actor.id if actor else None
+    _add_support_audit_activity(
+        db,
+        lead_id=lead.id,
+        employee_id=actor.id if actor else None,
+        customer_id=poc.customer_id,
+        activity_type="SUPPORT_POC_PRIMARY_CHANGED",
+        description=f"Customer POC '{poc.name}' ({poc.mobile}) set as primary POC.",
+        related_entity_type="CUSTOMER_POC",
+        related_entity_id=poc.id,
+    )
+    db.commit()
+    db.refresh(poc)
+    response = _poc_collection_response(db, lead, customer)
+    response["poc"] = serialize_poc(poc)
+    return response
+
+
 @router.post("/customers/{lead_id}/interactions", status_code=status.HTTP_201_CREATED)
 def create_support_interaction(
     lead_id: int,
@@ -883,6 +1225,23 @@ def create_support_interaction(
         db, lead_id=lead_id, customer_id=payload.customer_id, require_customer=True
     )
     _assert_customer_access(lead, current_user, db)
+
+    selected_poc = None
+    if payload.customer_poc_id:
+        selected_poc = find_poc_by_id(db, payload.customer_poc_id)
+        if selected_poc is None:
+            raise HTTPException(status_code=404, detail="Selected customer POC not found.")
+        same_lead = selected_poc.lead_id == lead.id
+        same_customer = bool(
+            selected_poc.customer_id
+            and customer
+            and selected_poc.customer_id == customer.id
+        )
+        if not (same_lead or same_customer):
+            raise HTTPException(
+                status_code=400,
+                detail="Selected POC does not belong to this customer.",
+            )
 
     if payload.client_reference:
         existing = (
@@ -937,6 +1296,7 @@ def create_support_interaction(
     interaction = SupportInteraction(
         customer_id=customer.id,
         lead_id=lead.id,
+        customer_poc_id=selected_poc.id if selected_poc else None,
         support_handoff_id=handoff.id if handoff else None,
         interaction_type=interaction_type,
         interaction_at=interaction_at,
@@ -1162,8 +1522,26 @@ def incoming_call_context(
     if not raw_phone:
         raise HTTPException(status_code=400, detail="phone is required.")
 
-    lead = find_existing_lead_by_phone(db, raw_phone)
-    customer = find_existing_customer_by_phone(db, raw_phone)
+    # A POC number is often different from the company main number. Resolve
+    # that exact POC first so the call still opens the parent customer without
+    # creating a duplicate lead/customer.
+    matched_poc = find_poc_by_phone(db, raw_phone)
+    lead = None
+    customer = None
+    if matched_poc is not None:
+        lead = db.query(Lead).filter(Lead.id == matched_poc.lead_id).first()
+        if matched_poc.customer_id:
+            customer = (
+                db.query(Customer)
+                .filter(Customer.id == matched_poc.customer_id)
+                .first()
+            )
+        if customer is None and lead is not None and getattr(lead, "customer", None):
+            customer = lead.customer
+
+    if lead is None and customer is None:
+        lead = find_existing_lead_by_phone(db, raw_phone)
+        customer = find_existing_customer_by_phone(db, raw_phone)
     if lead is None and customer is None:
         return {
             "found": False,
@@ -1233,6 +1611,7 @@ def incoming_call_context(
                 "phone": customer.phone if customer else raw_phone,
             },
             "message": "Customer found, but no Support handover exists yet.",
+            "matched_poc": serialize_poc(matched_poc),
             "call_control": {
                 "provider": "DOOCTI",
                 "crm_side_only": True,
@@ -1309,6 +1688,9 @@ def incoming_call_context(
         "last_three_interactions": summary.get("last_three_interactions"),
         "summary": summary,
         "purchase_details": history.get("purchase_details"),
+        "pocs": history.get("pocs") or [],
+        "primary_poc": history.get("primary_poc"),
+        "matched_poc": serialize_poc(matched_poc),
         "interaction_count": len(history.get("interactions") or []),
         "call_control": {
             "provider": "DOOCTI",
