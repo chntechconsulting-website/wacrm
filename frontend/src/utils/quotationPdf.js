@@ -847,6 +847,9 @@ export function generateBillingPdf(docData, download = true) {
   ];
 
   if (isProforma) {
+    // Proforma invoices must show the same commercial terms as quotations.
+    // Payment details follow the terms on the same page.
+    if (termsBlock) content.push(termsBlock);
     content.push(proformaPaymentBlock);
   } else {
     if (termsBlock) content.push(termsBlock);
