@@ -23,6 +23,7 @@ from services.billing_terms import resolve_billing_terms
 BRAND_RED_600 = colors.HexColor("#dc2626")
 BRAND_RED_700 = colors.HexColor("#b91c1c")
 BRAND_RED_50 = colors.HexColor("#fef2f2")
+BIOMETRIC_MINT = colors.HexColor("#EFFBF9")
 BRAND_TEAL_600 = colors.HexColor("#0f766e")
 BRAND_TEAL_50 = colors.HexColor("#f0fdfa")
 INK_900 = colors.HexColor("#0f172a")
@@ -277,6 +278,10 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     primary_color = colors.HexColor("#1e3a8a") if is_invoice else BRAND_RED_600
     card_bg_right = colors.HexColor("#eff6ff") if is_invoice else BRAND_RED_50
     grand_bg = colors.HexColor("#eff6ff") if is_invoice else BRAND_RED_50
+    is_biometric_quotation = is_biometric and doc_type == "quotation"
+    accent_color = BRAND_TEAL_600 if is_biometric_quotation else primary_color
+    panel_bg = BIOMETRIC_MINT if is_biometric_quotation else card_bg_right
+    header_fill = BIOMETRIC_MINT if is_biometric_quotation else primary_color
 
     if is_invoice:
         doc_title_text = "TAX INVOICE"
@@ -291,7 +296,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=18,
         leading=22,
-        textColor=primary_color,
+        textColor=accent_color,
         alignment=2 # Right
     )
     style_subtitle = ParagraphStyle(
@@ -336,7 +341,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=18,
         leading=22,
-        textColor=primary_color
+        textColor=accent_color
     )
     style_panel_title = ParagraphStyle(
         "PanelTitle",
@@ -344,7 +349,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=8.5,
         leading=12,
-        textColor=primary_color
+        textColor=accent_color
     )
     style_panel_name = ParagraphStyle(
         "PanelName",
@@ -368,7 +373,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=8,
         leading=10,
-        textColor=WHITE,
+        textColor=INK_900 if is_biometric_quotation else WHITE,
         alignment=1
     )
     style_td = ParagraphStyle(
@@ -419,7 +424,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=9.5,
         leading=13,
-        textColor=primary_color
+        textColor=accent_color
     )
     style_grand_val = ParagraphStyle(
         "GrandVal",
@@ -427,7 +432,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=10.5,
         leading=14,
-        textColor=primary_color,
+        textColor=accent_color,
         alignment=2
     )
     style_notes = ParagraphStyle(
@@ -488,7 +493,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     story.append(Spacer(1, 2 * mm))
 
     # Divider Rule
-    story.append(HRFlowable(width="100%", thickness=1.5, color=primary_color, spaceBefore=1, spaceAfter=3))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=accent_color, spaceBefore=1, spaceAfter=3))
 
     # 2. Parties Block: ISSUED BY vs QUOTATION FOR / BILLED TO
     issued_by_content = [
@@ -527,7 +532,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     parties_table = Table([[issued_by_content, billed_to_content]], colWidths=[89 * mm, 89 * mm])
     parties_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (0, 0), INK_50),
-        ('BACKGROUND', (1, 0), (1, 0), card_bg_right),
+        ('BACKGROUND', (1, 0), (1, 0), panel_bg),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
@@ -634,7 +639,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
 
     items_table = Table(table_data, colWidths=col_widths, repeatRows=1)
     items_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), primary_color),
+        ('BACKGROUND', (0, 0), (-1, 0), header_fill),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('TOPPADDING', (0, 0), (-1, 0), 4),
@@ -644,7 +649,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         ('LEFTPADDING', (0, 0), (-1, -1), 2),
         ('RIGHTPADDING', (0, 0), (-1, -1), 2),
         ('LINEBELOW', (0, 1), (-1, -1), 0.5, INK_100),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, primary_color),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, accent_color),
     ]))
     story.append(items_table)
     story.append(Spacer(1, 2 * mm))
@@ -665,7 +670,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     totals_rows.append([Paragraph("Total (INR)", style_grand_label), Paragraph(_format_inr(data["grand_total"]), style_grand_val)])
 
     tot_table = Table(totals_rows, colWidths=[42 * mm, 34 * mm])
-    grand_bg = BRAND_RED_50
+    grand_bg = BIOMETRIC_MINT if is_biometric_quotation else BRAND_RED_50
     tot_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),

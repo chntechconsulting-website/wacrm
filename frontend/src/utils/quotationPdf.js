@@ -28,6 +28,8 @@ const BRAND = {
 };
 
 const CONTENT_WIDTH = 539; // Portrait A4 width (595) minus 28pt margins on either side
+const BIOMETRIC_THEME_BG = '#EFFBF9';
+const BIOMETRIC_THEME_ACCENT = '#0f766e';
 
 // Biometric hardware documents are billed to the dedicated Axis Bank
 // collection account. WAHRMS documents keep using the company profile bank
@@ -174,6 +176,8 @@ export function generateBillingPdf(docData, download = true) {
     .toLowerCase() === 'biometric';
   const isBiometricPO = isPO && isBiometric;
   const isRedThemed = isQuotation || isProforma;
+  const isBiometricTheme = isBiometric && (isQuotation || isPO);
+  const isRedAccent = isRedThemed && !isBiometricTheme;
 
   const headerWord = isProforma
     ? 'PROFORMA INVOICE'
@@ -219,7 +223,7 @@ export function generateBillingPdf(docData, download = true) {
   const headerRight = [
     {
       text: headerWord.toUpperCase(),
-      style: isRedThemed ? 'docHeaderTitleRed' : 'docHeaderTitle',
+      style: isRedAccent ? 'docHeaderTitleRed' : 'docHeaderTitle',
       alignment: 'right'
     },
     {
@@ -300,7 +304,7 @@ export function generateBillingPdf(docData, download = true) {
         x2: CONTENT_WIDTH,
         y2: 0,
         lineWidth: 1.5,
-        lineColor: isRedThemed ? BRAND.brand600 : '#0f766e'
+        lineColor: isRedAccent ? BRAND.brand600 : BIOMETRIC_THEME_ACCENT
       }
     ],
     margin: [0, 4, 0, 12]
@@ -311,7 +315,7 @@ export function generateBillingPdf(docData, download = true) {
     {
       text: 'ISSUED BY',
       style: 'panelLabel',
-      color: isRedThemed ? BRAND.brand600 : undefined
+      color: isRedAccent ? BRAND.brand600 : undefined
     },
     { text: company.legalName, style: 'panelName', margin: [0, 3, 0, 2] },
     {
@@ -374,7 +378,7 @@ export function generateBillingPdf(docData, download = true) {
     {
       text: isQuotation ? 'QUOTATION FOR' : isPO ? 'VENDOR / SUPPLIER' : 'BILLED TO',
       style: 'panelLabel',
-      color: isRedThemed ? BRAND.brand600 : undefined
+      color: isRedAccent ? BRAND.brand600 : undefined
     }
   ];
 
@@ -412,7 +416,7 @@ export function generateBillingPdf(docData, download = true) {
 
   const billedToCell = {
     stack: billedToStack,
-    fillColor: isRedThemed ? BRAND.brand50 : BRAND.ink50,
+    fillColor: isRedAccent ? BRAND.brand50 : (isBiometricTheme ? BIOMETRIC_THEME_BG : BRAND.ink50),
     margin: [10, 8, 10, 8]
   };
 
@@ -432,7 +436,11 @@ export function generateBillingPdf(docData, download = true) {
     columns: [
       {
         text: [
-          { text: isProforma ? 'PROFORMA INVOICE' : 'QUOTATION', style: 'docTitle', color: BRAND.brand700 },
+          {
+            text: isProforma ? 'PROFORMA INVOICE' : 'QUOTATION',
+            style: 'docTitle',
+            color: isRedAccent ? BRAND.brand700 : BIOMETRIC_THEME_ACCENT
+          },
           docData.number ? { text: `   ${docData.number}`, style: 'docTitleNumber' } : { text: '' }
         ],
         alignment: 'left',
@@ -444,20 +452,20 @@ export function generateBillingPdf(docData, download = true) {
 
   // ---------- Line-Items Table -------------------------------------------
   const tableHeader = [
-    { text: '#', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'center' },
-    { text: 'Item / Description', style: isRedThemed ? 'thQuotation' : 'th' },
-    { text: 'HSN', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'center' },
-    { text: 'Qty', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' },
-    { text: 'Rate', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' },
-    { text: 'Amount', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' },
-    { text: 'Tax %', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'center' },
+    { text: '#', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'center' },
+    { text: 'Item / Description', style: isRedAccent ? 'thQuotation' : 'th' },
+    { text: 'HSN', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'center' },
+    { text: 'Qty', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' },
+    { text: 'Rate', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' },
+    { text: 'Amount', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' },
+    { text: 'Tax %', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'center' },
     ...(isIntra
       ? [
-          { text: 'CGST', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' },
-          { text: 'SGST', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' }
+          { text: 'CGST', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' },
+          { text: 'SGST', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' }
         ]
-      : [{ text: 'IGST', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' }]),
-    { text: 'Total', style: isRedThemed ? 'thQuotation' : 'th', alignment: 'right' }
+      : [{ text: 'IGST', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' }]),
+    { text: 'Total', style: isRedAccent ? 'thQuotation' : 'th', alignment: 'right' }
   ];
 
   let calculatedTaxable = 0;
@@ -534,12 +542,12 @@ export function generateBillingPdf(docData, download = true) {
     layout: {
       hLineWidth: (i, node) => (i === 0 || i === 1 || i === node.table.body.length ? 0.5 : 0.5),
       vLineWidth: () => 0,
-      hLineColor: (i) => (i === 0 || i === 1 ? (isRedThemed ? BRAND.brand600 : BRAND.ink200) : BRAND.ink100),
+      hLineColor: (i) => (i === 0 || i === 1 ? (isRedAccent ? BRAND.brand600 : BRAND.ink200) : BRAND.ink100),
       paddingTop: (i) => (i === 0 ? 5.5 : 4.5),
       paddingBottom: (i) => (i === 0 ? 5.5 : 4.5),
       paddingLeft: () => 3,
       paddingRight: () => 3,
-      fillColor: (rowIndex) => (rowIndex === 0 ? (isRedThemed ? BRAND.brand600 : BRAND.ink50) : null)
+      fillColor: (rowIndex) => (rowIndex === 0 ? (isRedAccent ? BRAND.brand600 : (isBiometricTheme ? BIOMETRIC_THEME_BG : BRAND.ink50)) : null)
     },
     margin: [0, 0, 0, 8]
   };
@@ -602,7 +610,7 @@ export function generateBillingPdf(docData, download = true) {
           paddingBottom: () => 3.5,
           paddingLeft: () => 4,
           paddingRight: () => 4,
-          fillColor: (rowIndex, node) => (rowIndex === node.table.body.length - 1 ? (isRedThemed ? BRAND.brand50 : BRAND.ink50) : null)
+          fillColor: (rowIndex, node) => (rowIndex === node.table.body.length - 1 ? (isRedAccent ? BRAND.brand50 : (isBiometricTheme ? BIOMETRIC_THEME_BG : BRAND.ink50)) : null)
         }
       }
     ],
@@ -704,8 +712,20 @@ export function generateBillingPdf(docData, download = true) {
   const biometricPoQrPage = isBiometricPO ? {
     pageBreak: 'before',
     stack: [
-      { text: 'SCAN & PAY', style: 'scanToPayTitle', alignment: 'center', margin: [0, 0, 0, 2] },
-      { text: 'UPI / QR CODE PAYMENT', style: 'docTitle', alignment: 'center', margin: [0, 0, 0, 8] },
+      {
+        text: 'SCAN & PAY',
+        style: 'scanToPayTitle',
+        color: isBiometricPO ? BIOMETRIC_THEME_ACCENT : BRAND.brand700,
+        alignment: 'center',
+        margin: [0, 0, 0, 2]
+      },
+      {
+        text: 'UPI / QR CODE PAYMENT',
+        style: 'docTitle',
+        color: isBiometricPO ? BIOMETRIC_THEME_ACCENT : BRAND.brand700,
+        alignment: 'center',
+        margin: [0, 0, 0, 8]
+      },
       { image: CHN_QR_CARD_BASE64, width: 465, alignment: 'center' }
     ],
     margin: [0, 6, 0, 0]
@@ -792,8 +812,8 @@ export function generateBillingPdf(docData, download = true) {
     docTitleNumber: { fontSize: 10.5, bold: true, color: BRAND.ink900 },
     sumLabel: { fontSize: 8.5, color: BRAND.ink700 },
     sumValue: { fontSize: 8.5, color: BRAND.ink900 },
-    sumGrandLabel: { fontSize: 10, bold: true, color: isRedThemed ? BRAND.brand700 : BRAND.ink900 },
-    sumGrandValue: { fontSize: 11, bold: true, color: isRedThemed ? BRAND.brand700 : BRAND.ink900 },
+    sumGrandLabel: { fontSize: 10, bold: true, color: isRedAccent ? BRAND.brand700 : (isBiometricTheme ? BIOMETRIC_THEME_ACCENT : BRAND.ink900) },
+    sumGrandValue: { fontSize: 11, bold: true, color: isRedAccent ? BRAND.brand700 : (isBiometricTheme ? BIOMETRIC_THEME_ACCENT : BRAND.ink900) },
     awLabel: { fontSize: 8.5, color: BRAND.ink500 },
     awValue: { fontSize: 8.5, color: BRAND.ink900, bold: true, italics: true },
     sectionHeading: { fontSize: 8.5, bold: true, color: BRAND.ink900, characterSpacing: 0.5 },
