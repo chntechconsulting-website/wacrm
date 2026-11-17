@@ -3,6 +3,7 @@ Dedicated PDF Generation Service for CRM Quotations and Proforma Invoices.
 Builds separate, pixel-perfect PDF documents using ReportLab.
 - Quotation PDF: Signature Red theme (#dc2626), Quotation layout, white text on red table header.
 - Proforma Invoice PDF: Signature Red theme (#dc2626), Proforma layout, payment bank details, dedicated Scan & Pay page.
+- Biometric Quotation & Proforma PDFs: #EFFBF9 mint fills with teal (#0f766e) accents; the company logo keeps its original red.
 """
 
 import io
@@ -278,10 +279,12 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     primary_color = colors.HexColor("#1e3a8a") if is_invoice else BRAND_RED_600
     card_bg_right = colors.HexColor("#eff6ff") if is_invoice else BRAND_RED_50
     grand_bg = colors.HexColor("#eff6ff") if is_invoice else BRAND_RED_50
-    is_biometric_quotation = is_biometric and doc_type == "quotation"
-    accent_color = BRAND_TEAL_600 if is_biometric_quotation else primary_color
-    panel_bg = BIOMETRIC_MINT if is_biometric_quotation else card_bg_right
-    header_fill = BIOMETRIC_MINT if is_biometric_quotation else primary_color
+    # Biometric quotations and proformas share the mint theme; the logo itself
+    # (style_company_head) stays in its original brand red.
+    is_biometric_themed = is_biometric and not is_invoice
+    accent_color = BRAND_TEAL_600 if is_biometric_themed else primary_color
+    panel_bg = BIOMETRIC_MINT if is_biometric_themed else card_bg_right
+    header_fill = BIOMETRIC_MINT if is_biometric_themed else primary_color
 
     if is_invoice:
         doc_title_text = "TAX INVOICE"
@@ -373,7 +376,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         fontName="Helvetica-Bold",
         fontSize=8,
         leading=10,
-        textColor=INK_900 if is_biometric_quotation else WHITE,
+        textColor=INK_900 if is_biometric_themed else WHITE,
         alignment=1
     )
     style_td = ParagraphStyle(
@@ -670,7 +673,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     totals_rows.append([Paragraph("Total (INR)", style_grand_label), Paragraph(_format_inr(data["grand_total"]), style_grand_val)])
 
     tot_table = Table(totals_rows, colWidths=[42 * mm, 34 * mm])
-    grand_bg = BIOMETRIC_MINT if is_biometric_quotation else BRAND_RED_50
+    grand_bg = BIOMETRIC_MINT if is_biometric_themed else BRAND_RED_50
     tot_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),

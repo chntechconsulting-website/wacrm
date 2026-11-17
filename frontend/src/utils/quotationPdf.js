@@ -176,7 +176,7 @@ export function generateBillingPdf(docData, download = true) {
     .toLowerCase() === 'biometric';
   const isBiometricPO = isPO && isBiometric;
   const isRedThemed = isQuotation || isProforma;
-  const isBiometricTheme = isBiometric && (isQuotation || isPO);
+  const isBiometricTheme = isBiometric && (isQuotation || isProforma || isPO);
   const isRedAccent = isRedThemed && !isBiometricTheme;
 
   const headerWord = isProforma
