@@ -9,12 +9,14 @@ Builds separate, pixel-perfect PDF documents using ReportLab.
 import io
 import re
 from datetime import datetime
+from pathlib import Path
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, HRFlowable
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether, HRFlowable, Image
 )
 from reportlab.pdfgen import canvas
 
@@ -61,6 +63,71 @@ BIOMETRIC_BANK = {
     "ifsc": "UTIB0003702",
     "account_type": "Current"
 }
+
+# Issuer configuration. The PDF renderer must never infer the issuer from a
+# hard-coded company name; it resolves the saved company_id and falls back to
+# the document category only for historical rows that predate issuer storage.
+SERVICES_DIR = Path(__file__).resolve().parent
+
+ISSUER_PROFILES = {
+    "wahrms": {
+        **COMPANY_INFO,
+        "company_id": "wahrms",
+        "brand_name": "WA!HRMS",
+        "brand_tagline": "PEOPLE AT THE HEART",
+        "logo_file": SERVICES_DIR / "wahrms-logo.png",
+    },
+    "chn-tech": {
+        **COMPANY_INFO,
+        "company_id": "chn-tech",
+        "brand_name": "CHN TECH",
+        "brand_tagline": "BIOMETRIC & HARDWARE",
+        "logo_file": SERVICES_DIR / "chn_logo_actual.png",
+    },
+}
+
+DEFAULT_ISSUER_ID = "wahrms"
+
+
+def _normalize_issuer_id(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized if normalized in ISSUER_PROFILES else None
+
+
+def resolve_issuer_profile(company_id=None, product_category=None, logo_ref=None):
+    """Return the configured issuer profile for a saved document."""
+    explicit_id = _normalize_issuer_id(company_id) or _normalize_issuer_id(logo_ref)
+    if explicit_id:
+        return ISSUER_PROFILES[explicit_id]
+    if str(product_category or "").strip().lower() == "biometric":
+        return ISSUER_PROFILES["chn-tech"]
+    return ISSUER_PROFILES[DEFAULT_ISSUER_ID]
+
+
+def _issuer_logo_flowable(profile, max_width=36 * mm, max_height=12 * mm):
+    """Build a proportional logo image, degrading to text when unavailable."""
+    logo_file = profile.get("logo_file")
+    if not logo_file:
+        return None
+    try:
+        path = Path(logo_file)
+        if not path.is_file():
+            return None
+        width_px, height_px = ImageReader(str(path)).getSize()
+        if width_px <= 0 or height_px <= 0:
+            return None
+        ratio = height_px / width_px
+        width = max_width
+        height = width * ratio
+        if height > max_height:
+            height = max_height
+            width = height / ratio
+        return Image(str(path), width=width, height=height)
+    except Exception as exc:
+        print(f"Issuer logo unavailable for {profile.get('company_id')}: {exc}")
+        return None
 
 
 def number_to_indian_words(num):
@@ -154,6 +221,11 @@ def build_common_data(doc):
             "doc_number": d.get("doc_number") or d.get("number") or "DOC",
             "doc_type": (d.get("doc_type") or d.get("docType") or "quotation").lower(),
             "product_category": d.get("product_category") or d.get("productCategory") or "wahrms",
+            "company_id": d.get("company_id") or d.get("companyId") or (d.get("issuer") or {}).get("companyId"),
+            "logo_ref": d.get("logo_ref") or d.get("logoRef") or (d.get("issuer") or {}).get("logoRef"),
+            "issuer_gstin": d.get("issuer_gstin") or d.get("issuerGstin") or (d.get("issuer") or {}).get("gstin"),
+            "issuer_pan": d.get("issuer_pan") or d.get("issuerPan") or (d.get("issuer") or {}).get("pan"),
+            "document_prefix": d.get("document_prefix") or d.get("documentPrefix") or (d.get("issuer") or {}).get("documentPrefix"),
             "customer_name": d.get("customer_name") or d.get("customerName") or "Valued Client",
             "company_name": d.get("company_name") or d.get("companyName") or "",
             "phone": d.get("phone") or "",
@@ -190,6 +262,11 @@ def build_common_data(doc):
             "doc_number": doc.doc_number or "DOC",
             "doc_type": (doc.doc_type or "quotation").lower(),
             "product_category": getattr(doc, "product_category", None) or "wahrms",
+            "company_id": getattr(doc, "company_id", None),
+            "logo_ref": getattr(doc, "logo_ref", None),
+            "issuer_gstin": getattr(doc, "issuer_gstin", None),
+            "issuer_pan": getattr(doc, "issuer_pan", None),
+            "document_prefix": getattr(doc, "document_prefix", None),
             "customer_name": doc.customer_name or "Valued Client",
             "company_name": doc.company_name or "",
             "phone": doc.phone or "",
@@ -273,6 +350,17 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     is_biometric = (
         str(data.get("product_category") or "").strip().lower() == "biometric"
     )
+    issuer = dict(resolve_issuer_profile(
+        data.get("company_id"),
+        data.get("product_category"),
+        data.get("logo_ref"),
+    ))
+    # Prefer the issuer snapshot captured on the document so historical
+    # GSTIN/PAN values survive future configuration changes.
+    if data.get("issuer_gstin"):
+        issuer["gstin"] = data["issuer_gstin"]
+    if data.get("issuer_pan"):
+        issuer["pan"] = data["issuer_pan"]
     document_bank = BIOMETRIC_BANK if (is_biometric and not is_invoice) else COMPANY_INFO
 
     # Invoices use statutory deep navy/slate (#1e3a8a), while Quotes & Proformas use signature red (#dc2626)
@@ -467,11 +555,21 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     story = []
 
     # 1. Header Section (2 Columns: Company on left, Doc Info on right)
-    company_left = [
-        Spacer(1, 2 * mm),
-        Paragraph("WA!HRMS", style_company_head),
-        Paragraph("<font size=7 color='#64748b'>PEOPLE AT THE HEART</font>", style_panel_body)
-    ]
+    # The issuer logo replaces the old hard-coded WA!HRMS wordmark inside the
+    # same header cell, so the surrounding layout is unchanged.
+    issuer_logo = _issuer_logo_flowable(issuer)
+    company_left = [Spacer(1, 2 * mm)]
+    if issuer_logo is not None:
+        company_left.append(issuer_logo)
+    else:
+        company_left.append(Paragraph(issuer["brand_name"], style_company_head))
+        if issuer.get("brand_tagline"):
+            company_left.append(
+                Paragraph(
+                    f"<font size=7 color='#64748b'>{issuer['brand_tagline']}</font>",
+                    style_panel_body
+                )
+            )
 
     issue_date_str = data["issue_date"].strftime("%b %d, %Y") if isinstance(data["issue_date"], datetime) else str(data["issue_date"])
     valid_date_str = (datetime.utcnow().strftime("%b %d, %Y"))
@@ -518,13 +616,13 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     # 2. Parties Block: ISSUED BY vs QUOTATION FOR / BILLED TO
     issued_by_content = [
         Paragraph("ISSUED BY", style_panel_title),
-        Paragraph(COMPANY_INFO["legal_name"], style_panel_name),
-        Paragraph(COMPANY_INFO["address_line1"] + "<br/>" + COMPANY_INFO["address_line2"], style_panel_body),
+        Paragraph(issuer["legal_name"], style_panel_name),
+        Paragraph(issuer["address_line1"] + "<br/>" + issuer["address_line2"], style_panel_body),
         Spacer(1, 1 * mm),
-        Paragraph(f"GSTIN: {COMPANY_INFO['gstin']}", style_panel_body),
-        Paragraph(f"PAN: {COMPANY_INFO['pan']}", style_panel_body),
-        Paragraph(f"Email: {COMPANY_INFO['email']}", style_panel_body),
-        Paragraph(f"Phone: {COMPANY_INFO['phone']}", style_panel_body),
+        Paragraph(f"GSTIN: {issuer['gstin']}", style_panel_body),
+        Paragraph(f"PAN: {issuer['pan']}", style_panel_body),
+        Paragraph(f"Email: {issuer['email']}", style_panel_body),
+        Paragraph(f"Phone: {issuer['phone']}", style_panel_body),
     ]
 
     billed_to_label = "BILLED TO (RECIPIENT)" if is_invoice else ("BILLED TO" if is_proforma else "QUOTATION FOR")
@@ -775,7 +873,7 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         ]
 
     sign_flowable = [
-        Paragraph(f"For <b>{COMPANY_INFO['legal_name']}</b>", style_sign_head),
+        Paragraph(f"For <b>{issuer['legal_name']}</b>", style_sign_head),
         Spacer(1, 12 * mm),
         Paragraph("<b>Authorized Signatory</b>", style_panel_body)
     ]

@@ -1,7 +1,7 @@
 import pdfMake from 'pdfmake/build/pdfmake';
 import pdfFonts from 'pdfmake/build/vfs_fonts';
-import { numberToIndianWords, COMPANY_DEFAULTS, COMPANIES } from './billingMoney';
-import { WAHRMS_LOGO_BASE64, CHN_LOGO_BASE64 } from './logoBase64';
+import { numberToIndianWords, COMPANY_DEFAULTS } from './billingMoney';
+import { getCompanyById, getCompanyLogo, resolveIssuerCompanyId } from './companyBranding';
 import { CHN_QR_CARD_BASE64 } from './paymentQrBase64';
 
 // Ensure virtual file system fonts are loaded
@@ -187,9 +187,9 @@ export function generateBillingPdf(docData, download = true) {
     ? 'PURCHASE ORDER'
     : 'QUOTATION';
 
-  // Determine issuer company - preserve selected company (WAHRMS vs CHN TECH)
-  const companyId = docData.companyId || (docData.company?.shortName?.toLowerCase().includes('chn') ? 'chn-tech' : 'wahrms');
-  const matchedCompany = COMPANIES.find(c => c.id === companyId) || docData.company || COMPANY_DEFAULTS;
+  // Resolve the saved issuer through the shared company configuration.
+  const companyId = resolveIssuerCompanyId(docData);
+  const matchedCompany = getCompanyById(companyId) || docData.company || COMPANY_DEFAULTS;
   const company = {
     ...COMPANY_DEFAULTS,
     ...matchedCompany,
@@ -198,14 +198,22 @@ export function generateBillingPdf(docData, download = true) {
       ...(matchedCompany.address || {})
     }
   };
+  // Prefer the issuer snapshot saved on the document over live configuration.
+  const issuerGstin = docData.issuerGstin || docData.issuer_gstin || docData.issuer?.gstin;
+  const issuerPan = docData.issuerPan || docData.issuer_pan || docData.issuer?.pan;
+  if (issuerGstin) company.gstin = issuerGstin;
+  if (issuerPan) company.pan = issuerPan;
   const documentBank = isBiometric ? BIOMETRIC_BANK : company.bank;
 
   const isIntra = (docData.taxMode || 'intra') === 'intra';
 
-  // Preserve logo without changing it: WAHRMS uses WAHRMS logo, CHN TECH uses CHN logo
-  let logoToUse = docData.logoBase64 || docData.logo;
+  // Resolve the logo reference from issuer configuration. A missing logo is
+  // rendered as the issuer legal name by the existing header fallback.
+  let logoToUse = docData.logoBase64
+    || docData.logo
+    || getCompanyLogo(companyId, docData.logoRef || docData.logo_ref);
   if (!logoToUse) {
-    logoToUse = companyId === 'chn-tech' ? CHN_LOGO_BASE64 : WAHRMS_LOGO_BASE64;
+    logoToUse = getCompanyLogo(companyId);
   }
 
   // ---------- Header Block ---------------------------------------------------

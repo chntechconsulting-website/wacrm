@@ -30,6 +30,7 @@ import DocumentPdfPreviewModal from '../../components/Billing/PdfPreviewModal';
 import LinkQuotationToLeadModal from '../../components/Billing/LinkQuotationToLeadModal';
 import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
+import { getCompanyById, resolveIssuerCompanyId } from '../../utils/companyBranding';
 import { useAuth } from '../../context/AuthContext';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import PingoPopupService from '../../services/pingoPopupService';
@@ -311,12 +312,24 @@ const WAQuotesPage = () => {
   const handleEditDoc = (doc) => {
     if (!doc) return;
     const cleanId = String(doc.id || '').replace('local_', '') || null;
+    const productCategory = doc.productCategory || doc.product_category || '';
+    // Never substitute the first/default issuer here. Explicit saved identity
+    // wins; otherwise resolve from the saved category (historical documents).
+    const companyId = resolveIssuerCompanyId({
+      ...doc,
+      productCategory
+    });
     setModalInitialData({
       id: cleanId,
       docId: cleanId,
       docType: (doc.docType || 'quotation').toLowerCase(),
       status: String(doc.status || '').toLowerCase(),
-      companyId: doc.companyId || (doc.company?.shortName?.toLowerCase().includes('chn') ? 'chn-tech' : 'wahrms'),
+      companyId,
+      issuer: doc.issuer || null,
+      logoRef: doc.logoRef || doc.logo_ref || doc.issuer?.logoRef || null,
+      issuerGstin: doc.issuerGstin || doc.issuer_gstin || doc.issuer?.gstin || null,
+      issuerPan: doc.issuerPan || doc.issuer_pan || doc.issuer?.pan || null,
+      documentPrefix: doc.documentPrefix || doc.document_prefix || doc.issuer?.documentPrefix || null,
       customerName: doc.customer?.name || doc.customerName || doc.customer_name || '',
       companyName: doc.customer?.companyName || doc.companyName || doc.company_name || '',
       phone: doc.customer?.phone || doc.phone || '',
@@ -332,7 +345,7 @@ const WAQuotesPage = () => {
       customerId: doc.customerId || doc.customer_id || null,
       docNumber: doc.number || doc.doc_number || '',
       selectedBundle: doc.selectedBundle || doc.selected_bundle || null,
-      productCategory: doc.productCategory || doc.product_category || 'wahrms',
+      productCategory: productCategory || getCompanyById(companyId)?.productCategory || 'wahrms',
       preparedBy: doc.preparedBy || doc.prepared_by || ''
     });
     setShowQuoteModal(true);
@@ -493,12 +506,23 @@ const WAQuotesPage = () => {
   const handleOpenPdfPreview = (doc) => {
     if (!doc) return;
     const dType = (doc.docType || doc.doc_type || 'quotation').toLowerCase();
+    const companyId = resolveIssuerCompanyId(doc);
+    const productCategory = doc.productCategory
+      || doc.product_category
+      || getCompanyById(companyId)?.productCategory
+      || '';
     const docData = {
       ...doc,
       id: doc.id || doc.docId || null,
       docId: doc.id || doc.docId || null,
       docType: dType,
       doc_type: dType,
+      companyId,
+      logoRef: doc.logoRef || doc.logo_ref || doc.issuer?.logoRef || null,
+      issuerGstin: doc.issuerGstin || doc.issuer_gstin || doc.issuer?.gstin || null,
+      issuerPan: doc.issuerPan || doc.issuer_pan || doc.issuer?.pan || null,
+      documentPrefix: doc.documentPrefix || doc.document_prefix || doc.issuer?.documentPrefix || null,
+      productCategory,
       number: doc.number || doc.doc_number || doc.docNumber || 'DOC',
       customerName: doc.customer?.name || doc.customer_name || doc.customerName || 'Customer',
       companyName: doc.customer?.companyName || doc.company_name || doc.companyName || '',

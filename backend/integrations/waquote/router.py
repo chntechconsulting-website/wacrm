@@ -112,8 +112,139 @@ class CreateDocumentRequest(BaseModel):
     notes: Optional[str] = ""
     prepared_by: Optional[str] = ""
     pdf_url: Optional[str] = ""
-    company_id: Optional[str] = "wahrms"
+    company_id: Optional[str] = None
     company: Optional[Dict[str, Any]] = None
+    logo_ref: Optional[str] = None
+    issuer_gstin: Optional[str] = None
+    issuer_pan: Optional[str] = None
+    document_prefix: Optional[str] = None
+
+
+ISSUER_COMPANY_IDS = {"wahrms", "chn-tech"}
+
+
+def _normalize_company_id(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized if normalized in ISSUER_COMPANY_IDS else None
+
+
+def _default_company_id(product_category: Any) -> str:
+    category = str(product_category or "").strip().lower()
+    return "chn-tech" if category == "biometric" else "wahrms"
+
+
+def _company_payload_value(company: Any, *keys: str) -> Optional[str]:
+    if not isinstance(company, dict):
+        return None
+    for key in keys:
+        value = company.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _resolved_issuer_values(
+    payload: CreateDocumentRequest,
+    product_category: Any,
+    existing: Optional[Quotation] = None,
+    default_prefix: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """Resolve the issuer snapshot without inventing a new company for edits.
+
+    Existing rows keep their saved issuer unless the caller explicitly sends a
+    different company. Historical rows without an issuer fall back to the
+    category-derived issuer at read time, never by rewriting the row.
+    """
+    company = payload.company if isinstance(payload.company, dict) else {}
+    company_payload_id = _company_payload_value(
+        company, "companyId", "company_id", "id"
+    )
+    requested_company_id = _normalize_company_id(
+        payload.company_id or company_payload_id
+    )
+    existing_company_id = (
+        _normalize_company_id(getattr(existing, "company_id", None))
+        if existing else None
+    )
+    company_id = (
+        requested_company_id
+        or existing_company_id
+        or _default_company_id(product_category)
+    )
+    company_changed = bool(
+        requested_company_id and requested_company_id != existing_company_id
+    )
+
+    payload_logo = (payload.logo_ref or "").strip() or _company_payload_value(
+        company, "logoType", "logoRef", "logo_ref"
+    )
+    if payload_logo:
+        logo_ref = payload_logo
+    elif company_changed:
+        logo_ref = company_id
+    else:
+        logo_ref = (getattr(existing, "logo_ref", None) if existing else None) or company_id
+
+    def _resolve_field(
+        attr_name: str,
+        payload_value: Optional[str],
+        *company_keys: str,
+    ) -> Optional[str]:
+        value = payload_value.strip() if isinstance(payload_value, str) else ""
+        if value:
+            return value
+        company_value = _company_payload_value(company, *company_keys)
+        if company_value:
+            return company_value
+        if company_changed:
+            return None
+        return getattr(existing, attr_name, None) if existing else None
+
+    return {
+        "company_id": company_id,
+        "logo_ref": logo_ref,
+        "issuer_gstin": _resolve_field("issuer_gstin", payload.issuer_gstin, "gstin"),
+        "issuer_pan": _resolve_field("issuer_pan", payload.issuer_pan, "pan"),
+        "document_prefix": (
+            _resolve_field(
+                "document_prefix",
+                payload.document_prefix,
+                "documentPrefix",
+                "document_prefix",
+            )
+            or default_prefix
+        ),
+    }
+
+
+def _issuer_snapshot_for_record(record: Quotation) -> Dict[str, Any]:
+    category = getattr(record, "product_category", None) or "wahrms"
+    company_id = (
+        _normalize_company_id(getattr(record, "company_id", None))
+        or _default_company_id(category)
+    )
+    return {
+        "companyId": company_id,
+        "logoRef": getattr(record, "logo_ref", None) or company_id,
+        "gstin": getattr(record, "issuer_gstin", None),
+        "pan": getattr(record, "issuer_pan", None),
+        "documentPrefix": getattr(record, "document_prefix", None),
+    }
+
+
+def _serialize_issuer_fields(record: Quotation) -> Dict[str, Any]:
+    issuer = _issuer_snapshot_for_record(record)
+    return {
+        "companyId": issuer["companyId"],
+        "logoRef": issuer["logoRef"],
+        "issuerGstin": issuer["gstin"],
+        "issuerPan": issuer["pan"],
+        "documentPrefix": issuer["documentPrefix"],
+        "issuer": issuer,
+    }
+
 
 def _resolve_quotation_document(doc_id: str, db: Session) -> Quotation:
     clean_id = str(doc_id or "").replace("local_", "").strip()
@@ -206,6 +337,7 @@ def _serialize_document_detail(r: Quotation, db: Session) -> Dict[str, Any]:
         "lineItems": r.line_items or [],
         "selectedBundle": r.selected_bundle,
         "productCategory": getattr(r, "product_category", "wahrms") or "wahrms",
+        **_serialize_issuer_fields(r),
         "sourceQuotationId": r.source_quotation_id,
         "sourceQuotationNumber": r.source_quotation_number,
         "termsAndConditions": r.terms_and_conditions or "",
@@ -727,6 +859,7 @@ def list_waquote_documents(
             "lineItems": r.line_items or [],
             "selectedBundle": r.selected_bundle,
             "productCategory": getattr(r, "product_category", "wahrms") or "wahrms",
+            **_serialize_issuer_fields(r),
             "sourceQuotationId": r.source_quotation_id,
             "sourceQuotationNumber": r.source_quotation_number,
             "termsAndConditions": r.terms_and_conditions or "",
@@ -1036,10 +1169,17 @@ def create_document(
                 count += 1
                 doc_num = f"{prefix}/{fy_str}/{count:04d}"
 
+    issuer_values = _resolved_issuer_values(payload, cat_norm, default_prefix=prefix)
+
     new_doc = Quotation(
         doc_type=doc_type_norm,
         selected_bundle=payload.selected_bundle,
         product_category=cat_norm,
+        company_id=issuer_values["company_id"],
+        logo_ref=issuer_values["logo_ref"],
+        issuer_gstin=issuer_values["issuer_gstin"],
+        issuer_pan=issuer_values["issuer_pan"],
+        document_prefix=issuer_values["document_prefix"],
         source_quotation_id=payload.source_quotation_id,
         source_quotation_number=payload.source_quotation_number,
         doc_number=doc_num,
@@ -1158,6 +1298,7 @@ def create_document(
             "docType": new_doc.doc_type,
             "selectedBundle": new_doc.selected_bundle,
             "productCategory": new_doc.product_category,
+            **_serialize_issuer_fields(new_doc),
             "sourceQuotationId": new_doc.source_quotation_id,
             "sourceQuotationNumber": new_doc.source_quotation_number,
             "status": invoice_document_status(new_doc),
@@ -1359,7 +1500,21 @@ def update_waquote_document(
     if plan_error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=plan_error)
 
+    target_product_category = (
+        payload.product_category.lower()
+        if payload.product_category is not None
+        else (r.product_category or "wahrms")
+    )
+    issuer_values = _resolved_issuer_values(
+        payload, target_product_category, existing=r
+    )
+
     r.doc_type = target_type
+    r.company_id = issuer_values["company_id"]
+    r.logo_ref = issuer_values["logo_ref"]
+    r.issuer_gstin = issuer_values["issuer_gstin"]
+    r.issuer_pan = issuer_values["issuer_pan"]
+    r.document_prefix = issuer_values["document_prefix"]
     if payload.customer_name:
         r.customer_name = payload.customer_name
     r.company_name = payload.company_name
@@ -1381,7 +1536,7 @@ def update_waquote_document(
     if payload.selected_bundle is not None:
         r.selected_bundle = payload.selected_bundle
     if payload.product_category is not None:
-        r.product_category = payload.product_category.lower()
+        r.product_category = target_product_category
     if payload.source_quotation_id is not None:
         r.source_quotation_id = payload.source_quotation_id
     if payload.source_quotation_number is not None:
@@ -1433,6 +1588,7 @@ def update_waquote_document(
             "docType": r.doc_type,
             "selectedBundle": r.selected_bundle,
             "productCategory": getattr(r, 'product_category', 'wahrms') or 'wahrms',
+            **_serialize_issuer_fields(r),
             "sourceQuotationId": r.source_quotation_id,
             "sourceQuotationNumber": r.source_quotation_number,
             "status": invoice_document_status(r),
@@ -1501,6 +1657,7 @@ def generate_proforma_from_quotation(
                 "docType": "proforma",
                 "selectedBundle": existing_pf.selected_bundle,
                 "productCategory": getattr(existing_pf, 'product_category', 'wahrms') or 'wahrms',
+                **_serialize_issuer_fields(existing_pf),
                 "sourceQuotationId": existing_pf.source_quotation_id,
                 "sourceQuotationNumber": existing_pf.source_quotation_number,
                 "status": existing_pf.status,
@@ -1521,6 +1678,7 @@ def generate_proforma_from_quotation(
         doc_num = f"{prefix}/{fy_str}/{count:04d}"
 
     cat_val = getattr(q, 'product_category', 'wahrms') or 'wahrms'
+    issuer_snapshot = _issuer_snapshot_for_record(q)
     current_emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
     creator_emp_id = current_emp.id if current_emp else None
 
@@ -1528,6 +1686,11 @@ def generate_proforma_from_quotation(
         doc_type="proforma",
         selected_bundle=q.selected_bundle,
         product_category=cat_val,
+        company_id=issuer_snapshot["companyId"],
+        logo_ref=issuer_snapshot["logoRef"],
+        issuer_gstin=issuer_snapshot["gstin"],
+        issuer_pan=issuer_snapshot["pan"],
+        document_prefix=prefix,
         source_quotation_id=q.id,
         source_quotation_number=q.doc_number,
         created_by=creator_emp_id,
@@ -1638,6 +1801,7 @@ def generate_proforma_from_quotation(
             "docType": "proforma",
             "selectedBundle": new_pf.selected_bundle,
             "productCategory": new_pf.product_category,
+            **_serialize_issuer_fields(new_pf),
             "sourceQuotationId": new_pf.source_quotation_id,
             "sourceQuotationNumber": new_pf.source_quotation_number,
             "status": new_pf.status,

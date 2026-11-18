@@ -70,7 +70,13 @@ import {
   isAddonLineItem
 } from '../../utils/addonProducts';
 import DocumentPdfPreviewModal from './PdfPreviewModal';
-import { CHN_LOGO_BASE64, WAHRMS_LOGO_BASE64 } from '../../utils/logoBase64';
+import {
+  getCompanyById,
+  getCompanyDocumentPrefix,
+  getCompanyLogo,
+  resolveCompanyLogoRef,
+  resolveIssuerCompanyId
+} from '../../utils/companyBranding';
 
 const DEFAULT_TERMS_QUOTATION = WAHRMS_TERMS_AND_CONDITIONS;
 
@@ -420,7 +426,7 @@ export default function QuotationModal({
   const isFinanceOrAdmin = userRole === 'ADMIN' || userRole === 'FINANCE';
 
   const [docType, setDocType] = useState(initialData.docType || 'quotation');
-  const [selectedCompanyId, setSelectedCompanyId] = useState(initialData.companyId || 'wahrms');
+  const [selectedCompanyId, setSelectedCompanyId] = useState(() => resolveIssuerCompanyId(initialData));
   const [customerName, setCustomerName] = useState(initialData.name || initialData.customerName || '');
   const [companyName, setCompanyName] = useState(initialData.company || initialData.companyName || '');
   const [phone, setPhone] = useState(initialData.phone || '');
@@ -512,7 +518,7 @@ export default function QuotationModal({
     if (isOpen) {
       const type = (initialData.docType || 'quotation').toLowerCase();
       setDocType(type);
-      const incomingCompany = initialData.companyId || (initialData.productCategory === 'biometric' ? 'chn-tech' : 'wahrms');
+      const incomingCompany = resolveIssuerCompanyId(initialData);
       setSelectedCompanyId(incomingCompany);
       setCustomerName(initialData.customerName || initialData.name || '');
       setCompanyName(initialData.companyName || initialData.company || '');
@@ -526,7 +532,12 @@ export default function QuotationModal({
       setGstin(initialData.gstin || '');
       setPreparedBy(initialData.preparedBy || initialData.employeeName || getLoggedInUserName());
 
-      const incomingCategory = (initialData.productCategory || initialData.product_category || (incomingCompany === 'chn-tech' ? 'biometric' : 'wahrms')).toLowerCase();
+      const incomingCategory = (
+        initialData.productCategory
+        || initialData.product_category
+        || getCompanyById(incomingCompany)?.productCategory
+        || 'wahrms'
+      ).toLowerCase();
       setProductCategory(incomingCategory);
       setAllowDuplicateIntent(Boolean(initialData.allowDuplicate));
 
@@ -581,7 +592,23 @@ export default function QuotationModal({
   }, [isOpen, initialData]);
 
 
-  const activeCompany = COMPANIES.find(c => c.id === selectedCompanyId) || COMPANIES[0];
+  const activeCompany = getCompanyById(selectedCompanyId) || COMPANY_DEFAULTS;
+  const initialIssuerCompanyId = resolveIssuerCompanyId(initialData);
+  const isSavedIssuerSelected = selectedCompanyId === initialIssuerCompanyId;
+  const savedIssuer = initialData.issuer || {};
+  const savedLogoRef = initialData.logoRef || initialData.logo_ref || savedIssuer.logoRef || null;
+  const savedIssuerGstin = initialData.issuerGstin || initialData.issuer_gstin || savedIssuer.gstin || null;
+  const savedIssuerPan = initialData.issuerPan || initialData.issuer_pan || savedIssuer.pan || null;
+  const savedDocumentPrefix = initialData.documentPrefix || initialData.document_prefix || savedIssuer.documentPrefix || null;
+  const issuerLogoRef = resolveCompanyLogoRef(
+    selectedCompanyId,
+    isSavedIssuerSelected ? savedLogoRef : null
+  );
+  const issuerLogo = issuerLogoRef ? getCompanyLogo(selectedCompanyId, issuerLogoRef) : null;
+  const issuerGstin = (isSavedIssuerSelected && savedIssuerGstin) || activeCompany.gstin;
+  const issuerPan = (isSavedIssuerSelected && savedIssuerPan) || activeCompany.pan;
+  const issuerDocumentPrefix = (isSavedIssuerSelected && savedDocumentPrefix)
+    || getCompanyDocumentPrefix(selectedCompanyId, docType);
   const isBiometricDoc = String(productCategory || '').trim().toLowerCase() === 'biometric';
   const bankSnapshot = isBiometricDoc && (docType === 'po' || docType === 'proforma')
     ? BIOMETRIC_BANK
@@ -752,9 +779,10 @@ export default function QuotationModal({
   };
 
   const handleCompanyChange = (newCompanyId) => {
-    setSelectedCompanyId(newCompanyId);
-    const targetCat = newCompanyId === 'chn-tech' ? 'biometric' : 'wahrms';
-    handleCategoryChange(targetCat);
+    const nextCompany = getCompanyById(newCompanyId);
+    if (!nextCompany) return;
+    setSelectedCompanyId(nextCompany.id);
+    handleCategoryChange(nextCompany.productCategory || 'wahrms');
   };
 
   const handleClearBundle = () => {
@@ -898,6 +926,10 @@ export default function QuotationModal({
       gstin: gstin.trim(),
       company_id: selectedCompanyId,
       company: activeCompany,
+      logo_ref: issuerLogoRef,
+      issuer_gstin: issuerGstin || '',
+      issuer_pan: issuerPan || '',
+      document_prefix: issuerDocumentPrefix,
       tax_mode: taxMode,
       subtotal: calc.taxableAmount,
       cgst: calc.cgstTotal,
@@ -1222,7 +1254,7 @@ export default function QuotationModal({
               <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.85)' }}>
                 {isEditMode
                   ? (initialData.docNumber ? `Document #${initialData.docNumber}` : 'Updating existing document')
-                  : `${COMPANY_DEFAULTS.legalName} • GSTIN: ${COMPANY_DEFAULTS.gstin}`}
+                  : `${activeCompany.legalName} • GSTIN: ${activeCompany.gstin}`}
               </div>
             </div>
           </div>
@@ -1381,11 +1413,17 @@ export default function QuotationModal({
                 boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
                 overflow: 'hidden'
               }}>
-                <img
-                  src={selectedCompanyId === 'chn-tech' ? CHN_LOGO_BASE64 : WAHRMS_LOGO_BASE64}
-                  alt={selectedCompanyId === 'chn-tech' ? 'CHN Technologies Logo' : 'WA!HRMS Logo'}
-                  style={{ maxHeight: '34px', maxWidth: '88px', width: 'auto', height: 'auto', objectFit: 'contain' }}
-                />
+                {issuerLogo ? (
+                  <img
+                    src={issuerLogo}
+                    alt={`${activeCompany.shortName} Logo`}
+                    style={{ maxHeight: '34px', maxWidth: '88px', width: 'auto', height: 'auto', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#334155' }}>
+                    {activeCompany.brandBadge || activeCompany.shortName}
+                  </span>
+                )}
               </div>
 
               {/* Company Selector Dropdown */}
@@ -1415,10 +1453,10 @@ export default function QuotationModal({
             </div>
 
             <div style={{ marginTop: '8px', display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '0.76rem', color: '#64748b' }}>
-              <span>GSTIN: <strong style={{ color: '#0f172a', fontFamily: 'monospace' }}>{activeCompany.gstin}</strong></span>
-              <span>PAN: <strong style={{ color: '#0f172a', fontFamily: 'monospace' }}>{activeCompany.pan}</strong></span>
-              <span>Prefix: <strong style={{ color: '#0f172a' }}>{selectedCompanyId === 'wahrms' ? 'CHN/QT/ (WAHRMS)' : 'CHN/QT/ (CHN TECH)'}</strong></span>
-              <span>Category: <strong style={{ color: '#0f766e' }}>{selectedCompanyId === 'chn-tech' ? 'Biometric & Hardware' : 'WAHRMS Software'}</strong></span>
+              <span>GSTIN: <strong style={{ color: '#0f172a', fontFamily: 'monospace' }}>{issuerGstin}</strong></span>
+              <span>PAN: <strong style={{ color: '#0f172a', fontFamily: 'monospace' }}>{issuerPan}</strong></span>
+              <span>Prefix: <strong style={{ color: '#0f172a' }}>{issuerDocumentPrefix}/ ({activeCompany.shortName})</strong></span>
+              <span>Category: <strong style={{ color: '#0f766e' }}>{activeCompany.productCategory === 'biometric' ? 'Biometric & Hardware' : 'WAHRMS Software'}</strong></span>
             </div>
           </div>
 

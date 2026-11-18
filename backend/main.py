@@ -698,7 +698,12 @@ async def startup_db_client():
                 missing_q_cols = {
                     "created_by": "INT NULL",
                     "created_by_user_id": "INT NULL",
-                    "assigned_to": "INT NULL"
+                    "assigned_to": "INT NULL",
+                    "company_id": "VARCHAR(50) NULL",
+                    "logo_ref": "VARCHAR(100) NULL",
+                    "issuer_gstin": "VARCHAR(50) NULL",
+                    "issuer_pan": "VARCHAR(50) NULL",
+                    "document_prefix": "VARCHAR(50) NULL"
                 }
                 for col_name, col_type in missing_q_cols.items():
                     if col_name not in q_cols:

@@ -149,6 +149,14 @@ export const COMPANIES = [
     displayName: 'CHN TECHNOLOGIES PVT LTD (WAHRMS) ★ Default — GSTIN: 33AAJCC3705A1ZC',
     brandBadge: 'WA!HRMS',
     logoType: 'wahrms',
+    logoRef: 'wahrms',
+    productCategory: 'wahrms',
+    documentPrefixes: {
+      quotation: 'CHN/QT',
+      proforma: 'CHN/PI',
+      invoice: 'CHN/INV',
+      po: 'CHN/PO'
+    },
     gstin: '33AAJCC3705A1ZC',
     pan: 'AAJCC3705A',
     state: 'Tamil Nadu',
@@ -180,6 +188,14 @@ export const COMPANIES = [
     displayName: 'CHN TECHNOLOGIES PVT LTD (CHN TECH) ★ Default — GSTIN: 33AAJCC3705A1ZC',
     brandBadge: 'CHN TECH',
     logoType: 'chn-tech',
+    logoRef: 'chn-tech',
+    productCategory: 'biometric',
+    documentPrefixes: {
+      quotation: 'CHN/QT',
+      proforma: 'CHN/PI',
+      invoice: 'CHN/INV',
+      po: 'CHN/PO'
+    },
     gstin: '33AAJCC3705A1ZC',
     pan: 'AAJCC3705A',
     state: 'Tamil Nadu',

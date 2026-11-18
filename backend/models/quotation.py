@@ -13,6 +13,13 @@ class Quotation(Base):
     doc_type = Column(String(50), default="quotation", nullable=False)  # quotation, proforma, invoice, po
     selected_bundle = Column(String(100), nullable=True)                 # hr_atm, hr_payroll, hr_atm_payroll
     product_category = Column(String(50), default="wahrms", nullable=True) # wahrms, biometric
+    # Issuer snapshot. Nullable so historical quotations remain valid; when a
+    # value is missing the API resolves the issuer from product_category.
+    company_id = Column(String(50), nullable=True)                         # wahrms, chn-tech
+    logo_ref = Column(String(100), nullable=True)                          # configured logo type
+    issuer_gstin = Column(String(50), nullable=True)
+    issuer_pan = Column(String(50), nullable=True)
+    document_prefix = Column(String(50), nullable=True)
     doc_number = Column(String(100), unique=True, index=True, nullable=False)
     status = Column(String(50), default="issued", nullable=False)        # draft, issued, cancelled, converted
     payment_status = Column(String(50), default="unpaid", nullable=False) # paid, unpaid, partial
