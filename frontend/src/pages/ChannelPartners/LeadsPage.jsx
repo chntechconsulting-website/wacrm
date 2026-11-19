@@ -31,10 +31,10 @@ const STATUS_OPTIONS = [
 ];
 
 // Only CRM statuses with a documented WA HRMS equivalent can be pushed from
-// this page. Converted must go through the All Leads WON workflow so the
-// required organization and subscription order references exist first.
+// this page. Converted must go through the All Leads WON workflow so the CRM
+// finance and Support handoffs stay consistent.
 const CRM_STATUS_OPTIONS = [
-  { value: 'NEW', label: 'NEW — WA HRMS: submitted' },
+  { value: 'NEW', label: 'NEW / NEW LEAD — WA HRMS: submitted' },
   { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
   { value: 'REJECTED', label: 'REJECTED — WA HRMS: rejected' },
   { value: 'LOST', label: 'LOST — WA HRMS: lost' },
@@ -47,6 +47,13 @@ const normalizeCrmStatus = (value) => String(value || '')
   .trim()
   .toUpperCase()
   .replace(/[-\s]+/g, '_');
+
+// NEW and NEW LEAD both mean the WA HRMS "submitted" state, so the editor
+// shows them as the same canonical option.
+const canonicalCrmStatus = (value) => {
+  const normalized = normalizeCrmStatus(value);
+  return normalized === 'NEW_LEAD' ? 'NEW' : normalized;
+};
 
 const SYNC_STATUS_META = {
   SYNCED: { label: 'Synced', tone: 'green' },
@@ -133,7 +140,7 @@ export default function ChannelPartnerLeadsPage() {
   };
 
   const resetSyncEditor = (row) => {
-    const normalized = normalizeCrmStatus(row?.crmStatus);
+    const normalized = canonicalCrmStatus(row?.crmStatus);
     setCrmStatus(CRM_STATUS_OPTIONS.some((option) => option.value === normalized) ? normalized : '');
     setReviewNote('');
     setSyncError('');
@@ -444,11 +451,10 @@ export default function ChannelPartnerLeadsPage() {
                   </div>
                 ) : null}
                 <p className="cp-muted" style={{ marginTop: '8px' }}>
-                  NEW → submitted · QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
+                  NEW and NEW LEAD → submitted · QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
                   WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed
-                  outcome in the CRM without sending an invalid upstream change. Converted is only
-                  sent through the All Leads WON workflow once WA HRMS returns the organization and
-                  subscription order references.
+                  outcome in the CRM without sending an invalid upstream change. Converted is sent
+                  through the All Leads WON workflow and is validated by WA HRMS.
                 </p>
               </Panel>
             )}

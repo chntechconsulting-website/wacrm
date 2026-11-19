@@ -121,7 +121,9 @@ const trialSupportAssigneeLabel = (lead) => {
 };
 
 const STATUS_OPTIONS = [
+  'NEW',
   'NEW LEAD',
+  'QUALIFIED',
   'RE-INQUIRY',
   'CONTACTED',
   'INTERESTED',
@@ -133,15 +135,16 @@ const STATUS_OPTIONS = [
   'FOLLOW-UP',
   'WON',
   'CONVERTED_TO_SUPPORT',
+  'REJECTED',
   'LOST',
   'JUNK'
 ];
 
 const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'CHANNEL_PARTNER', 'MANUAL', 'EXCEL', 'REFERRAL'];
 
-// CRM statuses that have a documented WA HRMS equivalent. Converted is
-// intentionally excluded: it must go through the WON workflow so the required
-// organization and subscription order references exist.
+// CRM statuses with a documented WA HRMS equivalent that can be selected in
+// the status-sync panel. Converted is sent automatically by the WON workflow
+// and is therefore not offered here.
 const CHANNEL_PARTNER_SYNC_STATUS_OPTIONS = [
   { value: 'NEW', label: 'NEW — WA HRMS: submitted' },
   { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
@@ -164,6 +167,14 @@ const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
 
 const normalizeLeadStatusValue = (value) =>
   String(value || '').trim().toUpperCase().replace(/-/g, '_').replace(/\s+/g, '_');
+
+// WA HRMS maps both NEW and NEW LEAD to the same "submitted" state. The
+// status-sync select uses the canonical CRM value so an imported NEW lead and
+// a manually selected NEW LEAD show the same option.
+const normalizeChannelPartnerCrmStatus = (value) => {
+  const normalized = normalizeLeadStatusValue(value);
+  return normalized === 'NEW_LEAD' ? 'NEW' : normalized;
+};
 
 // Server-side pagination window for the Leads table
 const LEADS_PAGE_SIZE = 150;
@@ -1534,8 +1545,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     event.preventDefault();
     if (!selectedLead) return;
     const currentMapped = CHANNEL_PARTNER_SYNC_STATUS_OPTIONS.some(
-      option => option.value === normalizeLeadStatusValue(selectedLead.status)
-    ) ? normalizeLeadStatusValue(selectedLead.status) : '';
+      option => option.value === normalizeChannelPartnerCrmStatus(selectedLead.status)
+    ) ? normalizeChannelPartnerCrmStatus(selectedLead.status) : '';
     const targetStatus = String(cpSyncStatus || currentMapped || '').trim().toUpperCase();
     if (!targetStatus) {
       setCpSyncError('Select the CRM status to send to WA HRMS.');
@@ -1547,7 +1558,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       return;
     }
     if (
-      targetStatus === normalizeLeadStatusValue(selectedLead.status) &&
+      targetStatus === normalizeChannelPartnerCrmStatus(selectedLead.status) &&
       String(selectedLead.channel_partner_sync_status || '').toUpperCase() === 'SYNCED' &&
       !note
     ) {
@@ -2035,7 +2046,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       ? `${formatLeadReceivedDate(cp.created_at)}, ${formatLeadReceivedTime(cp.created_at)}`
       : '-';
     const syncBadge = getChannelPartnerSyncBadge(cp.channel_partner_sync_status);
-    const normalizedCrmStatus = normalizeLeadStatusValue(cp.status);
+    const normalizedCrmStatus = normalizeChannelPartnerCrmStatus(cp.status);
     const currentMappedStatus = CHANNEL_PARTNER_SYNC_STATUS_OPTIONS.some(
       option => option.value === normalizedCrmStatus
     ) ? normalizedCrmStatus : '';
@@ -2183,10 +2194,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
               <div style={{ color: '#047857', fontSize: '0.78rem', fontWeight: 600 }}>{cpSyncMessage}</div>
             )}
             <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
-              NEW maps to submitted, QUALIFIED to qualified, REJECTED to rejected and LOST to lost.
+              NEW and NEW LEAD map to submitted, QUALIFIED to qualified, REJECTED to rejected and LOST to lost.
+              Converted is sent through the All Leads WON workflow and is validated by WA HRMS.
               WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed outcome
-              in the CRM without sending an invalid upstream change. Converted is only sent through the
-              All Leads WON workflow once the WA HRMS organization and subscription order references exist.
+              in the CRM without sending an invalid upstream change.
             </div>
           </form>
         </div>

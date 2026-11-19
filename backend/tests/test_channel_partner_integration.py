@@ -13,6 +13,7 @@ import sys
 import time
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -51,9 +52,13 @@ from models.channel_partner import (
     ChannelPartnerWebhookEvent,
     ChannelPartnerWebhookRejection,
 )
+from models.employee import Employee
 from models.lead import Lead
 from models.user import User
-from schemas.lead import LeadUpdate
+from routers.leads import change_lead_status
+from routers.workflow import confirm_finance_payment, mark_deal_won_workflow
+from schemas.lead import LeadStatusRequest, LeadUpdate
+from schemas.workflow import DealWonRequest, FinancePaymentConfirmRequest
 from routers.channel_partners import (
     _lead_payload,
     _page_meta,
@@ -862,6 +867,19 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
         )
         return lead, mirror
 
+    def _reset_partner_data(self):
+        """Clear the partner fixture so table-driven subtests start clean."""
+        self.db.query(Lead).filter(
+            Lead.channel_partner_lead_id == "lead-cp-1"
+        ).delete(synchronize_session=False)
+        self.db.query(ChannelPartnerLead).filter(
+            ChannelPartnerLead.external_id == "lead-cp-1"
+        ).delete(synchronize_session=False)
+        self.db.query(ChannelPartner).filter(
+            ChannelPartner.external_id == "partner-cp-1"
+        ).delete(synchronize_session=False)
+        self.db.commit()
+
     def _patch_client(self):
         return patch(
             "services.channel_partner_sync.load_effective_config",
@@ -870,6 +888,32 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
             "services.channel_partner_sync.ChannelPartnerClient",
             FakeChannelPartnerClient,
         )
+
+    def _make_user(self, username, role):
+        user = User(
+            username=username,
+            hashed_password="not-used-in-tests",
+            role=role,
+            department="SALES" if role != "ADMIN" else "ADMINISTRATION",
+            is_active=True,
+        )
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+
+        employee = Employee(
+            user_id=user.id,
+            name=username.replace("_", " ").title(),
+            email=f"{username}@example.test",
+            phone="9800000000",
+            username=username,
+            role=role,
+            status="ACTIVE",
+        )
+        self.db.add(employee)
+        self.db.commit()
+        self.db.refresh(employee)
+        return user, employee
 
     def test_status_mapping_only_uses_documented_external_statuses(self):
         self.assertEqual(
@@ -880,9 +924,31 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
             validate_channel_partner_status_change("NEW", None),
             ("submitted", None),
         )
+        # The CRM stores "NEW LEAD" but the mapping normalises it to
+        # "NEW_LEAD"; both spellings must resolve to the submitted state.
+        self.assertEqual(
+            validate_channel_partner_status_change("NEW LEAD", None),
+            ("submitted", None),
+        )
+        self.assertEqual(
+            validate_channel_partner_status_change("NEW_LEAD", None),
+            ("submitted", None),
+        )
         self.assertEqual(
             validate_channel_partner_status_change("QUALIFIED", "  "),
             ("qualified", None),
+        )
+        self.assertEqual(
+            validate_channel_partner_status_change("WON", None),
+            ("converted", None),
+        )
+        self.assertEqual(
+            validate_channel_partner_status_change("CONVERTED", None),
+            ("converted", None),
+        )
+        self.assertEqual(
+            validate_channel_partner_status_change("CONVERTED_TO_SUPPORT", None),
+            ("converted", None),
         )
         # Unmapped CRM statuses keep the CRM-only workflow and skip the PATCH.
         self.assertEqual(
@@ -975,6 +1041,262 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
         self.assertIsNone(lead.channel_partner_pending_status)
         self.assertEqual(mirror.status, "qualified")
         self.assertEqual(mirror.review_note, "Qualified after discussion")
+
+    def test_every_supported_crm_status_sends_the_documented_patch(self):
+        """One transition per supported status, including converted.
+
+        Each case starts from a different confirmed external state so the
+        duplicate guard cannot hide the PATCH, and asserts the external lead ID
+        (never the CRM integer id), the mapped status and the review note.
+        """
+        cases = [
+            ("NEW", "qualified", "submitted", None),
+            ("NEW LEAD", "qualified", "submitted", None),
+            ("NEW_LEAD", "qualified", "submitted", None),
+            ("SUBMITTED", "qualified", "submitted", None),
+            ("QUALIFIED", "submitted", "qualified", "Qualified after review"),
+            ("WON", "submitted", "converted", None),
+            ("CONVERTED", "submitted", "converted", None),
+            ("CONVERTED_TO_SUPPORT", "submitted", "converted", None),
+            ("REJECTED", "submitted", "rejected", "Not eligible"),
+            ("LOST", "submitted", "lost", "No response"),
+        ]
+
+        for crm_status, initial_external, expected_external, note in cases:
+            with self.subTest(crm_status=crm_status):
+                self._reset_partner_data()
+                lead, mirror = self._seed_partner_lead(
+                    external_status=initial_external
+                )
+                lead.status = crm_status
+                self.db.commit()
+
+                FakeChannelPartnerClient.calls = []
+                FakeChannelPartnerClient.error = None
+                config_patch, client_patch = self._patch_client()
+                with config_patch, client_patch:
+                    result = push_channel_partner_status(
+                        self.db,
+                        lead,
+                        crm_status=crm_status,
+                        review_note=note,
+                    )
+
+                self.assertTrue(result["success"], result)
+                self.assertFalse(result["skipped"], result)
+                self.assertEqual(result["syncStatus"], "SYNCED")
+                self.assertEqual(result["externalStatus"], expected_external)
+                self.assertEqual(
+                    FakeChannelPartnerClient.calls,
+                    [{
+                        "lead_id": "lead-cp-1",
+                        "status": expected_external,
+                        "review_note": note,
+                    }],
+                )
+                self.db.refresh(lead)
+                self.db.refresh(mirror)
+                self.assertEqual(lead.channel_partner_status, expected_external)
+                self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+                self.assertEqual(mirror.status, expected_external)
+                self.assertIsNone(lead.channel_partner_pending_status)
+                self.assertIsNone(lead.channel_partner_last_sync_error)
+
+    def test_repeated_status_push_is_not_sent_twice(self):
+        lead, _ = self._seed_partner_lead()
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            first = push_channel_partner_status(
+                self.db, lead, crm_status="QUALIFIED", review_note="Reviewed"
+            )
+            second = push_channel_partner_status(
+                self.db, lead, crm_status="QUALIFIED", review_note="Reviewed"
+            )
+
+        self.assertTrue(first["success"])
+        self.assertFalse(first["skipped"])
+        self.assertTrue(second["success"])
+        self.assertTrue(second["skipped"])
+        self.assertEqual(len(FakeChannelPartnerClient.calls), 1)
+
+    def test_normal_crm_lead_is_never_pushed_to_wahrms(self):
+        normal_lead = Lead(
+            name="Normal CRM Lead",
+            phone="9000000000",
+            source="MANUAL",
+            status="QUALIFIED",
+        )
+        self.db.add(normal_lead)
+        self.db.commit()
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            result = push_channel_partner_status(
+                self.db, normal_lead, crm_status="QUALIFIED"
+            )
+
+        self.assertFalse(result["success"])
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["syncStatus"], "NOT_SYNCED")
+        self.assertEqual(FakeChannelPartnerClient.calls, [])
+
+    def test_status_endpoint_syncs_for_admin_sales_and_manager(self):
+        """Every role that may change a lead status triggers the same PATCH."""
+        cases = [
+            ("ADMIN", "QUALIFIED", None, "qualified"),
+            ("SALES_EXECUTIVE", "REJECTED", "Not a fit", "rejected"),
+            ("MANAGER", "LOST", "No response", "lost"),
+        ]
+
+        for role, crm_status, note, expected_external in cases:
+            with self.subTest(role=role, crm_status=crm_status):
+                self._reset_partner_data()
+                lead, _ = self._seed_partner_lead()
+                user, employee = self._make_user(
+                    f"cp_{role.lower()}_{expected_external}", role
+                )
+                if role == "SALES_EXECUTIVE":
+                    lead.assigned_to = employee.id
+                    self.db.commit()
+
+                FakeChannelPartnerClient.calls = []
+                FakeChannelPartnerClient.error = None
+                config_patch, client_patch = self._patch_client()
+                with config_patch, client_patch:
+                    result = change_lead_status(
+                        lead_id=lead.id,
+                        status_req=LeadStatusRequest(
+                            status=crm_status, review_note=note
+                        ),
+                        db=self.db,
+                        current_user=user,
+                    )
+
+                self.assertEqual(result.status, crm_status)
+                self.assertEqual(
+                    FakeChannelPartnerClient.calls,
+                    [{
+                        "lead_id": "lead-cp-1",
+                        "status": expected_external,
+                        "review_note": note,
+                    }],
+                )
+                self.db.refresh(lead)
+                self.assertEqual(lead.status, crm_status)
+                self.assertEqual(lead.channel_partner_status, expected_external)
+                self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+                self.assertEqual(
+                    result.channel_partner_sync_message,
+                    f"WA HRMS lead status updated to {expected_external}.",
+                )
+
+    def test_new_lead_alias_reaches_the_submitted_patch(self):
+        self._reset_partner_data()
+        lead, _ = self._seed_partner_lead(external_status="qualified")
+        user, _ = self._make_user("cp_new_lead_alias", "ADMIN")
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            result = change_lead_status(
+                lead_id=lead.id,
+                status_req=LeadStatusRequest(status="NEW LEAD"),
+                db=self.db,
+                current_user=user,
+            )
+
+        self.assertEqual(result.status, "NEW LEAD")
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "submitted",
+                "review_note": None,
+            }],
+        )
+        self.db.refresh(lead)
+        self.assertEqual(lead.channel_partner_status, "submitted")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+
+    def test_mobile_workflow_won_endpoint_syncs_converted(self):
+        """The legacy /workflow/deal/{id}/won endpoint used by mobile syncs too."""
+        self._reset_partner_data()
+        lead, _ = self._seed_partner_lead(external_status="submitted")
+        user, _ = self._make_user("cp_mobile_won", "ADMIN")
+
+        def fake_won_workflow(**kwargs):
+            kwargs["db"].query(Lead).filter(Lead.id == lead.id).update(
+                {"status": "WON"}
+            )
+            kwargs["db"].commit()
+            return {"status": "WON", "lead_id": lead.id}
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch, patch(
+            "routers.workflow.WorkflowService.complete_deal_won_workflow",
+            side_effect=fake_won_workflow,
+        ):
+            result = mark_deal_won_workflow(
+                lead_id=lead.id,
+                payload=DealWonRequest(),
+                db=self.db,
+                current_user=user,
+            )
+
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "converted",
+                "review_note": None,
+            }],
+        )
+        self.assertEqual(result["channelPartnerSync"]["syncStatus"], "SYNCED")
+        self.db.refresh(lead)
+        self.assertEqual(lead.status, "WON")
+        self.assertEqual(lead.channel_partner_status, "converted")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+
+    def test_finance_payment_confirmation_syncs_converted(self):
+        """Confirming payment also moves the deal to WON, so converted is pushed."""
+        self._reset_partner_data()
+        lead, _ = self._seed_partner_lead(external_status="submitted")
+        lead.status = "WON"
+        self.db.commit()
+        user, _ = self._make_user("cp_finance_confirm", "ADMIN")
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch, patch(
+            "routers.workflow.WorkflowService.confirm_finance_payment",
+            return_value=SimpleNamespace(lead_id=lead.id),
+        ):
+            confirm_finance_payment(
+                handoff_id=1,
+                payload=FinancePaymentConfirmRequest(),
+                db=self.db,
+                current_user=user,
+            )
+
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "converted",
+                "review_note": None,
+            }],
+        )
+        self.db.refresh(lead)
+        self.assertEqual(lead.channel_partner_status, "converted")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
 
     def test_push_failure_preserves_confirmed_status_and_retry_succeeds(self):
         lead, _ = self._seed_partner_lead()
@@ -1096,39 +1418,60 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
         self.assertEqual(lead.channel_partner_sync_status, "NOT_SYNCED")
         self.assertIn("terminal", lead.channel_partner_last_sync_error)
 
-    def test_converted_push_requires_organization_and_subscription_order(self):
+    def test_converted_push_is_attempted_without_reference_ids(self):
         lead, mirror = self._seed_partner_lead()
         lead.status = "WON"
         self.db.commit()
+        self.assertIsNone(mirror.organization_id)
+        self.assertIsNone(mirror.subscription_order_id)
 
         FakeChannelPartnerClient.calls = []
         FakeChannelPartnerClient.error = None
-        config_patch, client_patch = self._patch_client()
-        with config_patch, client_patch:
-            blocked = push_channel_partner_status(
-                self.db, lead, crm_status="WON", review_note=None
-            )
-
-        self.assertFalse(blocked["success"])
-        self.assertEqual(blocked["syncStatus"], "FAILED")
-        self.assertIn("organization", blocked["message"])
-        self.assertEqual(FakeChannelPartnerClient.calls, [])
-        self.db.refresh(lead)
-        self.assertEqual(lead.channel_partner_pending_status, "converted")
-
-        mirror.organization_id = "org-1"
-        mirror.subscription_order_id = "sub-1"
-        self.db.commit()
-
         config_patch, client_patch = self._patch_client()
         with config_patch, client_patch:
             converted = push_channel_partner_status(
                 self.db, lead, crm_status="WON", review_note=None
             )
 
-        self.assertTrue(converted["success"])
+        self.assertTrue(converted["success"], converted)
         self.assertEqual(converted["externalStatus"], "converted")
-        self.assertEqual(FakeChannelPartnerClient.calls[-1]["status"], "converted")
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "converted",
+                "review_note": None,
+            }],
+        )
+        self.db.refresh(lead)
+        self.assertEqual(lead.channel_partner_status, "converted")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+        self.assertIsNone(lead.channel_partner_pending_status)
+
+    def test_converted_push_surfaces_wahrms_validation_error(self):
+        lead, _ = self._seed_partner_lead()
+        lead.status = "WON"
+        self.db.commit()
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = ChannelPartnerAPIError(
+            "Organization and subscription order are required for conversion.",
+            status_code=422,
+            errors={"status": ["conversion prerequisites missing"]},
+        )
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            failed = push_channel_partner_status(
+                self.db, lead, crm_status="WON", review_note=None
+            )
+
+        self.assertFalse(failed["success"])
+        self.assertEqual(failed["syncStatus"], "FAILED")
+        self.assertIn("Organization and subscription order", failed["message"])
+        self.assertEqual(len(FakeChannelPartnerClient.calls), 1)
+        self.db.refresh(lead)
+        self.assertEqual(lead.channel_partner_pending_status, "converted")
+        self.assertIn("Organization", lead.channel_partner_last_sync_error)
 
     def test_partner_lead_payload_exposes_crm_sync_fields(self):
         lead, mirror = self._seed_partner_lead()

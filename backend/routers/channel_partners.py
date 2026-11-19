@@ -68,11 +68,12 @@ from services.channel_partner_sync import (
     checkpoint_snapshot,
     create_sync_run,
     execute_sync_run,
+    map_crm_status_to_channel_partner,
     normalize_crm_status,
     process_webhook_event,
-    push_channel_partner_status,
     retry_channel_partner_status_sync,
     run_event_poll,
+    sync_channel_partner_status_for_lead,
     validate_channel_partner_status_change,
     validate_channel_partner_transition,
 )
@@ -988,33 +989,46 @@ def update_partner_lead_status(
     """Change the CRM status of a partner lead and push it to WA HRMS.
 
     Only statuses with a documented external equivalent are accepted here.
-    ``converted`` must go through the Sales WON workflow so the required
-    organization and subscription order references exist before the PATCH.
+    ``converted`` must go through the Sales WON workflow so the CRM finance and
+    Support handoffs stay consistent; every other supported status is sent
+    through the same common synchronization path as All Leads.
     """
     mirror, crm_lead = _partner_crm_lead(db, lead_id)
 
     raw_status = (payload.status or "").strip()
+    if not raw_status:
+        raise HTTPException(status_code=400, detail="A CRM status is required.")
+
+    # Accept either the external status name (submitted/qualified/rejected/lost)
+    # or a CRM status value (NEW, NEW LEAD, QUALIFIED, REJECTED, LOST). Both are
+    # normalised through the same mapping used by the All Leads endpoints.
     if raw_status.lower() in CHANNEL_PARTNER_STATUSES:
-        if raw_status.lower() == "converted":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Converted must be completed through the All Leads WON workflow "
-                    "so the required WA HRMS references are available."
-                ),
-            )
-        crm_status = CHANNEL_PARTNER_TO_CRM_STATUS[raw_status.lower()]
+        external_status = raw_status.lower()
+        crm_status = CHANNEL_PARTNER_TO_CRM_STATUS[external_status]
     else:
         crm_status = normalize_crm_status(raw_status)
+        external_status = map_crm_status_to_channel_partner(crm_status)
 
-    if crm_status not in {"NEW", "QUALIFIED", "REJECTED", "LOST"}:
+    if external_status is None:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"CRM status '{payload.status}' cannot be sent to WA HRMS from "
-                "Partner Leads. Use NEW, QUALIFIED, REJECTED or LOST."
+                "Partner Leads. Use NEW, NEW LEAD, QUALIFIED, REJECTED or LOST."
             ),
         )
+    if external_status == "converted":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Converted must be completed through the All Leads WON workflow "
+                "so the CRM finance and Support handoffs stay consistent."
+            ),
+        )
+
+    # Store the canonical CRM status for the confirmed external status (for
+    # example NEW LEAD -> submitted -> NEW).
+    crm_status = CHANNEL_PARTNER_TO_CRM_STATUS[external_status]
 
     # Validate the partner-facing note and the documented WA HRMS transition
     # before committing the CRM status.
@@ -1070,18 +1084,12 @@ def update_partner_lead_status(
         db.commit()
         db.refresh(crm_lead)
 
-    try:
-        result = push_channel_partner_status(
-            db,
-            crm_lead,
-            crm_status=crm_status,
-            review_note=payload.review_note,
-        )
-    except ChannelPartnerStatusSyncError as exc:
-        crm_lead.channel_partner_sync_status = "FAILED"
-        crm_lead.channel_partner_last_sync_error = exc.message
-        db.commit()
-        result = {"message": exc.message}
+    result = sync_channel_partner_status_for_lead(
+        db,
+        crm_lead,
+        crm_status=crm_status,
+        review_note=payload.review_note,
+    )
 
     db.refresh(crm_lead)
     db.refresh(mirror)

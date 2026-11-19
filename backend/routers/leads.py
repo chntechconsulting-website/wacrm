@@ -53,8 +53,8 @@ from services.reinquiry_service import ReInquiryService
 from services.followup_visibility_service import apply_followup_visibility_filter
 from services.channel_partner_sync import (
     ChannelPartnerStatusSyncError,
-    push_channel_partner_status,
     retry_channel_partner_status_sync,
+    sync_channel_partner_status_for_lead,
     validate_channel_partner_status_change,
     validate_channel_partner_transition,
 )
@@ -2524,7 +2524,7 @@ def update_lead(
             )
         db.refresh(lead)
         if lead.channel_partner_lead_id:
-            result = push_channel_partner_status(
+            result = sync_channel_partner_status_for_lead(
                 db, lead, crm_status=lead.status, review_note=None
             )
             db.refresh(lead)
@@ -2559,18 +2559,12 @@ def update_lead(
         and lead_in.status is not None
         and lead_in.status != old_status
     ):
-        try:
-            result = push_channel_partner_status(
-                db,
-                lead,
-                crm_status=lead.status,
-                review_note=lead_in.review_note,
-            )
-        except ChannelPartnerStatusSyncError as exc:
-            lead.channel_partner_sync_status = "FAILED"
-            lead.channel_partner_last_sync_error = exc.message
-            db.commit()
-            result = {"message": exc.message}
+        result = sync_channel_partner_status_for_lead(
+            db,
+            lead,
+            crm_status=lead.status,
+            review_note=lead_in.review_note,
+        )
         db.refresh(lead)
         lead._channel_partner_sync_message = result.get("message")
 
@@ -2718,7 +2712,7 @@ def change_lead_status(
             )
         db.refresh(lead)
         if lead.channel_partner_lead_id:
-            result = push_channel_partner_status(
+            result = sync_channel_partner_status_for_lead(
                 db, lead, crm_status=lead.status, review_note=None
             )
             db.refresh(lead)
@@ -2773,18 +2767,12 @@ def change_lead_status(
     # upstream failure is recorded as FAILED/PENDING rather than rolling back
     # the user's CRM change.
     if is_channel_partner_lead:
-        try:
-            result = push_channel_partner_status(
-                db,
-                lead,
-                crm_status=new_status,
-                review_note=status_req.review_note,
-            )
-        except ChannelPartnerStatusSyncError as exc:
-            lead.channel_partner_sync_status = "FAILED"
-            lead.channel_partner_last_sync_error = exc.message
-            db.commit()
-            result = {"message": exc.message}
+        result = sync_channel_partner_status_for_lead(
+            db,
+            lead,
+            crm_status=new_status,
+            review_note=status_req.review_note,
+        )
         db.refresh(lead)
         lead._channel_partner_sync_message = result.get("message")
 
@@ -2880,11 +2868,13 @@ def mark_deal_won_with_support_manager(
             won_data=payload.dict(exclude_unset=True),
             current_user=current_user
         )
-        # Converted is only pushed when WA HRMS already supplied the required
-        # organization and subscription order references.
+        # Converted is pushed for every mapped partner lead. WA HRMS validates
+        # the transition and any reference requirements; a rejection is
+        # returned to the caller as a FAILED sync result instead of being
+        # silently skipped.
         lead = db.query(Lead).filter(Lead.id == lead_id).first()
         if lead and lead.channel_partner_lead_id:
-            sync_result = push_channel_partner_status(
+            sync_result = sync_channel_partner_status_for_lead(
                 db, lead, crm_status="WON", review_note=None
             )
             if isinstance(result, dict):
@@ -2919,12 +2909,20 @@ def convert_deal_to_support(
     note = (payload or {}).get("note") if isinstance(payload, dict) else None
     from services.workflow_service import WorkflowService
     try:
-        return WorkflowService.convert_to_support(
+        result = WorkflowService.convert_to_support(
             db=db,
             lead_id=lead_id,
             current_user=current_user,
             note=note
         )
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if lead and lead.channel_partner_lead_id:
+            sync_result = sync_channel_partner_status_for_lead(
+                db, lead, crm_status=lead.status, review_note=None
+            )
+            if isinstance(result, dict):
+                result["channelPartnerSync"] = sync_result
+        return result
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     except ValueError as exc:

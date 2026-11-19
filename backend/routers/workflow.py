@@ -23,6 +23,7 @@ from schemas.workflow import (
 from services.auth import get_current_user, require_permission
 from services.permission_service import user_has_permission, get_user_view_scope
 from services.workflow_service import WorkflowService
+from services.channel_partner_sync import sync_channel_partner_status_for_lead
 from services.purchase_details_service import build_support_purchase_details
 from services.hierarchy_service import (
     normalize_role,
@@ -234,6 +235,16 @@ def confirm_finance_payment(
             payment_data=payload.dict(),
             current_user=current_user
         )
+        # Payment confirmation also moves the deal to WON. A mapped partner
+        # lead must reflect that conversion in WA HRMS even when the deal was
+        # not marked WON through the Leads WON endpoint. The duplicate guard in
+        # the sync service makes this a no-op when converted is already synced.
+        if updated_handoff and updated_handoff.lead_id:
+            lead = db.query(Lead).filter(Lead.id == updated_handoff.lead_id).first()
+            if lead and lead.channel_partner_lead_id:
+                sync_channel_partner_status_for_lead(
+                    db, lead, crm_status=lead.status, review_note=None
+                )
         return updated_handoff
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
@@ -663,6 +674,15 @@ def mark_deal_won_workflow(
             won_data=payload.dict(exclude_unset=True),
             current_user=current_user
         )
+        # This legacy WON endpoint is used by the mobile app. It must push the
+        # same converted status as POST /leads/{id}/won.
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if lead and lead.channel_partner_lead_id:
+            sync_result = sync_channel_partner_status_for_lead(
+                db, lead, crm_status="WON", review_note=None
+            )
+            if isinstance(result, dict):
+                result["channelPartnerSync"] = sync_result
         return result
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))

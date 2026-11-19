@@ -105,13 +105,17 @@ CHANNEL_PARTNER_INITIAL_CRM_STATUS = {
 # never sent upstream.
 CHANNEL_PARTNER_STATUSES = ("submitted", "qualified", "converted", "rejected", "lost")
 
+# Keys are the output of ``normalize_crm_status`` (spaces/hyphens become
+# underscores), so "NEW LEAD" is stored as "NEW_LEAD" and must be listed in
+# that form or the mapping silently falls through to "no WA HRMS equivalent".
 CRM_TO_CHANNEL_PARTNER_STATUS = {
     "NEW": "submitted",
-    "NEW LEAD": "submitted",
+    "NEW_LEAD": "submitted",
     "SUBMITTED": "submitted",
     "QUALIFIED": "qualified",
     "WON": "converted",
     "CONVERTED": "converted",
+    "CONVERTED_TO_SUPPORT": "converted",
     "REJECTED": "rejected",
     "LOST": "lost",
 }
@@ -137,7 +141,15 @@ CHANNEL_PARTNER_TERMINAL_CRM_STATUSES = {
 }
 
 # Only these CRM statuses may be downgraded back to the initial submitted state.
-CHANNEL_PARTNER_EARLY_CRM_STATUSES = {"NEW", "NEW LEAD", "ASSIGNED", ""}
+# Values are compared after ``normalize_crm_status`` so the underscore form of
+# "NEW LEAD" must be present.
+CHANNEL_PARTNER_EARLY_CRM_STATUSES = {
+    "NEW",
+    "NEW_LEAD",
+    "SUBMITTED",
+    "ASSIGNED",
+    "",
+}
 
 CHANNEL_PARTNER_REVIEW_NOTE_MAX_LENGTH = 500
 
@@ -320,6 +332,13 @@ def push_channel_partner_status(
             "external status was not changed. Supported CRM statuses: NEW, "
             "QUALIFIED, WON, REJECTED, LOST."
         )
+        logger.info(
+            "WAHRMS lead status sync skipped external_id=%s crm_lead_id=%s "
+            "crm_status=%s reason=no_external_mapping",
+            lead.channel_partner_lead_id,
+            lead.id,
+            target_crm_status,
+        )
         lead.channel_partner_sync_status = SYNC_STATUS_NOT_SYNCED
         lead.channel_partner_pending_status = None
         lead.channel_partner_pending_review_note = None
@@ -333,6 +352,8 @@ def push_channel_partner_status(
             "externalStatus": lead.channel_partner_status,
             "message": message,
         }
+
+    previous_external_status = status_value(lead.channel_partner_status)
 
     # Duplicate guard: a repeated click or render for the same confirmed
     # status must not send another PATCH. A new/changed partner note still
@@ -383,35 +404,13 @@ def push_channel_partner_status(
             ),
         }
 
-    # Guard the documented conversion workflow: converted is only sent when
-    # WA HRMS has already provided the organization and subscription order.
-    if external_status == "converted":
-        mirror = (
-            db.query(ChannelPartnerLead)
-            .filter(ChannelPartnerLead.external_id == lead.channel_partner_lead_id)
-            .first()
-        )
-        if mirror is None or not mirror.organization_id or not mirror.subscription_order_id:
-            message = (
-                "WA HRMS conversion requires a valid organization and subscription "
-                "order. Complete the documented conversion workflow in WA HRMS first."
-            )
-            lead.channel_partner_sync_status = SYNC_STATUS_FAILED
-            lead.channel_partner_last_sync_error = message
-            lead.channel_partner_pending_status = external_status
-            lead.channel_partner_pending_review_note = cleaned_note
-            if commit:
-                db.commit()
-            return {
-                "success": False,
-                "skipped": False,
-                "syncStatus": SYNC_STATUS_FAILED,
-                "externalStatus": lead.channel_partner_status,
-                "message": message,
-            }
-
-    # WA HRMS documents rejected -> lost as invalid. Block it before recording
-    # PENDING so a retry cannot loop forever on a known-invalid transition.
+    # Converted is a supported CRM -> WA HRMS transition and must be attempted
+    # for every WON/converted lead. The previous implementation silently
+    # blocked it unless the mirror already had organization/subscription
+    # references, which meant a newly won partner deal could never sync. WA
+    # HRMS is now the authority: if it requires additional references it
+    # returns a validation error, which is stored as FAILED and shown to the
+    # user instead of being skipped.
     validate_channel_partner_transition(lead, target_crm_status)
 
     # Record PENDING before the network call so a crash cannot leave the UI
@@ -426,6 +425,16 @@ def push_channel_partner_status(
     config = load_effective_config(db)
     if not config.configured:
         message = "WA HRMS Channel Partner API credentials are not configured."
+        logger.warning(
+            "WAHRMS lead status sync failed external_id=%s crm_lead_id=%s "
+            "previous_status=%s crm_status=%s external_status=%s reason=%s",
+            lead.channel_partner_lead_id,
+            lead.id,
+            previous_external_status,
+            target_crm_status,
+            external_status,
+            message,
+        )
         lead.channel_partner_sync_status = SYNC_STATUS_FAILED
         lead.channel_partner_last_sync_error = message
         if commit:
@@ -450,11 +459,16 @@ def push_channel_partner_status(
     except Exception as exc:
         message = _api_error_message(exc)
         logger.warning(
-            "WAHRMS lead status sync failed external_id=%s crm_status=%s "
-            "external_status=%s: %s",
+            "WAHRMS lead status sync failed external_id=%s crm_lead_id=%s "
+            "previous_status=%s crm_status=%s external_status=%s "
+            "http_status=%s response=%s error=%s",
             lead.channel_partner_lead_id,
+            lead.id,
+            previous_external_status,
             target_crm_status,
             external_status,
+            getattr(exc, "status_code", None),
+            getattr(exc, "payload", None),
             message,
         )
         lead.channel_partner_sync_status = SYNC_STATUS_FAILED
@@ -493,6 +507,17 @@ def push_channel_partner_status(
     )
     if commit:
         db.commit()
+    logger.info(
+        "WAHRMS lead status sync succeeded external_id=%s crm_lead_id=%s "
+        "previous_status=%s crm_status=%s external_status=%s "
+        "confirmed_status=%s",
+        lead.channel_partner_lead_id,
+        lead.id,
+        previous_external_status,
+        target_crm_status,
+        external_status,
+        confirmed_status,
+    )
     return {
         "success": True,
         "skipped": False,
@@ -501,6 +526,71 @@ def push_channel_partner_status(
         "requestedStatus": external_status,
         "message": f"WA HRMS lead status updated to {confirmed_status}.",
     }
+
+
+def sync_channel_partner_status_for_lead(
+    db: Session,
+    lead: Lead,
+    *,
+    crm_status: Optional[str] = None,
+    review_note: Optional[str] = None,
+    commit: bool = True,
+) -> Dict[str, Any]:
+    """Common status-sync entry point used by every CRM status-change endpoint.
+
+    Keeping this wrapper in one place guarantees that Admin, Manager, Sales,
+    WON, conversion, rejection/loss and retry flows all use the same mapping,
+    duplicate guard, response handling and error feedback. It never raises for
+    a mapped partner lead: failures are recorded as ``FAILED`` on the lead so
+    the caller can return the CRM change together with the sync result.
+    """
+    if not getattr(lead, "channel_partner_lead_id", None):
+        return {
+            "success": False,
+            "skipped": True,
+            "syncStatus": SYNC_STATUS_NOT_SYNCED,
+            "message": "This lead is not mapped to a WA HRMS Channel Partner lead.",
+        }
+
+    try:
+        result = push_channel_partner_status(
+            db,
+            lead,
+            crm_status=crm_status,
+            review_note=review_note,
+            commit=commit,
+        )
+    except ChannelPartnerStatusSyncError as exc:
+        message = exc.message
+    except Exception as exc:  # never break the CRM status change itself
+        message = _api_error_message(exc)
+        logger.exception(
+            "WAHRMS lead status sync crashed external_id=%s crm_lead_id=%s "
+            "crm_status=%s",
+            getattr(lead, "channel_partner_lead_id", None),
+            getattr(lead, "id", None),
+            crm_status or getattr(lead, "status", None),
+        )
+    else:
+        lead._channel_partner_sync_message = result.get("message")
+        return result
+
+    lead.channel_partner_sync_status = SYNC_STATUS_FAILED
+    lead.channel_partner_last_sync_error = message
+    if commit:
+        db.commit()
+    result = {
+        "success": False,
+        "skipped": False,
+        "syncStatus": SYNC_STATUS_FAILED,
+        "externalStatus": status_value(lead.channel_partner_status),
+        "requestedStatus": map_crm_status_to_channel_partner(
+            crm_status or lead.status
+        ),
+        "message": message,
+    }
+    lead._channel_partner_sync_message = result.get("message")
+    return result
 
 
 def retry_channel_partner_status_sync(db: Session, lead: Lead) -> Dict[str, Any]:
