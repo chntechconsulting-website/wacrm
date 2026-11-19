@@ -112,6 +112,10 @@ CRM_TO_CHANNEL_PARTNER_STATUS = {
     "NEW": "submitted",
     "NEW_LEAD": "submitted",
     "SUBMITTED": "submitted",
+    # INTERESTED is a distinct internal CRM stage, but WA HRMS has no
+    # equivalent: both INTERESTED and QUALIFIED represent the qualified
+    # partner lifecycle state.
+    "INTERESTED": "qualified",
     "QUALIFIED": "qualified",
     "WON": "converted",
     "CONVERTED": "converted",
@@ -329,8 +333,9 @@ def push_channel_partner_status(
     if external_status is None:
         message = (
             f"CRM status '{target_crm_status}' has no WA HRMS equivalent, so the "
-            "external status was not changed. Supported CRM statuses: NEW, "
-            "QUALIFIED, WON, REJECTED, LOST."
+            "external status was not changed. Supported mappings: NEW/NEW LEAD "
+            "-> submitted, INTERESTED/QUALIFIED -> qualified, WON/CONVERTED -> "
+            "converted, REJECTED -> rejected, LOST -> lost."
         )
         logger.info(
             "WAHRMS lead status sync skipped external_id=%s crm_lead_id=%s "

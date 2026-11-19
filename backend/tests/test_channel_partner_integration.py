@@ -60,10 +60,12 @@ from routers.workflow import confirm_finance_payment, mark_deal_won_workflow
 from schemas.lead import LeadStatusRequest, LeadUpdate
 from schemas.workflow import DealWonRequest, FinancePaymentConfirmRequest
 from routers.channel_partners import (
+    ChannelPartnerLeadStatusRequest,
     _lead_payload,
     _page_meta,
     require_channel_partner_document_access,
     require_channel_partner_view,
+    update_partner_lead_status,
 )
 from services.channel_partner_sync import (
     CHANNEL_PARTNER_STATUSES,
@@ -935,6 +937,10 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
             ("submitted", None),
         )
         self.assertEqual(
+            validate_channel_partner_status_change("INTERESTED", None),
+            ("qualified", None),
+        )
+        self.assertEqual(
             validate_channel_partner_status_change("QUALIFIED", "  "),
             ("qualified", None),
         )
@@ -1054,6 +1060,7 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
             ("NEW LEAD", "qualified", "submitted", None),
             ("NEW_LEAD", "qualified", "submitted", None),
             ("SUBMITTED", "qualified", "submitted", None),
+            ("INTERESTED", "submitted", "qualified", None),
             ("QUALIFIED", "submitted", "qualified", "Qualified after review"),
             ("WON", "submitted", "converted", None),
             ("CONVERTED", "submitted", "converted", None),
@@ -1221,6 +1228,106 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
         )
         self.db.refresh(lead)
         self.assertEqual(lead.channel_partner_status, "submitted")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+
+    def test_interested_status_syncs_as_qualified(self):
+        self._reset_partner_data()
+        lead, _ = self._seed_partner_lead(external_status="submitted")
+        user, _ = self._make_user("cp_interested", "ADMIN")
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            result = change_lead_status(
+                lead_id=lead.id,
+                status_req=LeadStatusRequest(status="INTERESTED"),
+                db=self.db,
+                current_user=user,
+            )
+
+        self.assertEqual(result.status, "INTERESTED")
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "qualified",
+                "review_note": None,
+            }],
+        )
+        self.db.refresh(lead)
+        self.assertEqual(lead.status, "INTERESTED")
+        self.assertEqual(lead.channel_partner_status, "qualified")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+
+    def test_interested_after_rejected_surfaces_wahrms_rejection(self):
+        self._reset_partner_data()
+        lead, _ = self._seed_partner_lead(external_status="rejected")
+        user, _ = self._make_user("cp_interested_rejected", "ADMIN")
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = ChannelPartnerAPIError(
+            "Invalid transition from rejected to qualified.",
+            status_code=422,
+        )
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            result = change_lead_status(
+                lead_id=lead.id,
+                status_req=LeadStatusRequest(status="INTERESTED"),
+                db=self.db,
+                current_user=user,
+            )
+
+        self.assertEqual(result.status, "INTERESTED")
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "qualified",
+                "review_note": None,
+            }],
+        )
+        self.db.refresh(lead)
+        self.assertEqual(lead.status, "INTERESTED")
+        self.assertEqual(lead.channel_partner_status, "rejected")
+        self.assertEqual(lead.channel_partner_sync_status, "FAILED")
+        self.assertEqual(lead.channel_partner_pending_status, "qualified")
+        self.assertIn(
+            "Invalid transition from rejected to qualified",
+            lead.channel_partner_last_sync_error,
+        )
+
+    def test_partner_lead_endpoint_keeps_interested_and_pushes_qualified(self):
+        self._reset_partner_data()
+        lead, _ = self._seed_partner_lead(external_status="submitted")
+        user, _ = self._make_user("cp_endpoint_interested", "ADMIN")
+
+        FakeChannelPartnerClient.calls = []
+        FakeChannelPartnerClient.error = None
+        config_patch, client_patch = self._patch_client()
+        with config_patch, client_patch:
+            response = update_partner_lead_status(
+                lead_id="lead-cp-1",
+                payload=ChannelPartnerLeadStatusRequest(status="INTERESTED"),
+                db=self.db,
+                current_user=user,
+            )
+
+        self.assertEqual(response["crmStatus"], "INTERESTED")
+        self.assertEqual(response["status"], "qualified")
+        self.assertEqual(response["syncStatus"], "SYNCED")
+        self.assertEqual(
+            FakeChannelPartnerClient.calls,
+            [{
+                "lead_id": "lead-cp-1",
+                "status": "qualified",
+                "review_note": None,
+            }],
+        )
+        self.db.refresh(lead)
+        self.assertEqual(lead.status, "INTERESTED")
+        self.assertEqual(lead.channel_partner_status, "qualified")
         self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
 
     def test_mobile_workflow_won_endpoint_syncs_converted(self):

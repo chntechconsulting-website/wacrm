@@ -147,6 +147,7 @@ const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'CHANNEL_PARTNER', 'M
 // and is therefore not offered here.
 const CHANNEL_PARTNER_SYNC_STATUS_OPTIONS = [
   { value: 'NEW', label: 'NEW — WA HRMS: submitted' },
+  { value: 'INTERESTED', label: 'INTERESTED — WA HRMS: qualified' },
   { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
   { value: 'REJECTED', label: 'REJECTED — WA HRMS: rejected' },
   { value: 'LOST', label: 'LOST — WA HRMS: lost' }
@@ -2194,7 +2195,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
               <div style={{ color: '#047857', fontSize: '0.78rem', fontWeight: 600 }}>{cpSyncMessage}</div>
             )}
             <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
-              NEW and NEW LEAD map to submitted, QUALIFIED to qualified, REJECTED to rejected and LOST to lost.
+              NEW and NEW LEAD map to submitted, INTERESTED and QUALIFIED to qualified, REJECTED to rejected and LOST to lost.
               Converted is sent through the All Leads WON workflow and is validated by WA HRMS.
               WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed outcome
               in the CRM without sending an invalid upstream change.

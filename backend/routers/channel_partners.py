@@ -1000,21 +1000,30 @@ def update_partner_lead_status(
         raise HTTPException(status_code=400, detail="A CRM status is required.")
 
     # Accept either the external status name (submitted/qualified/rejected/lost)
-    # or a CRM status value (NEW, NEW LEAD, QUALIFIED, REJECTED, LOST). Both are
-    # normalised through the same mapping used by the All Leads endpoints.
+    # or a CRM status value (NEW, NEW LEAD, INTERESTED, QUALIFIED, REJECTED,
+    # LOST). Both are normalised through the same mapping used by All Leads.
     if raw_status.lower() in CHANNEL_PARTNER_STATUSES:
         external_status = raw_status.lower()
         crm_status = CHANNEL_PARTNER_TO_CRM_STATUS[external_status]
     else:
         crm_status = normalize_crm_status(raw_status)
         external_status = map_crm_status_to_channel_partner(crm_status)
+        # Alias CRM values are stored canonically (NEW LEAD -> NEW). Distinct
+        # internal stages such as INTERESTED keep their own CRM status while
+        # sharing the external qualified state.
+        if (
+            external_status is not None
+            and crm_status in {"NEW_LEAD", "SUBMITTED"}
+        ):
+            crm_status = CHANNEL_PARTNER_TO_CRM_STATUS[external_status]
 
     if external_status is None:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"CRM status '{payload.status}' cannot be sent to WA HRMS from "
-                "Partner Leads. Use NEW, NEW LEAD, QUALIFIED, REJECTED or LOST."
+                "Partner Leads. Use NEW, NEW LEAD, INTERESTED, QUALIFIED, "
+                "REJECTED or LOST."
             ),
         )
     if external_status == "converted":
@@ -1025,10 +1034,6 @@ def update_partner_lead_status(
                 "so the CRM finance and Support handoffs stay consistent."
             ),
         )
-
-    # Store the canonical CRM status for the confirmed external status (for
-    # example NEW LEAD -> submitted -> NEW).
-    crm_status = CHANNEL_PARTNER_TO_CRM_STATUS[external_status]
 
     # Validate the partner-facing note and the documented WA HRMS transition
     # before committing the CRM status.

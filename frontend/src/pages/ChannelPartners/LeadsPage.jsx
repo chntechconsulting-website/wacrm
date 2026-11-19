@@ -35,6 +35,7 @@ const STATUS_OPTIONS = [
 // finance and Support handoffs stay consistent.
 const CRM_STATUS_OPTIONS = [
   { value: 'NEW', label: 'NEW / NEW LEAD — WA HRMS: submitted' },
+  { value: 'INTERESTED', label: 'INTERESTED — WA HRMS: qualified' },
   { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
   { value: 'REJECTED', label: 'REJECTED — WA HRMS: rejected' },
   { value: 'LOST', label: 'LOST — WA HRMS: lost' },
@@ -451,7 +452,7 @@ export default function ChannelPartnerLeadsPage() {
                   </div>
                 ) : null}
                 <p className="cp-muted" style={{ marginTop: '8px' }}>
-                  NEW and NEW LEAD → submitted · QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
+                  NEW and NEW LEAD → submitted · INTERESTED and QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
                   WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed
                   outcome in the CRM without sending an invalid upstream change. Converted is sent
                   through the All Leads WON workflow and is validated by WA HRMS.
