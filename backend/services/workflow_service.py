@@ -438,7 +438,15 @@ class WorkflowService:
                 company_name=handoff.company_name or (lead_obj.company if lead_obj else ""),
                 phone=handoff.phone or (lead_obj.phone if lead_obj else ""),
                 email=handoff.email or (lead_obj.email if lead_obj else ""),
-                address=lead_obj.address if lead_obj and hasattr(lead_obj, 'address') else (cust_obj.address if cust_obj else ""),
+                # Customer stores the billing city in ``location``; Lead also
+                # exposes ``location`` rather than ``address``. Prefer the
+                # handoff's captured billing address, then fall back safely.
+                address=(
+                    handoff.address
+                    or (getattr(lead_obj, "location", None) if lead_obj else None)
+                    or (getattr(cust_obj, "location", None) if cust_obj else None)
+                    or ""
+                ),
                 state="Tamil Nadu",
                 state_code="33",
                 gstin=cust_obj.gstin if cust_obj and hasattr(cust_obj, 'gstin') else "",

@@ -1162,6 +1162,53 @@ class SalesSupportPurchaseHandoverTests(unittest.TestCase):
         self.assertEqual(updated.status, "PAID")
         self.assertEqual(invoice.prepared_by, self.admin_emp.name)
 
+    def test_confirm_payment_creates_invoice_with_customer_location_fallback(self):
+        self._run_won()
+        handoff = (
+            self.db.query(FinanceHandoff)
+            .filter(FinanceHandoff.lead_id == self.lead.id)
+            .one()
+        )
+        customer = (
+            self.db.query(Customer)
+            .filter(Customer.id == handoff.customer_id)
+            .one()
+        )
+
+        # No invoice exists yet, so this exercises the invoice-creation branch
+        # that previously read Customer.address, an attribute the model does
+        # not define. The handoff and lead have no address, leaving the linked
+        # Customer's billing city as the only available fallback.
+        handoff.address = None
+        self.lead.location = None
+        customer.location = "Coimbatore"
+        self.db.commit()
+
+        self.assertFalse(hasattr(customer, "address"))
+
+        updated = WorkflowService.confirm_finance_payment(
+            db=self.db,
+            handoff_id=handoff.id,
+            payment_data={
+                "paid_amount": 215000,
+                "invoice_number": "CHN/INV/26/8888",
+                "payment_mode": "Bank Transfer",
+            },
+            current_user=self.admin_user,
+        )
+
+        invoice = (
+            self.db.query(Quotation)
+            .filter(
+                Quotation.lead_id == self.lead.id,
+                Quotation.doc_type == "invoice",
+            )
+            .one()
+        )
+        self.assertEqual(updated.status, "PAID")
+        self.assertEqual(invoice.doc_number, "CHN/INV/26/8888")
+        self.assertEqual(invoice.address, "Coimbatore")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
