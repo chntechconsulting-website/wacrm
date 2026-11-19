@@ -907,30 +907,38 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
         with self.assertRaises(ChannelPartnerStatusSyncError):
             validate_channel_partner_status_change(blank.status, blank.review_note)
 
-    def test_rejected_to_lost_is_blocked_before_any_patch(self):
+    def test_rejected_to_lost_is_recorded_locally_without_a_patch(self):
         lead, _ = self._seed_partner_lead(external_status="rejected")
         FakeChannelPartnerClient.calls = []
         FakeChannelPartnerClient.error = None
 
-        with self.assertRaises(ChannelPartnerStatusSyncError) as ctx:
-            push_channel_partner_status(
-                self.db,
-                lead,
-                crm_status="LOST",
-                review_note="Final review completed.",
-            )
+        # The CRM treats rejected and lost as the same closed outcome, so the
+        # local status change is accepted without an invalid upstream PATCH.
+        validate_channel_partner_transition(lead, "LOST")
+        result = push_channel_partner_status(
+            self.db,
+            lead,
+            crm_status="LOST",
+            review_note="Final review completed.",
+        )
 
-        self.assertIn("rejected lead cannot become lost", str(ctx.exception))
+        self.assertTrue(result["success"])
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["syncStatus"], "SYNCED")
+        self.assertEqual(result["externalStatus"], "rejected")
+        self.assertEqual(result["requestedStatus"], "lost")
+        self.assertIn("same closed outcome", result["message"])
         self.assertEqual(FakeChannelPartnerClient.calls, [])
-        self.db.refresh(lead)
-        # The confirmed external status is untouched and the invalid attempt
-        # never reaches PENDING.
-        self.assertEqual(lead.channel_partner_status, "rejected")
-        self.assertIsNone(lead.channel_partner_pending_status)
-        self.assertNotEqual(lead.channel_partner_sync_status, "PENDING")
-        self.assertNotEqual(lead.channel_partner_sync_status, "FAILED")
 
-        # Other transitions are not blocked by this documented rule.
+        self.db.refresh(lead)
+        # The external status stays rejected; the CRM status change is
+        # recorded as synchronized without pretending WA HRMS changed.
+        self.assertEqual(lead.channel_partner_status, "rejected")
+        self.assertEqual(lead.channel_partner_sync_status, "SYNCED")
+        self.assertIsNone(lead.channel_partner_pending_status)
+        self.assertIsNone(lead.channel_partner_last_sync_error)
+
+        # Other transitions remain valid for the mapping layer.
         validate_channel_partner_transition(lead, "REJECTED")
         validate_channel_partner_transition(lead, "QUALIFIED")
 

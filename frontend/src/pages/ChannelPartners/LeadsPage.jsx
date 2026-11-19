@@ -445,8 +445,10 @@ export default function ChannelPartnerLeadsPage() {
                 ) : null}
                 <p className="cp-muted" style={{ marginTop: '8px' }}>
                   NEW → submitted · QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
-                  Converted is only sent through the All Leads WON workflow once WA HRMS returns the
-                  organization and subscription order references.
+                  WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed
+                  outcome in the CRM without sending an invalid upstream change. Converted is only
+                  sent through the All Leads WON workflow once WA HRMS returns the organization and
+                  subscription order references.
                 </p>
               </Panel>
             )}

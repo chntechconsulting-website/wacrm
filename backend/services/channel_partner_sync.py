@@ -205,21 +205,15 @@ def validate_channel_partner_transition(
     lead: Lead,
     crm_status: Optional[str],
 ) -> None:
-    """Reject status transitions that WA HRMS documents as invalid.
+    """Validate a CRM status transition for a mapped partner lead.
 
-    WA HRMS treats ``rejected`` as a terminal partner-facing state and returns
-    ``A rejected lead cannot become lost`` for rejected -> lost. Checking this
-    before the CRM status is committed avoids a local status that can never be
-    synchronized.
+    WA HRMS keeps ``rejected`` and ``lost`` as separate external states and
+    refuses a ``rejected -> lost`` PATCH. The CRM treats both as the same
+    closed outcome, so the local transition is allowed and
+    ``push_channel_partner_status`` skips the invalid upstream PATCH. WA HRMS
+    remains the system of record for the external status.
     """
-    target_external = map_crm_status_to_channel_partner(crm_status)
-    current_external = status_value(lead.channel_partner_status)
-    if current_external == "rejected" and target_external == "lost":
-        raise ChannelPartnerStatusSyncError(
-            "WA HRMS does not allow a rejected lead to become lost. "
-            "Keep or set the CRM status to REJECTED, or resolve the rejection "
-            "in WA HRMS first. (WA HRMS: A rejected lead cannot become lost.)"
-        )
+    return None
 
 
 def _confirmed_external_status(response: Any, fallback: str) -> str:
@@ -357,6 +351,36 @@ def push_channel_partner_status(
             "syncStatus": SYNC_STATUS_SYNCED,
             "externalStatus": external_status,
             "message": "CRM and WA HRMS are already synchronized for this status.",
+        }
+
+    # WA HRMS keeps rejected and lost as distinct external states and refuses
+    # a rejected -> lost PATCH. The CRM treats both as the same closed outcome,
+    # so record the local change without sending an invalid transition.
+    current_external = status_value(lead.channel_partner_status)
+    if (
+        current_external in {"rejected", "lost"}
+        and external_status in {"rejected", "lost"}
+        and current_external != external_status
+    ):
+        synced_at = get_ist_now()
+        lead.channel_partner_sync_status = SYNC_STATUS_SYNCED
+        lead.channel_partner_last_synced_at = synced_at
+        lead.channel_partner_last_sync_error = None
+        lead.channel_partner_pending_status = None
+        lead.channel_partner_pending_review_note = None
+        if commit:
+            db.commit()
+        return {
+            "success": True,
+            "skipped": True,
+            "syncStatus": SYNC_STATUS_SYNCED,
+            "externalStatus": current_external,
+            "requestedStatus": external_status,
+            "message": (
+                "CRM status saved. WA HRMS keeps this lead as "
+                f"{current_external}; rejected and lost are treated as the "
+                "same closed outcome, so no upstream status change was sent."
+            ),
         }
 
     # Guard the documented conversion workflow: converted is only sent when

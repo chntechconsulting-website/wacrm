@@ -2184,8 +2184,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             )}
             <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
               NEW maps to submitted, QUALIFIED to qualified, REJECTED to rejected and LOST to lost.
-              Converted is only sent through the All Leads WON workflow once the WA HRMS organization and
-              subscription order references exist.
+              WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed outcome
+              in the CRM without sending an invalid upstream change. Converted is only sent through the
+              All Leads WON workflow once the WA HRMS organization and subscription order references exist.
             </div>
           </form>
         </div>
