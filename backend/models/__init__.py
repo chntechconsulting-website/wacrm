@@ -35,6 +35,21 @@ from models.support import (
     SupportCoverageAssignment,
     SupportInteraction,
 )
+from models.channel_partner import (
+    ChannelPartner,
+    ChannelPartnerApplication,
+    ChannelPartnerClientAttribution,
+    ChannelPartnerCommission,
+    ChannelPartnerCoupon,
+    ChannelPartnerIntegration,
+    ChannelPartnerLead,
+    ChannelPartnerLogin,
+    ChannelPartnerPayout,
+    ChannelPartnerSyncCheckpoint,
+    ChannelPartnerSyncRun,
+    ChannelPartnerWebhookEvent,
+    ChannelPartnerWebhookRejection,
+)
 
 __all__ = [
     "Base",
@@ -85,4 +100,17 @@ __all__ = [
     "EmployeeLeave",
     "SupportCoverageAssignment",
     "SupportClientAssignment",
+    "ChannelPartner",
+    "ChannelPartnerApplication",
+    "ChannelPartnerClientAttribution",
+    "ChannelPartnerCommission",
+    "ChannelPartnerCoupon",
+    "ChannelPartnerIntegration",
+    "ChannelPartnerLead",
+    "ChannelPartnerLogin",
+    "ChannelPartnerPayout",
+    "ChannelPartnerSyncCheckpoint",
+    "ChannelPartnerSyncRun",
+    "ChannelPartnerWebhookEvent",
+    "ChannelPartnerWebhookRejection",
 ]

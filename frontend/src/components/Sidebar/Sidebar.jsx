@@ -46,7 +46,12 @@ import {
   ShoppingBag,
   RefreshCw,
   RotateCcw,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Handshake,
+  Building2,
+  Ticket,
+  BadgePercent,
+  Wallet
 } from 'lucide-react';
 
 // Lite tone color presets for testing
@@ -335,6 +340,7 @@ const Sidebar = ({
     support: true,
     monitoring: true,
     reports: true,
+    channelPartners: true,
     settings: true
   });
 
@@ -357,6 +363,8 @@ const Sidebar = ({
       setOpenSections(prev => ({ ...prev, monitoring: true }));
     } else if (path === '/reports' || path === '/analytics') {
       setOpenSections(prev => ({ ...prev, reports: true }));
+    } else if (path.startsWith('/channel-partners')) {
+      setOpenSections(prev => ({ ...prev, channelPartners: true }));
     } else if (path.startsWith('/settings') || path === '/users' || path === '/notifications' || path === '/profile' || path === '/admin') {
       setOpenSections(prev => ({ ...prev, settings: true }));
     }
@@ -893,6 +901,99 @@ const Sidebar = ({
                   exactMatch={true}
                   icon={Database}
                   label="Data Export"
+                  isCollapsed={isCollapsed}
+                  onClick={handleItemClick}
+                />
+              )}
+            </SidebarSection>
+          )}
+
+          {/* Section: CHANNEL PARTNERS (read-only WA HRMS mirror) */}
+          {(!isMetaReviewer && hasModule('channel_partners')) && (
+            <SidebarSection
+              title="CHANNEL PARTNERS"
+              isOpen={openSections.channelPartners}
+              onToggle={() => toggleSection('channelPartners')}
+              isCollapsed={isCollapsed}
+            >
+              <SidebarItem
+                to="/channel-partners"
+                exactMatch={true}
+                icon={PieChart}
+                label="Overview"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/partners"
+                exactMatch={false}
+                icon={Handshake}
+                label="Partners"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/applications"
+                exactMatch={true}
+                icon={FileText}
+                label="Applications"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/leads"
+                exactMatch={true}
+                icon={UserCheck}
+                label="Partner Leads"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/clients"
+                exactMatch={true}
+                icon={Building2}
+                label="Partner Clients"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/coupons"
+                exactMatch={true}
+                icon={Ticket}
+                label="Partner Coupons"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/commissions"
+                exactMatch={true}
+                icon={BadgePercent}
+                label="Commissions"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/payouts"
+                exactMatch={true}
+                icon={Wallet}
+                label="Payouts"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              <SidebarItem
+                to="/channel-partners/events"
+                exactMatch={true}
+                icon={Activity}
+                label="Partner Activity / Events"
+                isCollapsed={isCollapsed}
+                onClick={handleItemClick}
+              />
+              {isAdmin && (
+                <SidebarItem
+                  to="/channel-partners/settings"
+                  exactMatch={true}
+                  icon={SettingsIcon}
+                  label="Integration Settings"
                   isCollapsed={isCollapsed}
                   onClick={handleItemClick}
                 />

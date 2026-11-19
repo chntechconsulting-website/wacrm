@@ -31,6 +31,27 @@ class Settings(BaseSettings):
     IVR_API_SECRET: str = os.getenv("IVR_API_SECRET", "")
     IVR_BASE_URL: str = os.getenv("IVR_BASE_URL", "")
 
+    # WA HRMS Channel Partner Integration (server-to-server only).
+    # The API key and webhook signing secret must never reach the browser.
+    WAHRMS_CHANNEL_PARTNER_BASE_URL: str = os.getenv(
+        "WAHRMS_CHANNEL_PARTNER_BASE_URL",
+        "https://api.wahrms.com/api/v1/integrations/channel-partners",
+    )
+    WAHRMS_CHANNEL_PARTNER_API_KEY: str = os.getenv(
+        "WAHRMS_CHANNEL_PARTNER_API_KEY", ""
+    )
+    WAHRMS_CHANNEL_PARTNER_WEBHOOK_SECRET: str = os.getenv(
+        "WAHRMS_CHANNEL_PARTNER_WEBHOOK_SECRET", ""
+    )
+    # Optional public URL used only for display in Integration Settings.
+    WAHRMS_CHANNEL_PARTNER_WEBHOOK_URL: str = os.getenv(
+        "WAHRMS_CHANNEL_PARTNER_WEBHOOK_URL", ""
+    )
+    # Recovery polling. Webhooks remain the primary update path.
+    WAHRMS_CHANNEL_PARTNER_POLL_INTERVAL_SECONDS: int = int(
+        os.getenv("WAHRMS_CHANNEL_PARTNER_POLL_INTERVAL_SECONDS", "300")
+    )
+
     UPLOAD_DIR: str = "uploads"
     # Public origin used to turn stored media paths such as
     # /uploads/recordings/... into absolute URLs for the web and mobile apps.

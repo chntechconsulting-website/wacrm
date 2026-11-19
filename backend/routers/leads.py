@@ -51,6 +51,13 @@ from services.delete_request_service import handle_entity_deletion
 from services.audit import log_audit
 from services.reinquiry_service import ReInquiryService
 from services.followup_visibility_service import apply_followup_visibility_filter
+from services.channel_partner_sync import (
+    ChannelPartnerStatusSyncError,
+    push_channel_partner_status,
+    retry_channel_partner_status_sync,
+    validate_channel_partner_status_change,
+    validate_channel_partner_transition,
+)
 from services.purchase_details_service import build_support_purchase_details
 from services.support_service import (
     batch_customer_pocs,
@@ -603,6 +610,19 @@ def build_lead_out(
         latest_enquiry_date=getattr(lead, "latest_enquiry_date", None) or lead.created_at,
         previous_sources=getattr(lead, "previous_sources", None) or lead.source,
         latest_source=getattr(lead, "latest_source", None) or lead.source,
+        # WA HRMS Channel Partner mapping (kept separate from CRM status)
+        channel_partner_lead_id=getattr(lead, "channel_partner_lead_id", None),
+        channel_partner_id=getattr(lead, "channel_partner_id", None),
+        channel_partner_name=getattr(lead, "channel_partner_name", None),
+        channel_partner_code=getattr(lead, "channel_partner_code", None),
+        channel_partner_status=getattr(lead, "channel_partner_status", None),
+        channel_partner_details_json=getattr(lead, "channel_partner_details_json", None),
+        channel_partner_sync_status=getattr(lead, "channel_partner_sync_status", None),
+        channel_partner_last_synced_at=getattr(lead, "channel_partner_last_synced_at", None),
+        channel_partner_last_sync_error=getattr(lead, "channel_partner_last_sync_error", None),
+        channel_partner_pending_status=getattr(lead, "channel_partner_pending_status", None),
+        channel_partner_status_updated_at=getattr(lead, "channel_partner_status_updated_at", None),
+        channel_partner_sync_message=getattr(lead, "_channel_partner_sync_message", None),
         # QuoteTask Integration Mapping Fields
         quotetask_quotation_id=lead.quotetask_quotation_id,
         quotetask_quotation_number=lead.quotetask_quotation_number,
@@ -808,6 +828,12 @@ def list_leads(
             query = query.filter(or_(Lead.source == "MANUAL", Lead.source == "Manual"))
         elif src_upper in ["EXCEL", "IMPORT"]:
             query = query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel"))
+        elif src_upper in ["CHANNEL_PARTNER", "CHANNEL PARTNER", "CHANNELPARTNER", "CHANNEL-PARTNER"]:
+            query = query.filter(or_(
+                Lead.source == "CHANNEL_PARTNER",
+                Lead.source == "Channel Partner",
+                Lead.source == "ChannelPartner",
+            ))
         else:
             query = query.filter(Lead.source.ilike(eff_source))
 
@@ -918,7 +944,8 @@ def get_leads_stats(
         else:
             return {
                 "allLeads": 0, "metaLeads": 0, "websiteLeads": 0, "manualLeads": 0,
-                "excelLeads": 0, "reinquiryLeads": 0, "myLeads": 0, "callLogs": 0, "followups": 0
+                "excelLeads": 0, "channelPartnerLeads": 0, "reinquiryLeads": 0,
+                "myLeads": 0, "callLogs": 0, "followups": 0
             }
     elif scope == "team":
         team_ids = get_team_employee_ids_from_user(current_user, db)
@@ -945,6 +972,11 @@ def get_leads_stats(
         func.coalesce(func.sum(case((or_(
             Lead.source == "EXCEL", Lead.source == "Excel"
         ), 1), else_=0)), 0).label("excel_count"),
+        func.coalesce(func.sum(case((or_(
+            Lead.source == "CHANNEL_PARTNER",
+            Lead.source == "Channel Partner",
+            Lead.source == "ChannelPartner",
+        ), 1), else_=0)), 0).label("channel_partner_count"),
         func.coalesce(func.sum(case((Lead.is_reinquiry.is_(True), 1), else_=0)), 0).label("reinquiry_count"),
         func.coalesce(func.sum(case((or_(
             Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "New"
@@ -981,6 +1013,7 @@ def get_leads_stats(
     website_count = int(metrics.website_count or 0)
     manual_count = int(metrics.manual_count or 0)
     excel_count = int(metrics.excel_count or 0)
+    channel_partner_count = int(metrics.channel_partner_count or 0)
     reinquiry_count = int(metrics.reinquiry_count or 0)
     new_count = int(metrics.new_count or 0)
     in_progress_count = int(metrics.in_progress_count or 0)
@@ -1020,6 +1053,7 @@ def get_leads_stats(
         "websiteLeads": website_count,
         "manualLeads": manual_count,
         "excelLeads": excel_count,
+        "channelPartnerLeads": channel_partner_count,
         "reinquiryLeads": reinquiry_count,
         "newLeads": new_count,
         "inProgressLeads": in_progress_count,
@@ -1083,6 +1117,12 @@ def list_my_leads(
             query = query.filter(or_(Lead.source == "MANUAL", Lead.source == "Manual"))
         elif src_upper in ["EXCEL", "IMPORT"]:
             query = query.filter(or_(Lead.source == "EXCEL", Lead.source == "Excel"))
+        elif src_upper in ["CHANNEL_PARTNER", "CHANNEL PARTNER", "CHANNELPARTNER", "CHANNEL-PARTNER"]:
+            query = query.filter(or_(
+                Lead.source == "CHANNEL_PARTNER",
+                Lead.source == "Channel Partner",
+                Lead.source == "ChannelPartner",
+            ))
         else:
             query = query.filter(Lead.source.ilike(source_filter))
 
@@ -2260,6 +2300,25 @@ def update_lead(
         lead_in.status is not None
         and normalize_lead_status(lead_in.status) == STATUS_CONVERTED_TO_SUPPORT
     )
+    if (
+        lead_in.status is not None
+        and not conversion_requested
+        and getattr(lead, "channel_partner_lead_id", None)
+        and lead_in.status != old_status
+    ):
+        # Rejections and losses require a partner-visible reason. Clients using
+        # this generic update endpoint can supply it as ``review_note``; the
+        # dedicated status endpoint remains the preferred path.
+        try:
+            validate_channel_partner_status_change(
+                lead_in.status, lead_in.review_note
+            )
+            validate_channel_partner_transition(lead, lead_in.status)
+        except ChannelPartnerStatusSyncError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=exc.message,
+            )
     if lead_in.status is not None and not conversion_requested:
         lead.status = lead_in.status
         if is_trial_status(lead.status) and not getattr(lead, "trial_start_date", None):
@@ -2464,6 +2523,12 @@ def update_lead(
                 detail=str(exc)
             )
         db.refresh(lead)
+        if lead.channel_partner_lead_id:
+            result = push_channel_partner_status(
+                db, lead, crm_status=lead.status, review_note=None
+            )
+            db.refresh(lead)
+            lead._channel_partner_sync_message = result.get("message")
         return build_lead_out(lead, current_user, db)
 
     log_lead_activity(
@@ -2486,6 +2551,28 @@ def update_lead(
         entity_id=lead.id,
         details=f"Lead #{lead.id} ({lead.name}) updated by {current_user.username}."
     )
+
+    # The edit form can also change the status. Keep the same two-way contract
+    # as the dedicated status endpoint for mapped partner leads.
+    if (
+        lead.channel_partner_lead_id
+        and lead_in.status is not None
+        and lead_in.status != old_status
+    ):
+        try:
+            result = push_channel_partner_status(
+                db,
+                lead,
+                crm_status=lead.status,
+                review_note=lead_in.review_note,
+            )
+        except ChannelPartnerStatusSyncError as exc:
+            lead.channel_partner_sync_status = "FAILED"
+            lead.channel_partner_last_sync_error = exc.message
+            db.commit()
+            result = {"message": exc.message}
+        db.refresh(lead)
+        lead._channel_partner_sync_message = result.get("message")
 
     return build_lead_out(lead, current_user, db)
 
@@ -2596,6 +2683,20 @@ def change_lead_status(
 
     old_status = lead.status
     new_status = status_req.status
+    is_channel_partner_lead = bool(getattr(lead, "channel_partner_lead_id", None))
+
+    # Validate the partner-facing status mapping before committing the CRM
+    # change. A missing rejection/lost reason must be corrected by the user,
+    # not silently pushed to the partner.
+    if is_channel_partner_lead:
+        try:
+            validate_channel_partner_status_change(new_status, status_req.review_note)
+            validate_channel_partner_transition(lead, new_status)
+        except ChannelPartnerStatusSyncError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=exc.message,
+            )
 
     if normalize_lead_status(new_status) == STATUS_CONVERTED_TO_SUPPORT:
         from services.workflow_service import WorkflowService
@@ -2616,6 +2717,12 @@ def change_lead_status(
                 detail=str(exc)
             )
         db.refresh(lead)
+        if lead.channel_partner_lead_id:
+            result = push_channel_partner_status(
+                db, lead, crm_status=lead.status, review_note=None
+            )
+            db.refresh(lead)
+            lead._channel_partner_sync_message = result.get("message")
         return build_lead_out(lead, current_user, db)
 
     lead.status = new_status
@@ -2661,6 +2768,66 @@ def change_lead_status(
 
     db.commit()
     db.refresh(lead)
+
+    # Two-way Channel Partner sync: the CRM status is already committed, so an
+    # upstream failure is recorded as FAILED/PENDING rather than rolling back
+    # the user's CRM change.
+    if is_channel_partner_lead:
+        try:
+            result = push_channel_partner_status(
+                db,
+                lead,
+                crm_status=new_status,
+                review_note=status_req.review_note,
+            )
+        except ChannelPartnerStatusSyncError as exc:
+            lead.channel_partner_sync_status = "FAILED"
+            lead.channel_partner_last_sync_error = exc.message
+            db.commit()
+            result = {"message": exc.message}
+        db.refresh(lead)
+        lead._channel_partner_sync_message = result.get("message")
+
+    return build_lead_out(lead, current_user, db)
+
+@router.post("/{lead_id}/channel-partner/retry-sync", response_model=LeadOut)
+def retry_channel_partner_sync(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retry the last failed/pending WA HRMS status push for a partner lead."""
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if not lead.channel_partner_lead_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This lead is not mapped to a WA HRMS Channel Partner lead.",
+        )
+
+    if _is_support_actor(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Support team cannot modify the Sales lead status.",
+        )
+
+    norm_role = normalize_role(current_user.role)
+    if current_user.role == "EMPLOYEE" or norm_role == ROLE_SALES_EXECUTIVE:
+        current_emp = get_employee_for_user(current_user, db)
+        if not current_emp or lead.assigned_to != current_emp.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You can only update status for leads assigned to you.",
+            )
+
+    try:
+        result = retry_channel_partner_status_sync(db, lead)
+    except ChannelPartnerStatusSyncError as exc:
+        raise HTTPException(status_code=400, detail=exc.message)
+
+    db.refresh(lead)
+    lead._channel_partner_sync_message = result.get("message")
     return build_lead_out(lead, current_user, db)
 
 @router.get("/{lead_id}/proformas")
@@ -2713,6 +2880,15 @@ def mark_deal_won_with_support_manager(
             won_data=payload.dict(exclude_unset=True),
             current_user=current_user
         )
+        # Converted is only pushed when WA HRMS already supplied the required
+        # organization and subscription order references.
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if lead and lead.channel_partner_lead_id:
+            sync_result = push_channel_partner_status(
+                db, lead, crm_status="WON", review_note=None
+            )
+            if isinstance(result, dict):
+                result["channelPartnerSync"] = sync_result
         return result
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))

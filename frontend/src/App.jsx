@@ -69,6 +69,19 @@ const EmployeeDetailPage = lazyPage(() => import('./pages/EmployeeMonitoring/Emp
 // WA QUOTES & INVOICES Pages
 const WAQuotesPage = lazyPage(() => import('./pages/WAQuotes/WAQuotesPage'));
 
+// CHANNEL PARTNERS (read-only WA HRMS mirror)
+const ChannelPartnerOverviewPage = lazyPage(() => import('./pages/ChannelPartners/OverviewPage'));
+const ChannelPartnersListPage = lazyPage(() => import('./pages/ChannelPartners/PartnersPage'));
+const ChannelPartnerDetailPage = lazyPage(() => import('./pages/ChannelPartners/PartnerDetailPage'));
+const ChannelPartnerApplicationsPage = lazyPage(() => import('./pages/ChannelPartners/ApplicationsPage'));
+const ChannelPartnerLeadsPage = lazyPage(() => import('./pages/ChannelPartners/LeadsPage'));
+const ChannelPartnerClientsPage = lazyPage(() => import('./pages/ChannelPartners/ClientsPage'));
+const ChannelPartnerCouponsPage = lazyPage(() => import('./pages/ChannelPartners/CouponsPage'));
+const ChannelPartnerCommissionsPage = lazyPage(() => import('./pages/ChannelPartners/CommissionsPage'));
+const ChannelPartnerPayoutsPage = lazyPage(() => import('./pages/ChannelPartners/PayoutsPage'));
+const ChannelPartnerEventsPage = lazyPage(() => import('./pages/ChannelPartners/EventsPage'));
+const ChannelPartnerSettingsPage = lazyPage(() => import('./pages/ChannelPartners/IntegrationSettingsPage'));
+
 // WORKFLOW Pages (Sales -> Finance -> Support)
 const FinanceQueuePage = lazyPage(() => import('./pages/Workflow/FinanceQueuePage'));
 const SupportQueuePage = lazyPage(() => import('./pages/Workflow/SupportQueuePage'));
@@ -185,6 +198,23 @@ function App() {
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/reports/export" element={<ReportsPage />} />
               <Route path="/analytics" element={<ReportsPage />} />
+
+              {/* CHANNEL PARTNERS Section Routes (read-only WA HRMS mirror) */}
+              <Route element={<ProtectedRoute requiredModule="channel_partners" />}>
+                <Route path="/channel-partners" element={<ChannelPartnerOverviewPage />} />
+                <Route path="/channel-partners/partners" element={<ChannelPartnersListPage />} />
+                <Route path="/channel-partners/partners/:partnerId" element={<ChannelPartnerDetailPage />} />
+                <Route path="/channel-partners/applications" element={<ChannelPartnerApplicationsPage />} />
+                <Route path="/channel-partners/leads" element={<ChannelPartnerLeadsPage />} />
+                <Route path="/channel-partners/clients" element={<ChannelPartnerClientsPage />} />
+                <Route path="/channel-partners/coupons" element={<ChannelPartnerCouponsPage />} />
+                <Route path="/channel-partners/commissions" element={<ChannelPartnerCommissionsPage />} />
+                <Route path="/channel-partners/payouts" element={<ChannelPartnerPayoutsPage />} />
+                <Route path="/channel-partners/events" element={<ChannelPartnerEventsPage />} />
+                <Route element={<ProtectedRoute allowedRoles={['ADMIN']} />}>
+                  <Route path="/channel-partners/settings" element={<ChannelPartnerSettingsPage />} />
+                </Route>
+              </Route>
 
               {/* SETTINGS & USERS Section Routes */}
               <Route element={<ProtectedRoute requiredModule="settings" />}>

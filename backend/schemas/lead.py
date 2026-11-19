@@ -88,6 +88,9 @@ class LeadUpdate(BaseModel):
 
     source: Optional[str] = None
     status: Optional[str] = None
+    # Partner-visible reason for a Channel Partner rejection/loss. It is never
+    # populated from internal CRM notes.
+    review_note: Optional[str] = None
     campaign_name: Optional[str] = None
     rating: Optional[str] = None
     priority: Optional[str] = None
@@ -113,7 +116,7 @@ class LeadUpdate(BaseModel):
         "email", "followup_date", "followup_time", "whatsapp_number",
         "first_name", "last_name", "name", "phone", "designation", "company",
         "industry", "website", "company_size", "city", "state", "country", "location",
-        "source", "status", "campaign_name", "rating", "priority", "requirement_notes",
+        "source", "status", "review_note", "campaign_name", "rating", "priority", "requirement_notes",
         "trial_start_date", "trial_end_date", "trial_duration_days",
         "trial_support_employee_id",
         mode="before", check_fields=False
@@ -139,6 +142,9 @@ class LeadAssignRequest(BaseModel):
 
 class LeadStatusRequest(BaseModel):
     status: str
+    # Optional partner-facing reason. It is only sent to WA HRMS for mapped
+    # Channel Partner statuses and is never populated from internal CRM notes.
+    review_note: Optional[str] = None
 
 class LeadNoteRequest(BaseModel):
     note: str
@@ -248,6 +254,22 @@ class LeadOut(LeadBase):
     latest_enquiry_date: Optional[datetime] = None
     previous_sources: Optional[str] = None
     latest_source: Optional[str] = None
+
+    # WA HRMS Channel Partner mapping. Channel Partner leads keep their
+    # external UUID, partner identity and external status separate from the
+    # CRM workflow status and assignment fields.
+    channel_partner_lead_id: Optional[str] = None
+    channel_partner_id: Optional[str] = None
+    channel_partner_name: Optional[str] = None
+    channel_partner_code: Optional[str] = None
+    channel_partner_status: Optional[str] = None
+    channel_partner_details_json: Optional[dict] = None
+    channel_partner_sync_status: Optional[str] = None
+    channel_partner_last_synced_at: Optional[datetime] = None
+    channel_partner_last_sync_error: Optional[str] = None
+    channel_partner_pending_status: Optional[str] = None
+    channel_partner_status_updated_at: Optional[datetime] = None
+    channel_partner_sync_message: Optional[str] = None
 
     # QuoteTask Integration Mapping Fields
     quotetask_quotation_id: Optional[str] = None

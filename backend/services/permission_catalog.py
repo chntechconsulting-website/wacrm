@@ -119,6 +119,12 @@ SYSTEM_MODULES = [
         "description": "Role matrix configuration, action grants, and scope"
     },
     {
+        "key": "channel_partners",
+        "label": "Channel Partners",
+        "category": "Sales & CRM",
+        "description": "Read-only WA HRMS mirror: partners, applications, leads, clients, coupons, commissions and payouts"
+    },
+    {
         "key": "integrations",
         "label": "Integrations",
         "category": "Administration",

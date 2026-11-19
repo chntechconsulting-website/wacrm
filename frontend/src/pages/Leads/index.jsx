@@ -137,7 +137,28 @@ const STATUS_OPTIONS = [
   'JUNK'
 ];
 
-const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'MANUAL', 'EXCEL', 'REFERRAL'];
+const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'CHANNEL_PARTNER', 'MANUAL', 'EXCEL', 'REFERRAL'];
+
+// CRM statuses that have a documented WA HRMS equivalent. Converted is
+// intentionally excluded: it must go through the WON workflow so the required
+// organization and subscription order references exist.
+const CHANNEL_PARTNER_SYNC_STATUS_OPTIONS = [
+  { value: 'NEW', label: 'NEW — WA HRMS: submitted' },
+  { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
+  { value: 'REJECTED', label: 'REJECTED — WA HRMS: rejected' },
+  { value: 'LOST', label: 'LOST — WA HRMS: lost' }
+];
+
+const CP_REVIEW_NOTE_REQUIRED_MESSAGE =
+  'A review note is required when marking a Channel Partner lead as rejected or lost. The note is shown to the partner.';
+
+const getChannelPartnerSyncBadge = (status) => {
+  const value = String(status || '').toUpperCase();
+  if (value === 'SYNCED') return { label: 'Synced', bg: 'rgba(16, 185, 129, 0.15)', color: '#047857' };
+  if (value === 'PENDING') return { label: 'Pending Sync', bg: 'rgba(245, 158, 11, 0.16)', color: '#b45309' };
+  if (value === 'FAILED') return { label: 'Failed', bg: 'rgba(220, 38, 38, 0.12)', color: '#b91c1c' };
+  return { label: 'Not Synced', bg: 'rgba(100, 116, 139, 0.12)', color: '#475569' };
+};
 const RATING_OPTIONS = ['Hot', 'Warm', 'Cold'];
 const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
 
@@ -202,6 +223,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     allLeads: 0,
     metaLeads: 0,
     websiteLeads: 0,
+    channelPartnerLeads: 0,
     manualLeads: 0,
     excelLeads: 0,
     reinquiryLeads: 0
@@ -283,6 +305,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
           allLeads: res.data.allLeads ?? 0,
           metaLeads: res.data.metaLeads ?? 0,
           websiteLeads: res.data.websiteLeads ?? 0,
+          channelPartnerLeads: res.data.channelPartnerLeads ?? 0,
           manualLeads: res.data.manualLeads ?? 0,
           excelLeads: res.data.excelLeads ?? 0,
           reinquiryLeads: res.data.reinquiryLeads ?? 0
@@ -354,6 +377,15 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   // Deal WON & Support Manager Assignment State
   const [showDealWonModal, setShowDealWonModal] = useState(false);
   const [pendingDealWonLead, setPendingDealWonLead] = useState(null);
+
+  // Channel Partner two-way status sync state
+  const [cpNotePrompt, setCpNotePrompt] = useState(null);
+  const [cpNoteValue, setCpNoteValue] = useState('');
+  const [cpSyncStatus, setCpSyncStatus] = useState('');
+  const [cpSyncNote, setCpSyncNote] = useState('');
+  const [cpSyncSaving, setCpSyncSaving] = useState(false);
+  const [cpSyncError, setCpSyncError] = useState('');
+  const [cpSyncMessage, setCpSyncMessage] = useState('');
 
   // Trial Dates Prompt State
   const [showTrialPromptModal, setShowTrialPromptModal] = useState(false);
@@ -610,6 +642,14 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setPage(prevPage => Math.max(1, prevPage - 1));
     }
   };
+
+  // Reset the Channel Partner sync editor whenever a different lead is opened.
+  useEffect(() => {
+    setCpSyncStatus('');
+    setCpSyncNote('');
+    setCpSyncError('');
+    setCpSyncMessage('');
+  }, [selectedLead?.id]);
 
   const fetchLeads = async (silent = false) => {
     const reqId = ++latestLeadReqIdRef.current;
@@ -1216,6 +1256,95 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
+  const applyChannelPartnerSyncFields = (leadId, data) => {
+    if (!data) return;
+    patchLeadRow(leadId, {
+      status: data.status,
+      channel_partner_status: data.channel_partner_status,
+      channel_partner_sync_status: data.channel_partner_sync_status,
+      channel_partner_last_synced_at: data.channel_partner_last_synced_at,
+      channel_partner_last_sync_error: data.channel_partner_last_sync_error,
+      channel_partner_pending_status: data.channel_partner_pending_status,
+      channel_partner_sync_message: data.channel_partner_sync_message,
+      channel_partner_details_json: data.channel_partner_details_json
+    });
+  };
+
+  const submitLeadStatusChange = async (leadId, newStatus, reviewNote = null) => {
+    const cpLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
+    const isPartnerLead = Boolean(
+      cpLead && (
+        cpLead.channel_partner_lead_id ||
+        String(cpLead.source || '').toUpperCase().replace(/\s+/g, '_') === 'CHANNEL_PARTNER'
+      )
+    );
+    if (
+      isPartnerLead &&
+      normalizeLeadStatusValue(newStatus) === normalizeLeadStatusValue(cpLead.status) &&
+      String(cpLead.channel_partner_sync_status || '').toUpperCase() === 'SYNCED' &&
+      !reviewNote
+    ) {
+      setSuccess(`Lead #${leadId} is already ${newStatus} and synced with WA HRMS.`);
+      return;
+    }
+    try {
+      setSavingLeadId(leadId);
+      setError('');
+      setSuccess('');
+      const payload = { status: newStatus };
+      if (reviewNote) payload.review_note = reviewNote;
+      const res = await API.put(`/leads/${leadId}/status`, payload);
+      const data = res.data || {};
+      PingoPopupService.triggerStatusUpdate({
+        module: 'Lead',
+        status: newStatus,
+        reference: `Lead #${leadId}`
+      });
+      applyChannelPartnerSyncFields(leadId, data);
+      if (data.channel_partner_sync_status === 'FAILED') {
+        setError(
+          `Lead #${leadId} status changed to ${newStatus}, but WA HRMS sync failed: ` +
+          `${data.channel_partner_last_sync_error || data.channel_partner_sync_message || 'Unknown error'}`
+        );
+      } else if (data.channel_partner_sync_status === 'NOT_SYNCED') {
+        setSuccess(
+          `Lead #${leadId} status changed to ${newStatus}. ` +
+          `${data.channel_partner_sync_message || 'No WA HRMS status mapping; the external status was not changed.'}`
+        );
+      } else if (data.channel_partner_sync_status === 'SYNCED') {
+        setSuccess(
+          `Lead #${leadId} status changed to ${newStatus} and synced to WA HRMS ` +
+          `(${data.channel_partner_status || 'confirmed'}).`
+        );
+      } else {
+        setSuccess(`Lead #${leadId} status changed to ${newStatus}`);
+      }
+      // Notify revenue dashboard and targets
+      window.dispatchEvent(new CustomEvent('revenueUpdated', {
+        detail: { lead_id: leadId, status: newStatus }
+      }));
+      window.dispatchEvent(new Event('leadStatsUpdated'));
+    } catch (err) {
+      console.error(err);
+      setError(err.response?.data?.detail || 'Failed to update status.');
+    } finally {
+      setSavingLeadId(current => (current === leadId ? null : current));
+    }
+  };
+
+  const handleConfirmChannelPartnerNote = async (event) => {
+    event.preventDefault();
+    if (!cpNotePrompt) return;
+    const note = cpNoteValue.trim();
+    if (!note) {
+      setError(CP_REVIEW_NOTE_REQUIRED_MESSAGE);
+      return;
+    }
+    const { leadId, status } = cpNotePrompt;
+    setCpNotePrompt(null);
+    await submitLeadStatusChange(leadId, status, note);
+  };
+
   const handleStatusChange = async (leadId, newStatus) => {
     // Won is a Sales-only milestone. The DealWonModal captures the proforma
     // snapshot; Support assignment remains blocked until conversion.
@@ -1223,6 +1352,29 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       const targetLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
       setPendingDealWonLead(targetLead || { id: leadId, name: `Lead #${leadId}` });
       setShowDealWonModal(true);
+      return;
+    }
+
+    // Lost/rejected Channel Partner changes need a partner-safe reason before
+    // the CRM status is committed, because WA HRMS shows reviewNote to the
+    // partner.
+    const cpTargetLead = leads.find(l => l.id === leadId) || (selectedLead && selectedLead.id === leadId ? selectedLead : null);
+    const cpIsPartnerLead = Boolean(
+      cpTargetLead && (
+        cpTargetLead.channel_partner_lead_id ||
+        String(cpTargetLead.source || '').toUpperCase().replace(/\s+/g, '_') === 'CHANNEL_PARTNER'
+      )
+    );
+    const normalizedNewStatus = String(newStatus || '').toUpperCase().replace(/-/g, '_').replace(/\s+/g, '_');
+    if (cpIsPartnerLead && (normalizedNewStatus === 'LOST' || normalizedNewStatus === 'REJECTED')) {
+      setCpNotePrompt({
+        leadId,
+        status: newStatus,
+        externalStatus: normalizedNewStatus === 'LOST' ? 'lost' : 'rejected',
+        leadName: cpTargetLead?.name || `Lead #${leadId}`
+      });
+      setCpNoteValue('');
+      setError('');
       return;
     }
 
@@ -1375,26 +1527,83 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       }
     }
 
+    await submitLeadStatusChange(leadId, newStatus);
+  };
+
+  const submitChannelPartnerStatusUpdate = async (event) => {
+    event.preventDefault();
+    if (!selectedLead) return;
+    const currentMapped = CHANNEL_PARTNER_SYNC_STATUS_OPTIONS.some(
+      option => option.value === normalizeLeadStatusValue(selectedLead.status)
+    ) ? normalizeLeadStatusValue(selectedLead.status) : '';
+    const targetStatus = String(cpSyncStatus || currentMapped || '').trim().toUpperCase();
+    if (!targetStatus) {
+      setCpSyncError('Select the CRM status to send to WA HRMS.');
+      return;
+    }
+    const note = cpSyncNote.trim();
+    if ((targetStatus === 'LOST' || targetStatus === 'REJECTED') && !note) {
+      setCpSyncError(CP_REVIEW_NOTE_REQUIRED_MESSAGE);
+      return;
+    }
+    if (
+      targetStatus === normalizeLeadStatusValue(selectedLead.status) &&
+      String(selectedLead.channel_partner_sync_status || '').toUpperCase() === 'SYNCED' &&
+      !note
+    ) {
+      setCpSyncMessage('CRM and WA HRMS are already synchronized for this status.');
+      return;
+    }
+    setCpSyncSaving(true);
+    setCpSyncError('');
+    setCpSyncMessage('');
     try {
-      setSavingLeadId(leadId);
-      await API.put(`/leads/${leadId}/status`, { status: newStatus });
-      PingoPopupService.triggerStatusUpdate({
-        module: 'Lead',
-        status: newStatus,
-        reference: `Lead #${leadId}`
-      });
-      setSuccess(`Lead #${leadId} status changed to ${newStatus}`);
-      patchLeadRow(leadId, { status: newStatus });
-      // Notify revenue dashboard and targets
-      window.dispatchEvent(new CustomEvent('revenueUpdated', {
-        detail: { lead_id: leadId, status: newStatus }
-      }));
-      window.dispatchEvent(new Event('leadStatsUpdated'));
+      const payload = { status: targetStatus };
+      if (note) payload.review_note = note;
+      const res = await API.put(`/leads/${selectedLead.id}/status`, payload);
+      const data = res.data || {};
+      applyChannelPartnerSyncFields(selectedLead.id, data);
+      if (data.channel_partner_sync_status === 'FAILED') {
+        setCpSyncError(
+          data.channel_partner_last_sync_error ||
+          data.channel_partner_sync_message ||
+          'WA HRMS rejected the update.'
+        );
+      } else {
+        setCpSyncMessage(data.channel_partner_sync_message || 'Status updated.');
+        setCpSyncNote('');
+      }
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || 'Failed to update status.');
+      setCpSyncError(err.response?.data?.detail || 'Failed to update the Channel Partner lead status.');
     } finally {
-      setSavingLeadId(current => (current === leadId ? null : current));
+      setCpSyncSaving(false);
+    }
+  };
+
+  const retryChannelPartnerStatusSync = async () => {
+    if (!selectedLead) return;
+    setCpSyncSaving(true);
+    setCpSyncError('');
+    setCpSyncMessage('');
+    try {
+      const res = await API.post(`/leads/${selectedLead.id}/channel-partner/retry-sync`);
+      const data = res.data || {};
+      applyChannelPartnerSyncFields(selectedLead.id, data);
+      if (data.channel_partner_sync_status === 'FAILED') {
+        setCpSyncError(
+          data.channel_partner_last_sync_error ||
+          data.channel_partner_sync_message ||
+          'WA HRMS rejected the retry.'
+        );
+      } else {
+        setCpSyncMessage(data.channel_partner_sync_message || 'WA HRMS sync retried.');
+      }
+    } catch (err) {
+      console.error(err);
+      setCpSyncError(err.response?.data?.detail || 'Failed to retry WA HRMS sync.');
+    } finally {
+      setCpSyncSaving(false);
     }
   };
 
@@ -1605,10 +1814,25 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   };
 
   const handleDealWonSuccess = (data) => {
-    setSuccess('Deal marked WON. Support assignment stays disabled until the deal is explicitly converted to Support.');
+    const baseMessage = 'Deal marked WON. Support assignment stays disabled until the deal is explicitly converted to Support.';
+    const cpSync = data?.channelPartnerSync;
+    if (cpSync && cpSync.success === false) {
+      setSuccess(baseMessage);
+      setError(`Deal marked WON, but WA HRMS sync failed: ${cpSync.message || 'Unknown error'}`);
+    } else if (cpSync && cpSync.success) {
+      setSuccess(`${baseMessage} WA HRMS status updated to ${cpSync.externalStatus || 'converted'}.`);
+    } else {
+      setSuccess(baseMessage);
+    }
     const wonLeadId = data?.lead_id || pendingDealWonLead?.id;
     if (wonLeadId) {
-      patchLeadRow(wonLeadId, { status: 'WON', support_assignment_status: 'AWAITING_CONVERSION' });
+      const updates = { status: 'WON', support_assignment_status: 'AWAITING_CONVERSION' };
+      if (cpSync) {
+        updates.channel_partner_status = cpSync.externalStatus;
+        updates.channel_partner_sync_status = cpSync.syncStatus;
+        updates.channel_partner_last_sync_error = cpSync.success ? null : cpSync.message;
+      }
+      patchLeadRow(wonLeadId, updates);
     }
     // Notify revenue dashboard and targets
     window.dispatchEvent(new CustomEvent('revenueUpdated', {
@@ -1761,12 +1985,14 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     const raw = (source || '').trim();
     const srcUpper = raw.toUpperCase();
     if (srcUpper === 'WHATSAPP_ADS' || srcUpper === 'WHATSAPP ADS') return 'WhatsApp Ads';
+    if (srcUpper === 'CHANNEL_PARTNER' || srcUpper === 'CHANNEL PARTNER' || srcUpper === 'CHANNELPARTNER') return 'Channel Partner';
     return raw;
   };
 
   const getSourceBadgeStyle = (source) => {
     const srcUpper = (source || '').toUpperCase();
     if (srcUpper.includes('WHATSAPP')) return { bg: 'rgba(37, 211, 102, 0.14)', color: '#128c7e' };
+    if (srcUpper.includes('CHANNEL')) return { bg: 'rgba(14, 165, 233, 0.14)', color: '#0369a1' };
     if (srcUpper.includes('META')) return { bg: 'rgba(59, 130, 246, 0.12)', color: '#1d4ed8' };
     if (srcUpper.includes('WEB')) return { bg: 'rgba(16, 185, 129, 0.12)', color: '#047857' };
     if (srcUpper.includes('EXCEL')) return { bg: 'rgba(245, 158, 11, 0.12)', color: '#b45309' };
@@ -1791,6 +2017,181 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     Boolean(supportCurrentOwnerId) &&
     Boolean(supportAgentId) &&
     Number(supportAgentId) !== Number(supportCurrentOwnerId);
+
+  // Channel Partner leads keep their WA HRMS identity alongside the CRM
+  // workflow. The panel only renders for mapped partner leads.
+  const isChannelPartnerLead = Boolean(
+    selectedLead &&
+    (selectedLead.channel_partner_lead_id ||
+      (selectedLead.source || '').toUpperCase().replace(/\s+/g, '_') === 'CHANNEL_PARTNER')
+  );
+
+  const renderChannelPartnerDetails = () => {
+    if (!isChannelPartnerLead) return null;
+    const cp = selectedLead;
+    const details = cp.channel_partner_details_json || {};
+    const externalStatus = cp.channel_partner_status || details.status || '-';
+    const createdLabel = cp.created_at
+      ? `${formatLeadReceivedDate(cp.created_at)}, ${formatLeadReceivedTime(cp.created_at)}`
+      : '-';
+    const syncBadge = getChannelPartnerSyncBadge(cp.channel_partner_sync_status);
+    const normalizedCrmStatus = normalizeLeadStatusValue(cp.status);
+    const currentMappedStatus = CHANNEL_PARTNER_SYNC_STATUS_OPTIONS.some(
+      option => option.value === normalizedCrmStatus
+    ) ? normalizedCrmStatus : '';
+    const selectedSyncStatus = cpSyncStatus || currentMappedStatus;
+    const canRetrySync = ['FAILED', 'PENDING'].includes(
+      String(cp.channel_partner_sync_status || '').toUpperCase()
+    );
+    const cpRequiresNote = ['LOST', 'REJECTED'].includes(
+      String(selectedSyncStatus || '').toUpperCase()
+    );
+    const cpNoteMissing = cpRequiresNote && !cpSyncNote.trim();
+
+    const rows = [
+      ['Partner Name', cp.channel_partner_name || details.partnerName || '-'],
+      ['Partner Code', cp.channel_partner_code || details.partnerCode || '-'],
+      ['Partner ID', cp.channel_partner_id || details.partnerId || '-'],
+      ['External Lead ID', cp.channel_partner_lead_id || details.id || '-'],
+      ['Created Date', createdLabel],
+      ['External Updated At', details.updatedAt ? formatLeadReceivedFull(details.updatedAt) : '-'],
+      ['Lead Stage', details.leadStage || '-'],
+      ['Partner API Source', details.source || '-'],
+      ['Website', details.website || '-'],
+      ['Employee Count', details.employeeCount != null ? String(details.employeeCount) : '-'],
+      ['Protected Until', details.protectedUntil ? formatLeadReceivedFull(details.protectedUntil) : '-'],
+      ['Last Contacted', details.lastContactedAt ? formatLeadReceivedFull(details.lastContactedAt) : '-'],
+      ['Next Action', details.nextActionAt ? formatLeadReceivedFull(details.nextActionAt) : '-'],
+      ['Reviewed At', details.reviewedAt ? formatLeadReceivedFull(details.reviewedAt) : '-'],
+      ['Reviewed By User ID', details.reviewedByUserId || '-'],
+      ['Organization ID', details.organizationId || '-'],
+      ['Subscription Order ID', details.subscriptionOrderId || '-'],
+      ['Submitted By Partner User ID', details.submittedByPartnerUserId || '-'],
+      ['Lead Owner User ID', details.leadOwnerUserId || '-'],
+      ['Duplicate Reason', details.duplicateReason || '-'],
+      ['Duplicate Of Lead ID', details.duplicateOfLeadId || '-']
+    ];
+
+    return (
+      <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+        <h4 style={{ fontSize: '0.92rem', fontWeight: '800', color: '#075985', margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Users size={16} /> Channel Partner Details
+        </h4>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', fontSize: '0.84rem' }}>
+          <div style={{ gridColumn: 'span 2', background: '#e0f2fe', border: '1px solid #7dd3fc', borderRadius: '8px', padding: '8px 12px', color: '#075985', fontWeight: 700 }}>
+            Lead Source: Channel Partner
+            <span style={{ marginLeft: '12px', fontSize: '0.76rem', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#0284c7', color: '#ffffff' }}>
+              External Status: {externalStatus}
+            </span>
+          </div>
+          {rows.map(([label, value]) => (
+            <div key={label} style={{ minWidth: 0 }}>
+              <strong>{label}:</strong>{' '}
+              <span style={{ color: '#0f172a', wordBreak: 'break-all' }}>{value}</span>
+            </div>
+          ))}
+          {details.reviewNote && (
+            <div style={{ gridColumn: 'span 2' }}>
+              <strong>Review Note:</strong>{' '}
+              <span style={{ color: '#0f172a', whiteSpace: 'pre-wrap' }}>{details.reviewNote}</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginTop: '14px', background: '#ffffff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            <strong style={{ color: '#075985', fontSize: '0.86rem' }}>WA HRMS Status Sync</strong>
+            <span style={{
+              fontSize: '0.72rem',
+              padding: '3px 10px',
+              borderRadius: '999px',
+              backgroundColor: syncBadge.bg,
+              color: syncBadge.color,
+              fontWeight: 800
+            }}>
+              {syncBadge.label}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', fontSize: '0.8rem', marginBottom: '10px' }}>
+            <div><strong>CRM Lead Status:</strong> {cp.status || '-'}</div>
+            <div><strong>WA HRMS Lead Status:</strong> {externalStatus}</div>
+            <div><strong>Last Successful Sync:</strong> {cp.channel_partner_last_synced_at ? formatLeadReceivedFull(cp.channel_partner_last_synced_at) : '-'}</div>
+            <div><strong>Pending Sync:</strong> {cp.channel_partner_pending_status || '-'}</div>
+            {cp.channel_partner_last_sync_error && (
+              <div style={{ gridColumn: 'span 2', color: '#b91c1c' }}>
+                <strong>Last Sync Error:</strong> {cp.channel_partner_last_sync_error}
+              </div>
+            )}
+          </div>
+
+          <form onSubmit={submitChannelPartnerStatusUpdate} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
+              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#334155' }}>
+                CRM status to sync
+                <select
+                  className="form-select"
+                  value={selectedSyncStatus}
+                  onChange={(e) => setCpSyncStatus(e.target.value)}
+                  disabled={cpSyncSaving}
+                  style={{ marginTop: '4px' }}
+                >
+                  <option value="">Select a status...</option>
+                  {CHANNEL_PARTNER_SYNC_STATUS_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#334155' }}>
+                Partner-visible review note {cpRequiresNote ? '(required)' : '(optional)'}
+                <textarea
+                  className="form-input"
+                  rows={2}
+                  maxLength={500}
+                  value={cpSyncNote}
+                  onChange={(e) => setCpSyncNote(e.target.value)}
+                  disabled={cpSyncSaving}
+                  required={cpRequiresNote}
+                  aria-required={cpRequiresNote}
+                  placeholder="Explain the status to the Channel Partner. Internal CRM notes are never sent."
+                  style={{ marginTop: '4px', resize: 'vertical' }}
+                />
+                {cpNoteMissing && (
+                  <span style={{ display: 'block', marginTop: '4px', fontSize: '0.72rem', fontWeight: 600, color: '#b91c1c' }}>
+                    {CP_REVIEW_NOTE_REQUIRED_MESSAGE}
+                  </span>
+                )}
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={cpSyncSaving || cpNoteMissing}
+              >
+                {cpSyncSaving ? 'Updating...' : 'Update & Sync to WA HRMS'}
+              </button>
+              {canRetrySync && (
+                <button type="button" className="btn btn-secondary" onClick={retryChannelPartnerStatusSync} disabled={cpSyncSaving}>
+                  <RefreshCw size={14} /> Retry Sync
+                </button>
+              )}
+            </div>
+            {cpSyncError && (
+              <div style={{ color: '#b91c1c', fontSize: '0.78rem', fontWeight: 600 }}>{cpSyncError}</div>
+            )}
+            {cpSyncMessage && (
+              <div style={{ color: '#047857', fontSize: '0.78rem', fontWeight: 600 }}>{cpSyncMessage}</div>
+            )}
+            <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+              NEW maps to submitted, QUALIFIED to qualified, REJECTED to rejected and LOST to lost.
+              Converted is only sent through the All Leads WON workflow once the WA HRMS organization and
+              subscription order references exist.
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="page-container">
@@ -1822,7 +2223,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       )}
 
       <div className="content-card">
-        {/* SOURCE FILTER TABS BAR (Meta Ads, Website, Manual, Excel, All Leads) */}
+        {/* SOURCE FILTER TABS BAR (All Leads, Meta Ads, Website, Channel Partner, Manual, Excel) */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -1932,6 +2333,40 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
               fontWeight: '700'
             }}>
               {sourceCounts.websiteLeads}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSourceFilter('CHANNEL_PARTNER')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 16px',
+              borderRadius: '20px',
+              border: '1px solid',
+              borderColor: sourceFilter === 'CHANNEL_PARTNER' ? '#0284c7' : 'var(--border-color)',
+              backgroundColor: sourceFilter === 'CHANNEL_PARTNER' ? 'rgba(14, 165, 233, 0.12)' : '#f8fafc',
+              color: sourceFilter === 'CHANNEL_PARTNER' ? '#0369a1' : 'var(--text-muted)',
+              fontWeight: '700',
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              boxShadow: sourceFilter === 'CHANNEL_PARTNER' ? '0 2px 8px rgba(14, 165, 233, 0.2)' : 'none',
+              transition: 'all 0.2s'
+            }}
+          >
+            Channel Partner
+            <span style={{
+              fontSize: '0.75rem',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              backgroundColor: sourceFilter === 'CHANNEL_PARTNER' ? '#0284c7' : '#e2e8f0',
+              color: sourceFilter === 'CHANNEL_PARTNER' ? '#ffffff' : '#475569',
+              fontWeight: '700'
+            }}>
+              {sourceCounts.channelPartnerLeads}
             </span>
           </button>
 
@@ -2091,7 +2526,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
               style={{ width: '140px' }}
             >
               <option value="">All Sources</option>
-              {SOURCE_OPTIONS.map(src => <option key={src} value={src}>{src}</option>)}
+              {SOURCE_OPTIONS.map(src => <option key={src} value={src}>{src === 'CHANNEL_PARTNER' ? 'Channel Partner' : src}</option>)}
             </select>
 
             <select 
@@ -3403,7 +3838,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           <div><strong>Team Size:</strong> {selectedLead.company_size || '-'}</div>
                           <div><strong>Industry:</strong> {selectedLead.industry || '-'}</div>
                           <div><MapPin size={14} style={{ display: 'inline', marginRight: '6px', color: '#dc2626' }} /> <strong>City/State:</strong> {selectedLead.location || [selectedLead.city, selectedLead.state].filter(Boolean).join(', ') || '-'}</div>
-                          <div><strong>Source:</strong> <span style={{ fontWeight: '700', color: selectedLead.source === 'WEBSITE' ? '#047857' : '#1d4ed8' }}>{selectedLead.source}</span></div>
+                          <div><strong>Source:</strong> <span style={{ fontWeight: '700', color: selectedLead.source === 'WEBSITE' ? '#047857' : '#1d4ed8' }}>{getSourceLabel(selectedLead.source)}</span></div>
                           <div><strong>Rating / Priority:</strong> {selectedLead.rating} / {selectedLead.priority}</div>
                           <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
                           <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
@@ -3453,6 +3888,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           )}
                         </div>
                       </div>
+
+                      {renderChannelPartnerDetails()}
 
                       {/* Submitted Inquiry & Requirements Box */}
                       {selectedLead.requirement_notes && (
@@ -3607,7 +4044,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                               <div><strong>Team Size:</strong> {selectedLead.company_size || '-'}</div>
                               <div><strong>Industry:</strong> {selectedLead.industry || '-'}</div>
                               <div><MapPin size={13} style={{ display: 'inline', marginRight: '6px', color: '#dc2626' }} /> <strong>City/State:</strong> {selectedLead.location || [selectedLead.city, selectedLead.state].filter(Boolean).join(', ') || '-'}</div>
-                              <div><strong>Source:</strong> <span style={{ fontWeight: '700', color: selectedLead.source === 'WEBSITE' ? '#047857' : '#1d4ed8' }}>{selectedLead.source}</span></div>
+                              <div><strong>Source:</strong> <span style={{ fontWeight: '700', color: selectedLead.source === 'WEBSITE' ? '#047857' : '#1d4ed8' }}>{getSourceLabel(selectedLead.source)}</span></div>
                               <div><strong>Rating / Priority:</strong> {selectedLead.rating} / {selectedLead.priority}</div>
                               <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
                               <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
@@ -3629,6 +4066,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                               )}
                             </div>
                           </div>
+
+                          {renderChannelPartnerDetails()}
 
                           {selectedLead.requirement_notes && (
                             <div style={{
@@ -4169,6 +4608,69 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={importing || !importFile}>
                   {importing ? 'Processing & Validating...' : 'Upload & Import Leads'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CHANNEL PARTNER REJECTED / LOST REVIEW NOTE PROMPT */}
+      {cpNotePrompt && (
+        <div className="modal-backdrop" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: '20px'
+        }}>
+          <div className="modal-content" style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '18px',
+            width: '100%', maxWidth: '480px', padding: '24px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.25)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '14px' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: '#0f172a' }}>
+                  Review note required
+                </h3>
+                <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                  {cpNotePrompt.leadName} — WA HRMS status: {cpNotePrompt.externalStatus}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setCpNotePrompt(null)}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleConfirmChannelPartnerNote}>
+              <p style={{ fontSize: '0.82rem', color: '#475569', marginTop: 0 }}>
+                WA HRMS shows this note to the Channel Partner. Enter a clear, partner-safe
+                reason for marking this lead as {cpNotePrompt.externalStatus}.
+              </p>
+              <textarea
+                className="form-input"
+                rows={4}
+                maxLength={500}
+                value={cpNoteValue}
+                onChange={(e) => setCpNoteValue(e.target.value)}
+                placeholder="Reason shared with the partner"
+                autoFocus
+                style={{ resize: 'vertical', marginBottom: '8px' }}
+              />
+              <div style={{ fontSize: '0.72rem', color: '#94a3b8', textAlign: 'right', marginBottom: '14px' }}>
+                {cpNoteValue.length}/500
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setCpNotePrompt(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={!cpNoteValue.trim() || savingLeadId === cpNotePrompt.leadId}>
+                  {savingLeadId === cpNotePrompt.leadId ? 'Updating...' : 'Confirm & Sync'}
                 </button>
               </div>
             </form>

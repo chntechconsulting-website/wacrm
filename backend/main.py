@@ -50,6 +50,7 @@ from routers import (
     admin,
     finance,
     support,
+    channel_partners,
 )
 
 # Ensure upload directory exists
@@ -142,6 +143,7 @@ from integrations.whatsapp_coexistence.router import router as whatsapp_coexiste
 from integrations.quotetask.router import router as quotetask_router
 from integrations.waquote.router import router as waquote_router
 from integrations.proforma.router import router as proforma_integration_router
+from integrations.wahrms_channel_partner.webhook import webhook_router as wahrms_webhook_router
 
 # Register Routers
 app.include_router(auth.router, prefix=settings.API_V1_STR)
@@ -176,6 +178,11 @@ app.include_router(whatsapp_coexistence_router, prefix=settings.API_V1_STR)
 app.include_router(quotetask_router, prefix=settings.API_V1_STR)
 app.include_router(waquote_router, prefix=settings.API_V1_STR)
 app.include_router(proforma_integration_router, prefix=settings.API_V1_STR)
+app.include_router(channel_partners.router, prefix=settings.API_V1_STR)
+# WA HRMS calls this exact path. Also expose the /api alias so both the root
+# nginx proxy and the API proxy work without changing the configured URL.
+app.include_router(wahrms_webhook_router)
+app.include_router(wahrms_webhook_router, prefix=settings.API_V1_STR)
 app.include_router(workflow.router, prefix=settings.API_V1_STR)
 app.include_router(finance.router, prefix=settings.API_V1_STR)
 app.include_router(finance.router, prefix="/api")
@@ -286,6 +293,41 @@ async def startup_db_client():
         
         # Ensure column schema synchronization for leads and call_logs tables
         from sqlalchemy import text
+
+        # Additive WA HRMS Channel Partner settings columns. create_all() only
+        # creates missing tables, so an existing singleton table needs ALTER.
+        try:
+            from sqlalchemy import inspect as sa_inspect
+
+            inspector = sa_inspect(engine)
+            if "channel_partner_integration" in inspector.get_table_names():
+                existing_columns = {
+                    column["name"]
+                    for column in inspector.get_columns(
+                        "channel_partner_integration"
+                    )
+                }
+                missing_columns = {
+                    "webhook_secret_encrypted": "TEXT NULL",
+                    "webhook_secret_last4": "VARCHAR(8) NULL",
+                }
+                with engine.connect() as conn:
+                    for column_name, column_type in missing_columns.items():
+                        if column_name not in existing_columns:
+                            conn.execute(
+                                text(
+                                    "ALTER TABLE channel_partner_integration "
+                                    f"ADD COLUMN {column_name} {column_type}"
+                                )
+                            )
+                            conn.commit()
+                            print(
+                                "Auto-added missing column "
+                                f"'{column_name}' to 'channel_partner_integration'."
+                            )
+        except Exception as ex:
+            print(f"Channel Partner settings schema check: {ex}")
+
         with engine.connect() as conn:
             try:
                 result = conn.execute(text("SHOW COLUMNS FROM leads"))
@@ -316,7 +358,19 @@ async def startup_db_client():
                     "trial_start_date": "DATE NULL",
                     "trial_end_date": "DATE NULL",
                     "trial_support_employee_id": "INT NULL",
-                    "support_employee_id": "INT NULL"
+                    "support_employee_id": "INT NULL",
+                    "channel_partner_lead_id": "VARCHAR(100) NULL",
+                    "channel_partner_id": "VARCHAR(100) NULL",
+                    "channel_partner_name": "VARCHAR(255) NULL",
+                    "channel_partner_code": "VARCHAR(120) NULL",
+                    "channel_partner_status": "VARCHAR(50) NULL",
+                    "channel_partner_details_json": "JSON NULL",
+                    "channel_partner_sync_status": "VARCHAR(20) NULL",
+                    "channel_partner_last_synced_at": "DATETIME NULL",
+                    "channel_partner_last_sync_error": "TEXT NULL",
+                    "channel_partner_pending_status": "VARCHAR(50) NULL",
+                    "channel_partner_pending_review_note": "TEXT NULL",
+                    "channel_partner_status_updated_at": "DATETIME NULL"
                 }
                 for col_name, col_type in missing_cols.items():
                     if col_name not in columns:
@@ -368,6 +422,51 @@ async def startup_db_client():
                         print("Added leads.support_employee_id index.")
                 except Exception as ex:
                     print(f"Leads support_employee_id index check: {ex}")
+                try:
+                    has_cp_lead_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_channel_partner_lead_id'"
+                    )).scalar())
+                    if not has_cp_lead_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD UNIQUE INDEX ix_leads_channel_partner_lead_id (channel_partner_lead_id)"
+                        ))
+                        conn.commit()
+                        print("Added leads.channel_partner_lead_id unique index.")
+                except Exception as ex:
+                    print(f"Leads channel_partner_lead_id index check: {ex}")
+                try:
+                    has_cp_partner_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_channel_partner_id'"
+                    )).scalar())
+                    if not has_cp_partner_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD INDEX ix_leads_channel_partner_id (channel_partner_id)"
+                        ))
+                        conn.commit()
+                        print("Added leads.channel_partner_id index.")
+                except Exception as ex:
+                    print(f"Leads channel_partner_id index check: {ex}")
+                try:
+                    has_cp_sync_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_channel_partner_sync_status'"
+                    )).scalar())
+                    if not has_cp_sync_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD INDEX ix_leads_channel_partner_sync_status (channel_partner_sync_status)"
+                        ))
+                        conn.commit()
+                        print("Added leads.channel_partner_sync_status index.")
+                except Exception as ex:
+                    print(f"Leads channel_partner_sync_status index check: {ex}")
 
                 # One-time, idempotent Support ownership backfill. Existing
                 # converted customers keep their current handoff owner, but the
@@ -944,6 +1043,22 @@ async def startup_db_client():
         print("CDR reconciliation scheduler launched.")
     except Exception as ex:
         print(f"Failed to start CDR reconciliation scheduler: {ex}")
+
+    # Launch WA HRMS Channel Partner recovery polling. Webhooks remain the
+    # primary update path; this poll closes gaps using GET /events nextAfter.
+    # The same task performs a one-time full sync on first start when
+    # credentials are configured and the local mirror is still empty.
+    try:
+        import asyncio
+        from services.channel_partner_sync import start_channel_partner_scheduler
+        asyncio.create_task(
+            start_channel_partner_scheduler(
+                interval_seconds=settings.WAHRMS_CHANNEL_PARTNER_POLL_INTERVAL_SECONDS
+            )
+        )
+        print("WA HRMS Channel Partner sync scheduler launched.")
+    except Exception as ex:
+        print(f"Failed to start WA HRMS Channel Partner scheduler: {ex}")
 
     # Seed initial Admin, Manager, and Employee users if not existing
     db = SessionLocal()

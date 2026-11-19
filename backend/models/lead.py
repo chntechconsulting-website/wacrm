@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Date, DateTime, ForeignKey, Boolean, Float, Index
+from sqlalchemy import Column, Integer, String, Text, Date, DateTime, ForeignKey, Boolean, Float, Index, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -36,6 +36,30 @@ class Lead(Base):
 
     meta_lead_id = Column(String(100), unique=True, index=True, nullable=True)
     meta_form_id = Column(String(100), nullable=True)
+
+    # WA HRMS Channel Partner mapping. ``channel_partner_lead_id`` is the unique
+    # external lead UUID and the only key used to match an existing CRM lead, so
+    # webhook retries, polling and historical sync can never duplicate a lead.
+    # ``channel_partner_status`` keeps the WA HRMS status separate from the CRM
+    # workflow status stored in ``Lead.status``.
+    channel_partner_lead_id = Column(String(100), unique=True, index=True, nullable=True)
+    channel_partner_id = Column(String(100), nullable=True, index=True)
+    channel_partner_name = Column(String(255), nullable=True)
+    channel_partner_code = Column(String(120), nullable=True)
+    channel_partner_status = Column(String(50), nullable=True)
+    channel_partner_details_json = Column(JSON, nullable=True)
+
+    # Two-way status synchronisation state. CRM status changes are pushed to
+    # WA HRMS with PATCH /leads/{id}; the last confirmed external state is kept
+    # in ``channel_partner_status`` while these columns record whether CRM and
+    # WA HRMS are currently in sync. A pending status/review note is retained
+    # so a failed push can be retried without re-entering the data.
+    channel_partner_sync_status = Column(String(20), nullable=True, index=True)  # SYNCED, PENDING, FAILED, NOT_SYNCED
+    channel_partner_last_synced_at = Column(DateTime, nullable=True)
+    channel_partner_last_sync_error = Column(Text, nullable=True)
+    channel_partner_pending_status = Column(String(50), nullable=True)
+    channel_partner_pending_review_note = Column(Text, nullable=True)
+    channel_partner_status_updated_at = Column(DateTime, nullable=True)
 
     website_id = Column(String(50), nullable=True, index=True)
     website_name = Column(String(100), nullable=True)
