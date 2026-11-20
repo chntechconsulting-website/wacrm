@@ -6,7 +6,6 @@ import SupportInteractionTimeline from './SupportInteractionTimeline';
 import {
   AlertCircle,
   ArrowUpRight,
-  CalendarClock,
   CalendarDays,
   CheckCircle2,
   Loader2,
@@ -19,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import './SupportHistory.css';
+import './BackupCustomersPanel.css';
 
 const formatDateTime = (value) => {
   if (!value) return '—';
@@ -181,9 +181,9 @@ export default function BackupCustomersPanel({ compact = false }) {
       )}
 
       {selected && (
-        <div className="support-manager-modal-backdrop" onClick={() => setSelected(null)}>
-          <div className="support-manager-modal backup-customer-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="support-manager-modal-head">
+        <div className="backup-customers-modal-backdrop" onClick={() => setSelected(null)}>
+          <div className="backup-customers-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="backup-customers-modal-head">
               <div>
                 <h3>
                   <UserCheck size={18} /> Backup customer history
@@ -197,7 +197,7 @@ export default function BackupCustomersPanel({ compact = false }) {
                 <X size={18} />
               </button>
             </div>
-            <div className="support-manager-modal-body">
+            <div className="backup-customers-modal-body">
               <SupportInteractionTimeline
                 leadId={selected.lead_id}
                 customerId={selected.customer_id}
