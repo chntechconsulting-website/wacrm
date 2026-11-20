@@ -65,6 +65,40 @@ const displayValue = (value) => {
   return text || '';
 };
 
+const pocSignature = (poc) => [
+  poc?.id,
+  poc?.name,
+  poc?.mobile,
+  poc?.alternate_mobile,
+  poc?.whatsapp_number,
+  poc?.email,
+  poc?.designation,
+  poc?.department,
+  poc?.preferred_contact_method,
+  poc?.notes,
+  poc?.is_primary ? 1 : 0,
+  poc?.updated_at,
+].join('|');
+
+// Compare POC collections before updating state so identical API responses do
+// not recreate the card elements and make the section flash.
+const samePocCollection = (left, right) => {
+  const current = Array.isArray(left) ? left : [];
+  const next = Array.isArray(right) ? right : [];
+  if (current.length !== next.length) return false;
+  return current.every((poc, index) => pocSignature(poc) === pocSignature(next[index]));
+};
+
+const samePrimaryPoc = (left, right) => {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    (left.id || null) === (right.id || null) &&
+    (left.name || '') === (right.name || '') &&
+    (left.mobile || '') === (right.mobile || '')
+  );
+};
+
 const POCForm = ({
   form,
   setForm,
@@ -228,6 +262,7 @@ export default function CustomerPOCSection({
   onPocsChanged = null,
 }) {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [pocs, setPocs] = useState([]);
   const [primaryPoc, setPrimaryPoc] = useState(null);
@@ -258,6 +293,21 @@ export default function CustomerPOCSection({
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
 
+  // Keep the latest parent callback in a ref. The parent passes an inline
+  // handler, so depending on it directly recreated fetchPocs on every parent
+  // render and retriggered the load effect, which made the POC cards blink.
+  const onPocsChangedRef = useRef(onPocsChanged);
+  useEffect(() => {
+    onPocsChangedRef.current = onPocsChanged;
+  }, [onPocsChanged]);
+
+  const lastCollectionRef = useRef({
+    pocs: [],
+    primaryPoc: null,
+    initialized: false,
+  });
+  const requestIdRef = useRef(0);
+
   const applyCollection = useCallback(
     (payload, message) => {
       const items = Array.isArray(payload?.items)
@@ -265,39 +315,71 @@ export default function CustomerPOCSection({
         : Array.isArray(payload?.pocs)
           ? payload.pocs
           : [];
-      setPocs(items);
-      setPrimaryPoc(payload?.primary_poc || null);
+      const nextPrimary = payload?.primary_poc || null;
+      const previous = lastCollectionRef.current;
+      const collectionChanged =
+        !samePocCollection(previous.pocs, items) ||
+        !samePrimaryPoc(previous.primaryPoc, nextPrimary);
+
+      // Reuse the existing array/object when nothing changed so React can skip
+      // re-rendering the POC cards.
+      setPocs((current) => (samePocCollection(current, items) ? current : items));
+      setPrimaryPoc((current) => (samePrimaryPoc(current, nextPrimary) ? current : nextPrimary));
+
       if (message) showToast(message);
-      if (onPocsChanged) {
-        onPocsChanged({
+
+      if (
+        (collectionChanged || !previous.initialized) &&
+        onPocsChangedRef.current
+      ) {
+        lastCollectionRef.current = {
           pocs: items,
-          primary_poc: payload?.primary_poc || null,
+          primaryPoc: nextPrimary,
+          initialized: true,
+        };
+        onPocsChangedRef.current({
+          pocs: items,
+          primary_poc: nextPrimary,
           poc_count: payload?.poc_count ?? items.length,
         });
       }
     },
-    [onPocsChanged, showToast]
+    [showToast]
   );
 
-  const fetchPocs = useCallback(async () => {
+  const fetchPocs = useCallback(async ({ silent = false } = {}) => {
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
+
     if (!leadId) {
       setPocs([]);
       setPrimaryPoc(null);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
-    setLoading(true);
+
+    // A manual refresh keeps the current cards visible; only the initial load
+    // for a customer shows the full loading state.
+    if (silent) setRefreshing(true);
+    else setLoading(true);
     setError('');
+
     try {
       const params = customerId ? { customer_id: customerId } : {};
       const response = await API.get(`/support/customers/${leadId}/pocs`, { params });
+      if (requestId !== requestIdRef.current) return;
       applyCollection(response.data);
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setPocs([]);
       setPrimaryPoc(null);
       setError(err.response?.data?.detail || 'Customer POCs could not be loaded.');
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [leadId, customerId, applyCollection]);
 
@@ -478,11 +560,11 @@ export default function CustomerPOCSection({
           <button
             type="button"
             className="customer-poc-icon-btn"
-            onClick={fetchPocs}
+            onClick={() => fetchPocs({ silent: true })}
             title="Refresh customer POCs"
-            disabled={loading}
+            disabled={loading || refreshing}
           >
-            <RefreshCw size={14} className={loading ? 'spin-icon' : ''} />
+            <RefreshCw size={14} className={loading || refreshing ? 'spin-icon' : ''} />
           </button>
           {canManage && !showForm && (
             <button type="button" className="customer-poc-btn primary" onClick={openAddForm}>
@@ -501,7 +583,7 @@ export default function CustomerPOCSection({
         <div className="customer-poc-state error">
           <AlertCircle size={18} />
           <span>{error}</span>
-          <button type="button" className="customer-poc-btn secondary" onClick={fetchPocs}>
+          <button type="button" className="customer-poc-btn secondary" onClick={() => fetchPocs()}>
             Retry
           </button>
         </div>
