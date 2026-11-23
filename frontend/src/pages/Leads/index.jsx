@@ -120,6 +120,17 @@ const trialSupportAssigneeLabel = (lead) => {
   return role === 'SUPPORT_MANAGER' ? 'Support Manager' : 'Support';
 };
 
+// Sales coordinates the converted client with the Support Manager who owns
+// the assigned Support Executive. Older rows without a resolvable manager
+// fall back to the executive so the field never goes blank.
+const supportManagerDisplayName = (lead) =>
+  lead?.support_manager_name || lead?.support_assigned_to_name || '';
+
+const supportExecutiveTooltip = (lead) =>
+  lead?.support_assigned_to_name
+    ? `Support Executive: ${lead.support_assigned_to_name}`
+    : undefined;
+
 const STATUS_OPTIONS = [
   'NEW',
   'NEW LEAD',
@@ -2643,7 +2654,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 <th style={{ minWidth: '130px' }}>Product</th>
                 <th style={{ minWidth: '140px' }}>Status</th>
                 <th>Assigned To</th>
-                <th style={{ minWidth: '145px' }}>Support Assigned To</th>
+                <th style={{ minWidth: '145px' }}>Support Manager</th>
                 <th 
                   onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
                   style={{ cursor: 'pointer', userSelect: 'none', minWidth: '165px' }}
@@ -2885,9 +2896,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         )}
                       </td>
                       <td>
-                        {lead.support_assigned_to_name ? (
-                          <span style={{ fontSize: '0.82rem', fontWeight: '600', color: '#0f766e' }}>
-                            {lead.support_assigned_to_name}
+                        {supportManagerDisplayName(lead) ? (
+                          <span
+                            style={{ fontSize: '0.82rem', fontWeight: '600', color: '#0f766e' }}
+                            title={supportExecutiveTooltip(lead)}
+                          >
+                            {supportManagerDisplayName(lead)}
                           </span>
                         ) : (
                           <span style={{
@@ -3856,9 +3870,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
                           <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
                           <div style={{ gridColumn: 'span 2', background: '#f0fdfa', padding: '8px 12px', borderRadius: '6px', border: '1px solid #ccfbf1', color: '#0f766e' }}>
-                            <strong>Support Assigned To:</strong>{' '}
-                            <span style={{ fontWeight: 700 }}>
-                              {selectedLead.support_assigned_to_name || 'Not Assigned'}
+                            <strong>Support Manager:</strong>{' '}
+                            <span style={{ fontWeight: 700 }} title={supportExecutiveTooltip(selectedLead)}>
+                              {supportManagerDisplayName(selectedLead) || 'Not Assigned'}
                             </span>
                             {selectedLead.is_converted_to_support ? (
                               <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 700, color: selectedLead.support_assigned_to_name ? '#047857' : '#b45309' }}>
@@ -4061,7 +4075,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                               <div><strong>Rating / Priority:</strong> {selectedLead.rating} / {selectedLead.priority}</div>
                               <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
                               <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
-                              <div><strong>Support Assigned To:</strong> {selectedLead.support_assigned_to_name || 'Not Assigned'}</div>
+                              <div title={supportExecutiveTooltip(selectedLead)}><strong>Support Manager:</strong> {supportManagerDisplayName(selectedLead) || 'Not Assigned'}</div>
                               <div><strong>Lead ID:</strong> #{selectedLead.id}</div>
                               {selectedLead.followup_date && (
                                 <div style={{ gridColumn: 'span 2', background: '#fffbeb', padding: '6px 10px', borderRadius: '6px', border: '1px solid #fef3c7', color: '#92400e' }}>
