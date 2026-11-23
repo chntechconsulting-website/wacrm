@@ -120,17 +120,6 @@ const trialSupportAssigneeLabel = (lead) => {
   return role === 'SUPPORT_MANAGER' ? 'Support Manager' : 'Support';
 };
 
-// Sales coordinates the converted client with the Support Manager who owns
-// the assigned Support Executive. Older rows without a resolvable manager
-// fall back to the executive so the field never goes blank.
-const supportManagerDisplayName = (lead) =>
-  lead?.support_manager_name || lead?.support_assigned_to_name || '';
-
-const supportExecutiveTooltip = (lead) =>
-  lead?.support_assigned_to_name
-    ? `Support Executive: ${lead.support_assigned_to_name}`
-    : undefined;
-
 const STATUS_OPTIONS = [
   'NEW',
   'NEW LEAD',
@@ -433,8 +422,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   // later from a converted lead drawer).
   const [showSupportAssignModal, setShowSupportAssignModal] = useState(false);
   const [supportAssignLead, setSupportAssignLead] = useState(null);
-  const [supportTeamMembers, setSupportTeamMembers] = useState([]);
-  const [supportMembersLoading, setSupportMembersLoading] = useState(false);
+  const [supportManagerOptions, setSupportManagerOptions] = useState([]);
+  const [supportManagersLoading, setSupportManagersLoading] = useState(false);
   const [supportAgentId, setSupportAgentId] = useState('');
   const [supportRemarks, setSupportRemarks] = useState('');
   const [supportAssignError, setSupportAssignError] = useState('');
@@ -1098,20 +1087,25 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
-  const loadSupportTeamMembers = async () => {
+  // Active Support Managers for the post-conversion Support Assignment
+  // modal. The shared team-members lookup keeps its default executive-only
+  // behaviour for the Support queue; role=manager selects the manager list.
+  const loadSupportManagers = async () => {
     if (!canAssignSupport) return;
-    setSupportMembersLoading(true);
+    setSupportManagersLoading(true);
     try {
-      const res = await API.get('/leads/support/team-members');
-      setSupportTeamMembers(Array.isArray(res.data) ? res.data : []);
+      const res = await API.get('/leads/support/team-members', {
+        params: { role: 'manager' }
+      });
+      setSupportManagerOptions(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error('Failed to load active Support Team members:', err);
-      setSupportTeamMembers([]);
+      console.error('Failed to load active Support Managers:', err);
+      setSupportManagerOptions([]);
       setSupportAssignError(
-        err.response?.data?.detail || 'Failed to load active Support Team employees.'
+        err.response?.data?.detail || 'Failed to load active Support Managers.'
       );
     } finally {
-      setSupportMembersLoading(false);
+      setSupportManagersLoading(false);
     }
   };
 
@@ -1171,10 +1165,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     setSupportAssignReason('');
     setSupportAssignState(null);
     setSupportAssignError('');
-    setSupportTeamMembers([]);
+    setSupportManagerOptions([]);
     setShowSupportAssignModal(true);
     if (canAssignSupport) {
-      loadSupportTeamMembers();
+      loadSupportManagers();
       loadSupportAssignmentState(convertedLead.id);
     }
   };
@@ -1214,7 +1208,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       return;
     }
     if (!supportAgentId) {
-      setSupportAssignError('Please select an active Support Team employee.');
+      setSupportAssignError('Please select an active Support Manager.');
       return;
     }
 
@@ -1227,13 +1221,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
     if (currentOwnerId && Number(supportAgentId) === Number(currentOwnerId)) {
       setSupportAssignError(
-        `${supportAssignState?.support_employee_name || supportAssignLead.support_assigned_to_name || 'This Support employee'} is already the assigned owner. Select a different employee to reassign.`
+        `${supportAssignState?.support_employee_name || supportAssignLead.support_assigned_to_name || 'This Support Manager'} is already the assigned owner. Select a different Support Manager to reassign.`
       );
       return;
     }
     if (isReassignment && !supportAssignReason.trim()) {
       setSupportAssignError(
-        'A reassignment reason is required when moving a client to another Support employee.'
+        'A reassignment reason is required when moving a client to another Support Manager.'
       );
       return;
     }
@@ -1262,17 +1256,17 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       patchLeadRow(supportAssignLead.id, updatedLead);
       setSuccess(
         res.data?.already_assigned
-          ? `Lead #${supportAssignLead.id} is already assigned to ${updatedLead.support_assigned_to_name || 'this Support Executive'}.`
+          ? `Lead #${supportAssignLead.id} is already assigned to ${updatedLead.support_assigned_to_name || 'this Support Manager'}.`
           : res.data?.reassigned
-            ? `Lead #${supportAssignLead.id} reassigned to Support Executive ${updatedLead.support_assigned_to_name || ''} successfully.`
-            : `Lead #${supportAssignLead.id} assigned to Support Executive ${updatedLead.support_assigned_to_name || ''} successfully.`
+            ? `Lead #${supportAssignLead.id} reassigned to Support Manager ${updatedLead.support_assigned_to_name || ''} successfully.`
+            : `Lead #${supportAssignLead.id} assigned to Support Manager ${updatedLead.support_assigned_to_name || ''} successfully.`
       );
       closeSupportAssignModal();
       window.dispatchEvent(new Event('leadStatsUpdated'));
     } catch (err) {
-      console.error('Failed to assign Support Executive:', err);
+      console.error('Failed to assign Support Manager:', err);
       setSupportAssignError(
-        err.response?.data?.detail || 'Failed to assign the Support Executive. Please try again.'
+        err.response?.data?.detail || 'Failed to assign the Support Manager. Please try again.'
       );
     } finally {
       setAssigningSupport(false);
@@ -2654,7 +2648,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 <th style={{ minWidth: '130px' }}>Product</th>
                 <th style={{ minWidth: '140px' }}>Status</th>
                 <th>Assigned To</th>
-                <th style={{ minWidth: '145px' }}>Support Manager</th>
+                <th style={{ minWidth: '145px' }}>Support Assigned To</th>
                 <th 
                   onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
                   style={{ cursor: 'pointer', userSelect: 'none', minWidth: '165px' }}
@@ -2896,12 +2890,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                         )}
                       </td>
                       <td>
-                        {supportManagerDisplayName(lead) ? (
-                          <span
-                            style={{ fontSize: '0.82rem', fontWeight: '600', color: '#0f766e' }}
-                            title={supportExecutiveTooltip(lead)}
-                          >
-                            {supportManagerDisplayName(lead)}
+                        {lead.support_assigned_to_name ? (
+                          <span style={{ fontSize: '0.82rem', fontWeight: '600', color: '#0f766e' }}>
+                            {lead.support_assigned_to_name}
                           </span>
                         ) : (
                           <span style={{
@@ -3789,7 +3780,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           onClick={() => openSupportAssignModal(selectedLead)}
                           className="btn btn-outline"
                           style={{ fontSize: '0.8rem', fontWeight: '600', padding: '8px 12px', color: '#7c3aed', borderColor: '#ddd6fe', backgroundColor: '#f5f3ff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-                          title={selectedLead.support_assigned_to ? 'Review or change the Support Executive' : 'Assign an active Support Executive'}
+                          title={selectedLead.support_assigned_to ? 'Review or change the Support Manager' : 'Assign an active Support Manager'}
                         >
                           <UserCheck size={14} /> {selectedLead.support_assigned_to ? 'Manage Support' : 'Assign Support'}
                         </button>
@@ -3870,9 +3861,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                           <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
                           <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
                           <div style={{ gridColumn: 'span 2', background: '#f0fdfa', padding: '8px 12px', borderRadius: '6px', border: '1px solid #ccfbf1', color: '#0f766e' }}>
-                            <strong>Support Manager:</strong>{' '}
-                            <span style={{ fontWeight: 700 }} title={supportExecutiveTooltip(selectedLead)}>
-                              {supportManagerDisplayName(selectedLead) || 'Not Assigned'}
+                            <strong>Support Assigned To:</strong>{' '}
+                            <span style={{ fontWeight: 700 }}>
+                              {selectedLead.support_assigned_to_name || 'Not Assigned'}
                             </span>
                             {selectedLead.is_converted_to_support ? (
                               <span style={{ marginLeft: '10px', fontSize: '0.74rem', fontWeight: 700, color: selectedLead.support_assigned_to_name ? '#047857' : '#b45309' }}>
@@ -4075,7 +4066,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                               <div><strong>Rating / Priority:</strong> {selectedLead.rating} / {selectedLead.priority}</div>
                               <div><strong>Assigned To:</strong> {selectedLead.assigned_employee_name || 'Unassigned'}</div>
                               <div><strong>Sales Manager:</strong> {selectedLead.sales_manager_name || 'Not Assigned'}</div>
-                              <div title={supportExecutiveTooltip(selectedLead)}><strong>Support Manager:</strong> {supportManagerDisplayName(selectedLead) || 'Not Assigned'}</div>
+                              <div><strong>Support Assigned To:</strong> {selectedLead.support_assigned_to_name || 'Not Assigned'}</div>
                               <div><strong>Lead ID:</strong> #{selectedLead.id}</div>
                               {selectedLead.followup_date && (
                                 <div style={{ gridColumn: 'span 2', background: '#fffbeb', padding: '6px 10px', borderRadius: '6px', border: '1px solid #fef3c7', color: '#92400e' }}>
@@ -5201,13 +5192,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 borderRadius: '9px', padding: '12px 14px', fontSize: '0.84rem', fontWeight: 600
               }}>
                 The conversion is saved and this lead is now <strong>Pending Support Assignment</strong>.
-                Only an Admin or Support Manager can assign an active Support Team employee.
+                Only an Admin or Support Manager can assign an active Support Manager.
               </div>
             ) : (
               <form onSubmit={handleAssignSupport}>
                 <div style={{ marginBottom: '14px' }}>
                   <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.84rem', fontWeight: 700, color: '#334155' }}>
-                    {supportCurrentOwnerId ? 'Reassign To Support Employee *' : 'Support Team Employee *'}
+                    {supportCurrentOwnerId ? 'Reassign To Support Manager *' : 'Support Manager *'}
                   </label>
                   <select
                     value={supportAgentId}
@@ -5215,24 +5206,24 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                       setSupportAgentId(e.target.value);
                       if (supportAssignError) setSupportAssignError('');
                     }}
-                    disabled={supportMembersLoading || supportAssignStateLoading || assigningSupport}
+                    disabled={supportManagersLoading || supportAssignStateLoading || assigningSupport}
                     style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff' }}
                   >
                     <option value="">
-                      {supportMembersLoading ? 'Loading active Support employees...' : 'Select an active Support Team employee...'}
+                      {supportManagersLoading ? 'Loading active Support Managers...' : 'Select an active Support Manager...'}
                     </option>
-                    {supportTeamMembers.map((member) => (
+                    {supportManagerOptions.map((member) => (
                       <option key={member.id} value={member.id}>
                         {member.name}{member.role ? ` (${member.role})` : ''}
                       </option>
                     ))}
                   </select>
                   <small style={{ color: '#64748b', fontSize: '0.73rem', marginTop: '5px', display: 'block' }}>
-                    Only active Support Team employees are listed. Sales employees, managers/admins, inactive users and other departments are excluded.
+                    Only active Support Managers are listed. Support Executives, Admins, inactive users and other departments are excluded.
                   </small>
-                  {!supportMembersLoading && supportTeamMembers.length === 0 && (
+                  {!supportManagersLoading && supportManagerOptions.length === 0 && (
                     <small style={{ color: '#b45309', fontSize: '0.73rem', marginTop: '4px', display: 'block', fontWeight: 600 }}>
-                      No active Support Team employee is available. Please ask an Admin to activate a Support Executive.
+                      No active Support Manager is available. Please ask an Admin to activate a Support Manager.
                     </small>
                   )}
                 </div>
@@ -5250,7 +5241,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                       }}
                       rows={3}
                       maxLength={2000}
-                      placeholder="Explain why this client is being moved to another Support employee (required)..."
+                      placeholder="Explain why this client is being moved to another Support Manager (required)..."
                       style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fca5a5', resize: 'vertical', fontFamily: 'inherit' }}
                     />
                     <small style={{ color: '#b91c1c', fontSize: '0.73rem', marginTop: '5px', display: 'block', fontWeight: 600 }}>
@@ -5315,7 +5306,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                     className="btn btn-primary"
                     disabled={
                       assigningSupport ||
-                      supportMembersLoading ||
+                      supportManagersLoading ||
                       supportAssignStateLoading ||
                       !supportAgentId ||
                       (supportIsReassignment && !supportAssignReason.trim())

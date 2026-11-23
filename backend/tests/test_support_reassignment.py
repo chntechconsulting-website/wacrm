@@ -29,6 +29,7 @@ from routers.leads import (
     assign_support_lead,
     get_support_assignment,
     get_support_assigned_leads,
+    get_support_team_members,
 )
 from services.permission_service import get_support_authorized_lead_ids
 
@@ -415,6 +416,95 @@ class TestSupportReassignment(unittest.TestCase):
         )
         self.assertTrue(state["can_reassign"])
         self.assertEqual(state["current"]["assigned_by_employee_id"], self.manager_emp.id)
+
+    def test_manager_assignment_options_are_active_support_managers(self):
+        executives = get_support_team_members(
+            db=self.db, current_user=self.admin_user
+        )
+        executive_ids = {member["id"] for member in executives}
+        self.assertIn(self.exec_a.id, executive_ids)
+        self.assertNotIn(self.manager_emp.id, executive_ids)
+
+        managers = get_support_team_members(
+            role="manager", db=self.db, current_user=self.admin_user
+        )
+        manager_ids = {member["id"] for member in managers}
+        self.assertIn(self.manager_emp.id, manager_ids)
+        self.assertIn(self.other_manager_emp.id, manager_ids)
+        self.assertNotIn(self.exec_a.id, manager_ids)
+        for option in managers:
+            self.assertEqual(option["role"], "SUPPORT_MANAGER")
+            self.assertEqual(option["department"], "SUPPORT")
+            self.assertEqual(option["status"], "ACTIVE")
+
+        # A Support Manager's manager dropdown only contains themselves,
+        # matching their managed-team assignment scope.
+        scoped = get_support_team_members(
+            role="manager", db=self.db, current_user=self.manager_user
+        )
+        self.assertEqual([member["id"] for member in scoped], [self.manager_emp.id])
+
+        with self.assertRaises(HTTPException) as ctx:
+            get_support_team_members(
+                role="manager", db=self.db, current_user=self.sales_user
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_admin_can_assign_support_manager_as_owner_and_manager(self):
+        result = assign_support_lead(
+            self.lead.id,
+            {
+                "assigned_agent_id": self.manager_emp.id,
+                "reason": "Escalate to Support Manager",
+            },
+            db=self.db,
+            current_user=self.admin_user,
+        )
+        self.assertFalse(result["already_assigned"])
+        self.assertTrue(result["reassigned"])
+        self.assertEqual(result["assigned_agent_id"], self.manager_emp.id)
+        self.assertEqual(result["support_manager_id"], self.manager_emp.id)
+        self.assertEqual(result["support_manager_name"], self.manager_emp.name)
+
+        self.db.expire_all()
+        lead = self.db.query(Lead).filter(Lead.id == self.lead.id).first()
+        handoff = (
+            self.db.query(SupportHandoff)
+            .filter(SupportHandoff.lead_id == self.lead.id)
+            .order_by(SupportHandoff.id.desc())
+            .first()
+        )
+        self.assertEqual(lead.support_employee_id, self.manager_emp.id)
+        # The Sales owner is still never overwritten.
+        self.assertEqual(lead.assigned_to, self.sales_emp.id)
+        self.assertEqual(handoff.assigned_agent_id, self.manager_emp.id)
+        self.assertEqual(handoff.support_manager_id, self.manager_emp.id)
+        self.assertEqual(handoff.support_manager_name, self.manager_emp.name)
+        # The assigned manager's own reporting Admin must not become the
+        # customer's Support Manager.
+        self.assertNotEqual(
+            handoff.support_manager_id, self.manager_emp.manager_id
+        )
+
+        state = get_support_assignment(
+            self.lead.id, db=self.db, current_user=self.admin_user
+        )
+        self.assertEqual(state["support_employee_id"], self.manager_emp.id)
+        self.assertEqual(state["support_manager_id"], self.manager_emp.id)
+        self.assertEqual(state["support_manager_name"], self.manager_emp.name)
+        self.assertTrue(state["can_reassign"])
+        self.assertIn(self.lead.id, self._assigned_ids(self.manager_user))
+
+        # An idempotent re-submit keeps the manager projection on the manager.
+        again = assign_support_lead(
+            self.lead.id,
+            {"assigned_agent_id": self.manager_emp.id},
+            db=self.db,
+            current_user=self.admin_user,
+        )
+        self.assertTrue(again["already_assigned"])
+        self.assertEqual(again["support_manager_id"], self.manager_emp.id)
+        self.assertEqual(again["support_manager_name"], self.manager_emp.name)
 
     def test_manager_cannot_reassign_outside_managed_team(self):
         with self.assertRaises(HTTPException) as ctx:

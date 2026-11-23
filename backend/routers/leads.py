@@ -451,10 +451,17 @@ def build_lead_out(
         support_assigned_to = support_owner_id
         support_assigned_to_name = support_owner.name if support_owner else None
         if support_owner and not support_manager_id:
-            owner_manager = _resolve_employee_manager(support_owner, db)
-            if owner_manager:
-                support_manager_id = owner_manager.id
-                support_manager_name = owner_manager.name
+            if normalize_role(support_owner.role) == ROLE_SUPPORT_MANAGER:
+                # The assigned owner is itself the Support Manager, so it must
+                # not be projected as somebody else's (e.g. the Admin's)
+                # manager.
+                support_manager_id = support_owner.id
+                support_manager_name = support_owner.name
+            else:
+                owner_manager = _resolve_employee_manager(support_owner, db)
+                if owner_manager:
+                    support_manager_id = owner_manager.id
+                    support_manager_name = owner_manager.name
 
     # Legacy rows assigned a Support employee directly still display correctly
     # in the read-only Sales projection. New assignments never overwrite
@@ -1758,16 +1765,24 @@ def get_lead_purchase_details(
 
 @router.get("/support/team-members")
 def get_support_team_members(
+    role: str = "executive",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Returns the assignable Support team members.
 
-    Only active Support Executives are assignable. Support Managers, Admins,
-    Sales employees and inactive users are deliberately excluded so that the
-    Support assignment dropdown and API cannot hand a customer to the wrong
-    department.
+    ``role=executive`` (the default) keeps the historical behaviour: only
+    active Support Executives are listed, so the Support queue and its
+    dropdown cannot hand a customer to the wrong department.
+
+    ``role=manager`` lists active Support Managers for the Sales page's
+    explicit post-conversion Support Assignment modal. Admin can target any
+    active Support Manager; a Support Manager may only target themselves,
+    which is the only manager inside their own managed-team scope.
+
+    Support Managers, Admins, Sales employees and inactive users are never
+    returned by the default executive listing.
     """
     norm_role = normalize_role(current_user.role)
     if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER, ROLE_SUPPORT_EXECUTIVE]:
@@ -1776,7 +1791,49 @@ def get_support_team_members(
             detail="Access forbidden: Only Support team and Admin can view Support team members."
         )
 
+    target_role = (role or "executive").strip().lower()
+    if target_role not in ("executive", "manager"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="role must be either 'executive' or 'manager'.",
+        )
+    if target_role == "manager" and norm_role == ROLE_SUPPORT_EXECUTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Only Support Managers and Admin can view assignable Support Managers."
+        )
+
     current_emp = get_employee_for_user(current_user, db)
+
+    if target_role == "manager":
+        support_managers = db.query(Employee).filter(
+            Employee.department == "SUPPORT",
+            Employee.status == "ACTIVE",
+            Employee.role.in_(sorted(SUPPORT_MANAGER_ROLES)),
+        )
+        if norm_role == ROLE_SUPPORT_MANAGER:
+            # A Support Manager's assignment scope is their own managed team,
+            # so the only Support Manager they may hand a client to is
+            # themselves.
+            support_managers = support_managers.filter(
+                Employee.id == (current_emp.id if current_emp else -1)
+            )
+        support_managers = support_managers.order_by(Employee.name.asc()).all()
+
+        return [
+            {
+                "id": e.id,
+                "name": e.name,
+                "role": e.role,
+                "department": e.department,
+                "manager_id": e.manager_id,
+                "manager_name": None,
+                "status": e.status
+            }
+            for e in support_managers
+            if is_active_support_manager(e, db)
+        ]
+
     team_ids = None
     if norm_role == ROLE_SUPPORT_MANAGER:
         team_ids = set(get_team_employee_ids_from_user(current_user, db))
@@ -1907,14 +1964,16 @@ def assign_support_lead(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Assign or reassign a Support Executive to a customer that is already in the
+    Assign or reassign a Support employee to a customer that is already in the
     Support workflow. A dedicated ``CONVERTED_TO_SUPPORT`` status or an
     existing Support handoff both qualify; some legitimate handovers keep the
     Sales status at WON.
 
     * Admin has global reassignment access.
     * Support Manager may only reassign within their managed Support team.
-    * The target must be an active Support Executive.
+    * The target must be an active Support Executive or Support Manager.
+      Assigning a Support Manager makes that manager the Support owner and
+      the customer's Support Manager, never their own reporting manager.
     * A reassignment (changing the existing owner) requires a reason.
 
     The whole change is transactional: the previous active assignment is
@@ -1953,13 +2012,16 @@ def assign_support_lead(
 
     agent = db.query(Employee).filter(Employee.id == new_agent_id).first()
     if not agent:
-        raise HTTPException(status_code=404, detail="Support Executive not found")
-    if not is_active_support_executive(agent, db):
+        raise HTTPException(status_code=404, detail="Support employee not found")
+    if not (
+        is_active_support_executive(agent, db)
+        or is_active_support_manager(agent, db)
+    ):
         raise HTTPException(
             status_code=400,
             detail=(
-                "Only an active Support Executive can be assigned. Sales employees, "
-                "Managers/Admins, inactive users and other departments are not allowed."
+                "Only an active Support Manager or Support Executive can be assigned. "
+                "Sales employees, Admins, inactive users and other departments are not allowed."
             )
         )
 
@@ -2016,7 +2078,7 @@ def assign_support_lead(
         if agent.id not in team_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only assign clients to Support Executives in your managed team.",
+                detail="You can only assign clients to Support team members in your managed team.",
             )
         if current_owner_id and current_owner_id not in team_ids:
             raise HTTPException(

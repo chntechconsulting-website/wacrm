@@ -227,10 +227,16 @@ def get_assignment_state(
     support_manager_id = handoff.support_manager_id if handoff else None
     support_manager_name = handoff.support_manager_name if handoff else None
     if not support_manager_name and owner:
-        manager = resolve_employee_manager(db, owner)
-        if manager:
-            support_manager_id = manager.id
-            support_manager_name = manager.name
+        if normalize_role(owner.role) == ROLE_SUPPORT_MANAGER:
+            # The Support owner is itself a Manager: keep the projection on
+            # that manager instead of resolving their reporting Admin.
+            support_manager_id = owner.id
+            support_manager_name = owner.name
+        else:
+            manager = resolve_employee_manager(db, owner)
+            if manager:
+                support_manager_id = manager.id
+                support_manager_name = manager.name
 
     return {
         "lead_id": lead.id,
@@ -383,6 +389,12 @@ def reassign_support_owner(
             if locked_handoff.assigned_agent_id != new_employee.id:
                 locked_handoff.assigned_agent_id = new_employee.id
                 locked_handoff.assigned_agent_name = new_employee.name
+            if normalize_role(new_employee.role) == ROLE_SUPPORT_MANAGER:
+                # An idempotent re-submit must still leave the manager
+                # projection on the assigned manager, including legacy rows
+                # that previously resolved their reporting Admin.
+                locked_handoff.support_manager_id = new_employee.id
+                locked_handoff.support_manager_name = new_employee.name
             if not active_rows:
                 active_row = SupportClientAssignment(
                     lead_id=locked_lead.id,
@@ -481,14 +493,20 @@ def reassign_support_owner(
         # The Support Manager follows the customer's team. Admins reassigning
         # across teams must move manager ownership as well, otherwise the old
         # manager would still see the client and never receive the notice.
-        new_manager = resolve_employee_manager(db, new_employee)
-        if new_manager:
-            locked_handoff.support_manager_id = new_manager.id
-            locked_handoff.support_manager_name = new_manager.name
-        elif not locked_handoff.support_manager_id and actor_employee:
-            if normalize_role(actor_employee.role) == ROLE_SUPPORT_MANAGER:
-                locked_handoff.support_manager_id = actor_employee.id
-                locked_handoff.support_manager_name = actor_employee.name
+        if normalize_role(new_employee.role) == ROLE_SUPPORT_MANAGER:
+            # The assigned owner is itself the Support Manager, so it owns the
+            # manager projection. Never resolve their reporting Admin.
+            locked_handoff.support_manager_id = new_employee.id
+            locked_handoff.support_manager_name = new_employee.name
+        else:
+            new_manager = resolve_employee_manager(db, new_employee)
+            if new_manager:
+                locked_handoff.support_manager_id = new_manager.id
+                locked_handoff.support_manager_name = new_manager.name
+            elif not locked_handoff.support_manager_id and actor_employee:
+                if normalize_role(actor_employee.role) == ROLE_SUPPORT_MANAGER:
+                    locked_handoff.support_manager_id = actor_employee.id
+                    locked_handoff.support_manager_name = actor_employee.name
 
         if reason:
             existing_notes = (locked_handoff.support_notes or "").strip()

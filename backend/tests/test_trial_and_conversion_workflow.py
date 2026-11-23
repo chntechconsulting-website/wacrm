@@ -6,7 +6,8 @@ The ten scenarios map directly to the requested acceptance criteria:
 1.  TRIAL is a first-class Sales status (display/filter/stats aliases).
 2.  Sales projections expose the read-only Sales Manager and Support owner.
 3.  Manual Sales assignment accepts only active Sales Managers.
-4.  Support assignment lists and accepts only active Support Executives.
+4.  Support assignment lists active Support Executives by default and accepts
+    active Support Managers as explicit owners.
 5.  WON stays a Sales milestone: no Support owner and no Support notification.
 6.  Support assignment is blocked until an explicit Converted to Support step.
 7.  Conversion is restricted, audited, recorded once and cannot be duplicated.
@@ -278,9 +279,9 @@ class TrialAndConversionWorkflowTests(unittest.TestCase):
         self.assertEqual(assigned.sales_manager_id, self.sales_manager_emp.id)
 
     # ------------------------------------------------------------------
-    # 4. Support assignment is active Support Executive only
+    # 4. Support assignment lists Executives and accepts Managers
     # ------------------------------------------------------------------
-    def test_04_support_assignment_accepts_only_active_support_executives(self):
+    def test_04_support_assignment_lists_executives_and_accepts_managers(self):
         members = get_support_team_members(
             db=self.db, current_user=self.support_manager_user
         )
@@ -295,7 +296,6 @@ class TrialAndConversionWorkflowTests(unittest.TestCase):
         lead = self._won_and_converted_lead()
         for invalid_employee in (
             self.sales_exec_emp,
-            self.support_manager_emp,
             self.inactive_support_emp,
         ):
             with self.assertRaises(HTTPException) as blocked:
@@ -315,6 +315,28 @@ class TrialAndConversionWorkflowTests(unittest.TestCase):
         )
         self.assertTrue(assigned["success"])
         self.assertEqual(assigned["assigned_agent_id"], self.support_exec_emp.id)
+
+        # An active Support Manager is a valid explicit owner. The manager
+        # owns the customer and must not be projected as reporting to Admin.
+        manager_assigned = assign_support_lead(
+            lead_id=lead.id,
+            payload={
+                "assigned_agent_id": self.support_manager_emp.id,
+                "reason": "Escalate to Support Manager",
+            },
+            db=self.db,
+            current_user=self.support_manager_user,
+        )
+        self.assertTrue(manager_assigned["success"])
+        self.assertEqual(
+            manager_assigned["assigned_agent_id"], self.support_manager_emp.id
+        )
+        self.assertEqual(
+            manager_assigned["support_manager_id"], self.support_manager_emp.id
+        )
+        self.assertEqual(
+            manager_assigned["support_manager_name"], self.support_manager_emp.name
+        )
 
     # ------------------------------------------------------------------
     # 5. WON is Sales-only
