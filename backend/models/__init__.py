@@ -27,7 +27,13 @@ from models.whatsapp_coexistence import (
     WhatsAppCoexistenceEvent,
     WhatsAppSmbContact,
 )
-from models.finance import Payment, CustomerSubscription, SubscriptionHistory, RefundRequest
+from models.finance import (
+    Payment,
+    ProformaPaymentEvent,
+    CustomerSubscription,
+    SubscriptionHistory,
+    RefundRequest,
+)
 from models.support import (
     CustomerPOC,
     EmployeeLeave,

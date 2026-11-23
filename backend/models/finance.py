@@ -1,4 +1,16 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Boolean
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    Float,
+    DateTime,
+    ForeignKey,
+    JSON,
+    Boolean,
+    Index,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -156,3 +168,69 @@ class RefundRequest(Base):
     requested_by = relationship("User", foreign_keys=[requested_by_id])
     approved_by = relationship("User", foreign_keys=[approved_by_id])
     processed_by = relationship("User", foreign_keys=[processed_by_id])
+
+
+class ProformaPaymentEvent(Base):
+    """Idempotency and audit record for payments received from the external ERP.
+
+    One row is written for every accepted payment. ``event_id`` is unique so a
+    provider retry that reuses the same event identifier cannot be processed
+    twice. ``transaction_id`` is unique per provider when the ERP supplies one,
+    which protects against two different event IDs describing the same bank
+    transaction.
+
+    Rejected/ignored events are not stored here: a later retry may legitimately
+    carry the same event ID with a successful status. Ignored deliveries are
+    recorded in ``integration_logs`` instead.
+    """
+
+    __tablename__ = "proforma_payment_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "transaction_id",
+            name="uq_proforma_payment_provider_transaction",
+        ),
+        Index(
+            "ix_proforma_payment_events_quotation_created",
+            "quotation_id",
+            "created_at",
+        ),
+        Index(
+            "ix_proforma_payment_events_lead_created",
+            "lead_id",
+            "created_at",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(String(191), unique=True, index=True, nullable=False)
+    provider = Column(String(50), default="WAQUOTE", nullable=False, index=True)
+    event_type = Column(String(100), nullable=True)
+
+    # PROCESSED is the only value written. Kept as a column so a future
+    # reconciliation job can distinguish outcomes without a migration.
+    status = Column(String(30), default="PROCESSED", nullable=False, index=True)
+
+    external_proforma_id = Column(String(100), nullable=True, index=True)
+    proforma_number = Column(String(100), nullable=True)
+    external_payment_id = Column(String(150), nullable=True)
+    transaction_id = Column(String(150), nullable=True, index=True)
+
+    quotation_id = Column(Integer, ForeignKey("quotations.id"), nullable=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=True, index=True)
+
+    amount = Column(Float, default=0.0, nullable=False)
+    currency = Column(String(10), default="INR", nullable=False)
+    payment_method = Column(String(50), nullable=True)
+    payment_status = Column(String(30), nullable=True)  # PAID / PARTIALLY_PAID
+    message = Column(Text, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    quotation = relationship("Quotation", foreign_keys=[quotation_id])
+    lead = relationship("Lead", foreign_keys=[lead_id])
+    payment = relationship("Payment", foreign_keys=[payment_id])

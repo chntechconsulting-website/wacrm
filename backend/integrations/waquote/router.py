@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from typing import Dict, Any, Optional, List
@@ -15,6 +16,7 @@ from models.customer import Customer
 from models.activity import LeadActivity
 from models.quotation import Quotation, WAHRMSBundle
 from models.audit_log import AuditLog
+from models.finance import Payment
 from models.workflow import FinanceHandoff
 from services.auth import get_current_user, require_roles
 from services.permission_service import (
@@ -292,6 +294,38 @@ def _sales_lead_scope_query(db: Session, current_user: User):
     return query
 
 
+def _serialize_document_payments(db: Session, r: Quotation, limit: int = 100) -> List[Dict[str, Any]]:
+    """Payment history for the Proforma/Invoice detail modal."""
+    if r.doc_type not in ("proforma", "invoice"):
+        return []
+
+    rows = (
+        db.query(Payment)
+        .filter(Payment.invoice_id == r.id)
+        .order_by(desc(Payment.payment_date), desc(Payment.id))
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": payment.id,
+            "paymentNumber": payment.payment_number,
+            "amount": float(payment.amount or 0.0),
+            "currency": payment.currency,
+            "method": payment.payment_method,
+            "type": payment.payment_type,
+            "status": payment.status,
+            "transactionId": payment.transaction_reference,
+            "bankName": payment.bank_name,
+            "paymentDate": (
+                payment.payment_date.isoformat() if payment.payment_date else None
+            ),
+            "notes": payment.notes,
+        }
+        for payment in rows
+    ]
+
+
 def _serialize_document_detail(r: Quotation, db: Session) -> Dict[str, Any]:
     issue_formatted = r.issue_date.strftime("%d/%m/%Y") if r.issue_date else "—"
     due_formatted = r.due_date.strftime("%d/%m/%Y") if r.due_date else "—"
@@ -322,6 +356,7 @@ def _serialize_document_detail(r: Quotation, db: Session) -> Dict[str, Any]:
             "totalPaid": paid_val,
             "balance": balance_val,
         },
+        "payments": _serialize_document_payments(db, r),
         "customer": {
             "name": r.customer_name,
             "companyName": r.company_name,
@@ -1681,14 +1716,50 @@ async def waquote_webhook_receiver(
     request: Request,
     db: Session = Depends(get_db)
 ):
+    """Receive WA Quote document / payment notifications.
+
+    Document-created and document-sent events are acknowledged but ignored.
+    A verified successful payment is routed through the shared Proforma
+    payment service, which records the payment, marks the Lead WON and updates
+    the Finance/Support handoffs.
     """
-    Receives webhook notifications from WA Quote when documents are created, updated, or paid.
-    """
+    from integrations.proforma.auth import authenticate_proforma_webhook
+    from services.proforma_payment_service import ProformaPaymentService
+
+    raw_body = await request.body()
+    auth_mode = authenticate_proforma_webhook(request, raw_body, db)
+
     try:
-        payload = await request.json()
-    except Exception as e:
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
         logger.error(f"Invalid JSON in WA Quote webhook: {e}")
-        return {"ok": False, "error": "Invalid JSON"}
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON payload.",
+        )
+
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Webhook payload must be a JSON object.",
+        )
+
+    try:
+        return ProformaPaymentService.process_webhook(
+            db=db,
+            payload=payload,
+            headers=dict(request.headers),
+            source="WAQUOTE",
+            auth_mode=auth_mode,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to process WA Quote webhook.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process webhook.",
+        )
 
 @router.post("/quotations/{quote_id}/generate-proforma")
 def generate_proforma_from_quotation(
