@@ -1,8 +1,26 @@
 import pdfMake from 'pdfmake/build/pdfmake';
 import pdfFonts from 'pdfmake/build/vfs_fonts';
 import { numberToIndianWords, COMPANY_DEFAULTS } from './billingMoney';
-import { getCompanyById, getCompanyLogo, resolveIssuerCompanyId } from './companyBranding';
+import { getCompanyById, resolveIssuerCompanyId } from './companyBranding';
+import { getCompanyLogo } from './companyLogos';
 import { CHN_QR_CARD_BASE64 } from './paymentQrBase64';
+import { splitDescriptionIntoLines } from './quotationText';
+import {
+  BIOMETRIC_BANK,
+  WAHRMS_TERMS_AND_CONDITIONS,
+  BIOMETRIC_TERMS_AND_CONDITIONS,
+  resolveDocumentTerms
+} from './quotationTerms';
+
+// Keep the historical exports available for existing callers while the
+// dependency-free implementations live in quotationText/quotationTerms.
+export { splitDescriptionIntoLines };
+export {
+  BIOMETRIC_BANK,
+  WAHRMS_TERMS_AND_CONDITIONS,
+  BIOMETRIC_TERMS_AND_CONDITIONS,
+  resolveDocumentTerms
+};
 
 // Ensure virtual file system fonts are loaded
 if (pdfFonts && pdfFonts.pdfMake && pdfFonts.pdfMake.vfs) {
@@ -31,82 +49,6 @@ const CONTENT_WIDTH = 539; // Portrait A4 width (595) minus 28pt margins on eith
 const BIOMETRIC_THEME_BG = '#EFFBF9';
 const BIOMETRIC_THEME_ACCENT = '#0f766e';
 
-// Biometric hardware documents are billed to the dedicated Axis Bank
-// collection account. WAHRMS documents keep using the company profile bank
-// details from billingMoney.js.
-export const BIOMETRIC_BANK = {
-  accountName: 'CHN TECHNOLOGIES PRIVATE LIMITED',
-  bankName: 'AXIS BANK',
-  accountNumber: '921020014696411',
-  ifsc: 'UTIB0003702',
-  accountType: 'Current'
-};
-
-export const WAHRMS_TERMS_AND_CONDITIONS = [
-  '1. Prices are subject to applicable GST as specified.',
-  '2. Software activation and onboarding will begin upon PO confirmation and receipt of payment.',
-  '3. Setup, training, and technical support will be provided as agreed.',
-  '4. The client is responsible for providing accurate employee and payroll data and verifying payroll calculations.',
-  '5. Timely subscription renewal is required to ensure uninterrupted software access.',
-  '6. Customization and third-party integrations may incur additional charges.',
-  '7. Confirmation of the purchase order constitutes acceptance of the quotation and these terms.'
-].join('\n');
-
-export const BIOMETRIC_TERMS_AND_CONDITIONS = [
-  '1. All civil works must be done by the client.',
-  '2. Electrical Cable and Casing Pipe, Switch & Socket as per the Cost. Charged by Electrician (Clients Scope).',
-  '3. Cable Per Meter Rs.45/-, Cable Laying Charges Per Meter Rs.35/-',
-  '4. Warranty: Products have one-year Manufacturer warranty. The warranty does not cover any physical damages.',
-  '5. Device Installation Charges Rs.1000- Per Location Per Device in Chennai and Coimbatore Only (Other Cities within TN Rs.2000).',
-  '6. Local or Remote ESSL Software Installation Charges: Chennai and Coimbatore Only: ₹1000 per location per device. Other Cities within TN: ₹1500 per location per device.',
-  '',
-  'Payment Terms:',
-  '• 75% advance payment is required before mobilization and commencement of work.',
-  '• The remaining 25% balance payment is payable immediately upon successful completion of the work.'
-].join('\n');
-
-const LEGACY_PROFORMA_TERMS = [
-  [
-    '1. Payment terms: 100% advance payment against this Proforma Invoice.',
-    '2. Bank transfers to be credited to the Axis Bank account mentioned above.',
-    '3. Materials will be dispatched upon payment credit receipt.',
-    '4. Goods once sold will not be taken back.'
-  ].join('\n'),
-  [
-    '1. 100% advance payment against Proforma Invoice.',
-    '2. Service will be activated upon payment confirmation.',
-    '3. Taxes applicable as per GST guidelines.'
-  ].join('\n'),
-  [
-    '1. Software access activates upon payment.',
-    '2. Prices subject to applicable GST.'
-  ].join('\n')
-];
-
-function normalizeTerms(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-const LEGACY_PROFORMA_TERMS_NORMALIZED = new Set(LEGACY_PROFORMA_TERMS.map(normalizeTerms));
-const LEGACY_BIOMETRIC_PLACEHOLDERS = new Set(['biometric terms', 'biometric terms and conditions']);
-
-export function resolveDocumentTerms(terms, docType, productCategory = '') {
-  const cleaned = String(terms || '').trim();
-  const type = String(docType || '').toLowerCase();
-  const isBiometric = String(productCategory || '').trim().toLowerCase() === 'biometric';
-  if (type === 'quotation' || type === 'proforma') {
-    const normalized = normalizeTerms(cleaned);
-    if (
-      !cleaned ||
-      LEGACY_PROFORMA_TERMS_NORMALIZED.has(normalized) ||
-      (isBiometric && LEGACY_BIOMETRIC_PLACEHOLDERS.has(normalized.toLowerCase()))
-    ) {
-      return isBiometric ? BIOMETRIC_TERMS_AND_CONDITIONS : WAHRMS_TERMS_AND_CONDITIONS;
-    }
-  }
-  return cleaned;
-}
-
 function fmt(n) {
   const val = Number(n || 0);
   return new Intl.NumberFormat('en-IN', {
@@ -124,45 +66,6 @@ function formatDateDisplay(d) {
     day: '2-digit',
     year: 'numeric'
   }).format(dateObj);
-}
-
-export function splitDescriptionIntoLines(rawDescription) {
-  if (!rawDescription) return ['—'];
-  
-  // Normalize and mend any accidental linebreaks inside key labels
-  let rawStr = String(rawDescription)
-    .replace(/No\.?\s*Of\s*[\r\n]+\s*Onboardings?/gi, 'No. of Onboardings')
-    .replace(/Unit\s*[\r\n]+\s*Price/gi, 'Unit Price')
-    .trim();
-
-  // Split on existing linebreaks first
-  const rawLines = rawStr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  
-  const finalLines = [];
-  // Match whole labels so the word "Onboardings" inside "No. of Onboardings"
-  // is consumed together with its label. Each label stays with its value.
-  const labelPattern = /\b(?:WaPayroll|Duration|No\.?\s*Of\s+onboardings?|onboardings?|Unit\s*Price|Price\s*per\s*user|Plan(?=\s*:)|SIM\s*Card|FACE\+FINGER)\b\s*:?/gi;
-
-  for (const line of rawLines) {
-    const normalized = line.replace(/\s+/g, ' ').trim();
-    const matches = [...normalized.matchAll(labelPattern)];
-    if (matches.length === 0) {
-      finalLines.push(line);
-      continue;
-    }
-
-    const base = normalized.slice(0, matches[0].index).trim();
-    if (base) finalLines.push(base);
-
-    matches.forEach((match, index) => {
-      const start = match.index;
-      const end = index + 1 < matches.length ? matches[index + 1].index : normalized.length;
-      const segment = normalized.slice(start, end).trim();
-      if (segment) finalLines.push(segment);
-    });
-  }
-  
-  return finalLines.length > 0 ? finalLines : ['—'];
 }
 
 export function generateBillingPdf(docData, download = true) {

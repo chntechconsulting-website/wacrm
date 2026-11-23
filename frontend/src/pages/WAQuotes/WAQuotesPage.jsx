@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react';
 import { useLocation, useNavigate, Navigate } from 'react-router-dom';
 import API from '../../services/api';
 import './WAQuotesPage.css';
@@ -25,24 +25,29 @@ import {
   Pencil,
   Link2
 } from 'lucide-react';
-import QuotationModal from '../../components/Billing/QuotationModal';
-import DocumentPdfPreviewModal from '../../components/Billing/PdfPreviewModal';
-import LinkQuotationToLeadModal from '../../components/Billing/LinkQuotationToLeadModal';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines } from '../../utils/quotationPdf';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
 import { getCompanyById, resolveIssuerCompanyId } from '../../utils/companyBranding';
+import { splitDescriptionIntoLines } from '../../utils/quotationText';
 import { useAuth } from '../../context/AuthContext';
 import PingoEmptyState from '../../components/Common/PingoEmptyState';
 import PingoPopupService from '../../services/pingoPopupService';
 
+// pdfmake, the font bundle and the full quotation studio are ~4.8 MB. They are
+// loaded only when the user actually opens a document modal, so the WAQuote
+// list can render without waiting for them.
+const QuotationModal = React.lazy(() => import('../../components/Billing/QuotationModal'));
+const DocumentPdfPreviewModal = React.lazy(() => import('../../components/Billing/PdfPreviewModal'));
+const LinkQuotationToLeadModal = React.lazy(() => import('../../components/Billing/LinkQuotationToLeadModal'));
+
+const INR_FORMATTER = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 0
+});
 
 const formatINR = (val) => {
   if (val === null || val === undefined || isNaN(val)) return '₹0';
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0
-  }).format(val);
+  return INR_FORMATTER.format(val);
 };
 
 const documentKey = (document) =>
@@ -91,6 +96,7 @@ const WAQuotesPage = () => {
   // Action status / Toast feedback
   const [convertingQuoteId, setConvertingQuoteId] = useState(null);
   const [retryingSyncId, setRetryingSyncId] = useState(null);
+  const [openingDocId, setOpeningDocId] = useState(null);
   const [actionToast, setActionToast] = useState(null);
 
   // PDF Interactive Preview State
@@ -113,10 +119,13 @@ const WAQuotesPage = () => {
       (selectedDoc?.docType || 'quotation').toLowerCase()
     );
 
-  const fetchSummary = async () => {
+  const fetchSummary = async ({ force = false } = {}) => {
     try {
       setSummaryLoading(true);
-      const res = await API.get('/integrations/waquote/summary');
+      const res = await API.get('/integrations/waquote/summary', {
+        cacheTTL: 30000,
+        ...(force ? { skipCache: true } : {}),
+      });
       if (res.data?.ok) {
         setSummary(res.data.metrics || null);
       }
@@ -128,11 +137,13 @@ const WAQuotesPage = () => {
     }
   };
 
-  const fetchDocuments = async (query = searchQuery, tabOverride = activeTab) => {
+  const fetchDocuments = async (query = searchQuery, tabOverride = activeTab, { force = false } = {}) => {
+    const requestId = latestDocsRequestRef.current + 1;
+    latestDocsRequestRef.current = requestId;
     try {
       setLoading(true);
       setError(null);
-      const params = {};
+      const params = { compact: true };
       if (tabOverride === 'drafts') {
         // Drafts are deliberately isolated from issued quotations.
         params.doc_type = 'quotation';
@@ -154,13 +165,19 @@ const WAQuotesPage = () => {
         params.productCategory = categoryFilter;
       }
 
-      const res = await API.get('/integrations/waquote/documents', { params });
+      const res = await API.get('/integrations/waquote/documents', {
+        params,
+        cacheTTL: 15000,
+        ...(force ? { skipCache: true } : {}),
+      });
+      if (requestId !== latestDocsRequestRef.current) return;
       if (res.data?.ok) {
         setDocuments(res.data.documents || []);
       } else {
         setDocuments([]);
       }
     } catch (err) {
+      if (requestId !== latestDocsRequestRef.current) return;
       console.error('Failed to load documents', err);
       if (err.response?.status === 403) {
         setError('Access restricted: You do not have permission to view sales billing documents.');
@@ -169,7 +186,7 @@ const WAQuotesPage = () => {
       }
       setDocuments([]);
     } finally {
-      setLoading(false);
+      if (requestId === latestDocsRequestRef.current) setLoading(false);
     }
   };
 
@@ -181,6 +198,8 @@ const WAQuotesPage = () => {
   }, [user?.id, user?.employee_id]);
 
   const isFirstMount = useRef(true);
+  const latestDocsRequestRef = useRef(0);
+  const searchDebounceRef = useRef(null);
 
   // Instant fetch on tab/status/category switch, debounced fetch on search query typing
   useEffect(() => {
@@ -189,15 +208,23 @@ const WAQuotesPage = () => {
       fetchDocuments(searchQuery);
       return;
     }
-    const timer = setTimeout(() => {
+    searchDebounceRef.current = setTimeout(() => {
       fetchDocuments(searchQuery);
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    };
   }, [activeTab, paymentFilter, categoryFilter, searchQuery, user?.id, user?.employee_id]);
 
-  // Handle immediate form submit
+  // Handle immediate form submit. Cancel the pending debounce so typing and
+  // pressing Enter cannot produce two identical list requests.
   const handleSearchSubmit = (e) => {
     if (e) e.preventDefault();
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
     fetchDocuments(searchQuery);
   };
 
@@ -309,46 +336,95 @@ const WAQuotesPage = () => {
     setShowQuoteModal(true);
   };
 
-  const handleEditDoc = (doc) => {
+  // The list endpoint returns a compact projection (no line items or terms).
+  // Fetch the full document only when the user opens Edit, Details or Preview.
+  const documentNeedsDetail = (doc) =>
+    doc?.compact === true ||
+    !Array.isArray(doc?.lineItems) ||
+    doc.lineItems.length === 0;
+
+  const fetchDocumentDetail = async (doc) => {
+    const cleanId = documentKey(doc);
+    if (!cleanId) return doc;
+    const res = await API.get(`/integrations/waquote/documents/${cleanId}`, {
+      cacheTTL: 60000,
+    });
+    return res.data?.ok && res.data.document ? res.data.document : doc;
+  };
+
+  const loadFullDocument = async (doc) => {
+    if (!doc || !documentNeedsDetail(doc)) return doc;
+    return fetchDocumentDetail(doc);
+  };
+
+  const handleEditDoc = async (doc) => {
     if (!doc) return;
-    const cleanId = String(doc.id || '').replace('local_', '') || null;
-    const productCategory = doc.productCategory || doc.product_category || '';
+    let fullDoc = doc;
+    if (documentNeedsDetail(doc)) {
+      setOpeningDocId(doc.id || doc.rawId);
+      try {
+        fullDoc = await loadFullDocument(doc);
+      } catch (err) {
+        console.warn('Failed to load full quotation, using list data:', err);
+      } finally {
+        setOpeningDocId(null);
+      }
+    }
+    const cleanId = String(fullDoc.id || '').replace('local_', '') || null;
+    const productCategory = fullDoc.productCategory || fullDoc.product_category || '';
     // Never substitute the first/default issuer here. Explicit saved identity
     // wins; otherwise resolve from the saved category (historical documents).
     const companyId = resolveIssuerCompanyId({
-      ...doc,
+      ...fullDoc,
       productCategory
     });
     setModalInitialData({
       id: cleanId,
       docId: cleanId,
-      docType: (doc.docType || 'quotation').toLowerCase(),
-      status: String(doc.status || '').toLowerCase(),
+      docType: (fullDoc.docType || 'quotation').toLowerCase(),
+      status: String(fullDoc.status || '').toLowerCase(),
       companyId,
-      issuer: doc.issuer || null,
-      logoRef: doc.logoRef || doc.logo_ref || doc.issuer?.logoRef || null,
-      issuerGstin: doc.issuerGstin || doc.issuer_gstin || doc.issuer?.gstin || null,
-      issuerPan: doc.issuerPan || doc.issuer_pan || doc.issuer?.pan || null,
-      documentPrefix: doc.documentPrefix || doc.document_prefix || doc.issuer?.documentPrefix || null,
-      customerName: doc.customer?.name || doc.customerName || doc.customer_name || '',
-      companyName: doc.customer?.companyName || doc.companyName || doc.company_name || '',
-      phone: doc.customer?.phone || doc.phone || '',
-      email: doc.customer?.email || doc.email || '',
-      address: doc.customer?.address?.line1 || doc.address || '',
-      state: doc.customer?.address?.state || doc.state || 'Tamil Nadu',
-      stateCode: doc.customer?.address?.stateCode || doc.stateCode || '33',
-      gstin: doc.customer?.gstin || doc.gstin || '',
-      lineItems: doc.lineItems || doc.items || doc.line_items || [],
-      terms: doc.termsAndConditions || doc.terms || doc.terms_and_conditions || '',
-      notes: doc.notes !== undefined ? doc.notes : '',
-      leadId: doc.leadId || doc.lead_id || null,
-      customerId: doc.customerId || doc.customer_id || null,
-      docNumber: doc.number || doc.doc_number || '',
-      selectedBundle: doc.selectedBundle || doc.selected_bundle || null,
+      issuer: fullDoc.issuer || null,
+      logoRef: fullDoc.logoRef || fullDoc.logo_ref || fullDoc.issuer?.logoRef || null,
+      issuerGstin: fullDoc.issuerGstin || fullDoc.issuer_gstin || fullDoc.issuer?.gstin || null,
+      issuerPan: fullDoc.issuerPan || fullDoc.issuer_pan || fullDoc.issuer?.pan || null,
+      documentPrefix: fullDoc.documentPrefix || fullDoc.document_prefix || fullDoc.issuer?.documentPrefix || null,
+      customerName: fullDoc.customer?.name || fullDoc.customerName || fullDoc.customer_name || '',
+      companyName: fullDoc.customer?.companyName || fullDoc.companyName || fullDoc.company_name || '',
+      phone: fullDoc.customer?.phone || fullDoc.phone || '',
+      email: fullDoc.customer?.email || fullDoc.email || '',
+      address: fullDoc.customer?.address?.line1 || fullDoc.address || '',
+      state: fullDoc.customer?.address?.state || fullDoc.state || 'Tamil Nadu',
+      stateCode: fullDoc.customer?.address?.stateCode || fullDoc.stateCode || '33',
+      gstin: fullDoc.customer?.gstin || fullDoc.gstin || '',
+      lineItems: fullDoc.lineItems || fullDoc.items || fullDoc.line_items || [],
+      terms: fullDoc.termsAndConditions || fullDoc.terms || fullDoc.terms_and_conditions || '',
+      notes: fullDoc.notes !== undefined ? fullDoc.notes : '',
+      leadId: fullDoc.leadId || fullDoc.lead_id || null,
+      customerId: fullDoc.customerId || fullDoc.customer_id || null,
+      docNumber: fullDoc.number || fullDoc.doc_number || '',
+      selectedBundle: fullDoc.selectedBundle || fullDoc.selected_bundle || null,
       productCategory: productCategory || getCompanyById(companyId)?.productCategory || 'wahrms',
-      preparedBy: doc.preparedBy || doc.prepared_by || ''
+      preparedBy: fullDoc.preparedBy || fullDoc.prepared_by || ''
     });
     setShowQuoteModal(true);
+  };
+
+  const handleOpenDetails = async (doc) => {
+    if (!doc) return;
+    if (!documentNeedsDetail(doc)) {
+      setSelectedDoc(doc);
+      return;
+    }
+    setOpeningDocId(doc.id || doc.rawId);
+    try {
+      setSelectedDoc(await loadFullDocument(doc));
+    } catch (err) {
+      console.warn('Failed to load full quotation detail:', err);
+      setSelectedDoc(doc);
+    } finally {
+      setOpeningDocId(null);
+    }
   };
 
   const handleDocSuccess = (savedDoc) => {
@@ -503,38 +579,49 @@ const WAQuotesPage = () => {
     }
   };
 
-  const handleOpenPdfPreview = (doc) => {
+  const handleOpenPdfPreview = async (doc) => {
     if (!doc) return;
-    const dType = (doc.docType || doc.doc_type || 'quotation').toLowerCase();
-    const companyId = resolveIssuerCompanyId(doc);
-    const productCategory = doc.productCategory
-      || doc.product_category
+    let fullDoc = doc;
+    if (documentNeedsDetail(doc)) {
+      setOpeningDocId(doc.id || doc.rawId);
+      try {
+        fullDoc = await loadFullDocument(doc);
+      } catch (err) {
+        console.warn('Failed to load full quotation for PDF, using list data:', err);
+      } finally {
+        setOpeningDocId(null);
+      }
+    }
+    const dType = (fullDoc.docType || fullDoc.doc_type || 'quotation').toLowerCase();
+    const companyId = resolveIssuerCompanyId(fullDoc);
+    const productCategory = fullDoc.productCategory
+      || fullDoc.product_category
       || getCompanyById(companyId)?.productCategory
       || '';
     const docData = {
-      ...doc,
-      id: doc.id || doc.docId || null,
-      docId: doc.id || doc.docId || null,
+      ...fullDoc,
+      id: fullDoc.id || fullDoc.docId || null,
+      docId: fullDoc.id || fullDoc.docId || null,
       docType: dType,
       doc_type: dType,
       companyId,
-      logoRef: doc.logoRef || doc.logo_ref || doc.issuer?.logoRef || null,
-      issuerGstin: doc.issuerGstin || doc.issuer_gstin || doc.issuer?.gstin || null,
-      issuerPan: doc.issuerPan || doc.issuer_pan || doc.issuer?.pan || null,
-      documentPrefix: doc.documentPrefix || doc.document_prefix || doc.issuer?.documentPrefix || null,
+      logoRef: fullDoc.logoRef || fullDoc.logo_ref || fullDoc.issuer?.logoRef || null,
+      issuerGstin: fullDoc.issuerGstin || fullDoc.issuer_gstin || fullDoc.issuer?.gstin || null,
+      issuerPan: fullDoc.issuerPan || fullDoc.issuer_pan || fullDoc.issuer?.pan || null,
+      documentPrefix: fullDoc.documentPrefix || fullDoc.document_prefix || fullDoc.issuer?.documentPrefix || null,
       productCategory,
-      number: doc.number || doc.doc_number || doc.docNumber || 'DOC',
-      customerName: doc.customer?.name || doc.customer_name || doc.customerName || 'Customer',
-      companyName: doc.customer?.companyName || doc.company_name || doc.companyName || '',
-      phone: doc.customer?.phone || doc.phone || '',
-      email: doc.customer?.email || doc.email || '',
-      address: doc.customer?.address?.line1 || doc.address || '',
-      state: doc.customer?.address?.state || doc.state || 'Tamil Nadu',
-      stateCode: doc.customer?.address?.stateCode || doc.state_code || '33',
-      gstin: doc.customer?.gstin || doc.gstin || '',
-      lineItems: doc.lineItems || doc.line_items || doc.items || [],
-      terms: doc.termsAndConditions || doc.terms_and_conditions || doc.terms || '',
-      preparedBy: doc.preparedBy || doc.prepared_by || ''
+      number: fullDoc.number || fullDoc.doc_number || fullDoc.docNumber || 'DOC',
+      customerName: fullDoc.customer?.name || fullDoc.customer_name || fullDoc.customerName || 'Customer',
+      companyName: fullDoc.customer?.companyName || fullDoc.company_name || fullDoc.companyName || '',
+      phone: fullDoc.customer?.phone || fullDoc.phone || '',
+      email: fullDoc.customer?.email || fullDoc.email || '',
+      address: fullDoc.customer?.address?.line1 || fullDoc.address || '',
+      state: fullDoc.customer?.address?.state || fullDoc.state || 'Tamil Nadu',
+      stateCode: fullDoc.customer?.address?.stateCode || fullDoc.state_code || '33',
+      gstin: fullDoc.customer?.gstin || fullDoc.gstin || '',
+      lineItems: fullDoc.lineItems || fullDoc.line_items || fullDoc.items || [],
+      terms: fullDoc.termsAndConditions || fullDoc.terms_and_conditions || fullDoc.terms || '',
+      preparedBy: fullDoc.preparedBy || fullDoc.prepared_by || ''
     };
     setPreviewPdfDoc(docData);
     setShowPdfPreviewModal(true);
@@ -546,8 +633,9 @@ const WAQuotesPage = () => {
   };
 
   const handleRefresh = () => {
-    fetchSummary();
-    fetchDocuments();
+    // Explicit refresh must bypass the short-lived GET cache.
+    fetchSummary({ force: true });
+    fetchDocuments(searchQuery, activeTab, { force: true });
   };
 
   const financials = summary?.financials || {};
@@ -841,14 +929,15 @@ const WAQuotesPage = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr>
-                  <td colSpan="9" style={{ textAlign: 'center', padding: '48px', color: '#64748b' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                      <RefreshCw size={24} className="animate-spin text-blue-600" />
-                      <span>Loading documents from WA Quote...</span>
-                    </div>
-                  </td>
-                </tr>
+                Array.from({ length: 6 }).map((_, rowIndex) => (
+                  <tr key={`skeleton-${rowIndex}`} className="waquotes-skeleton-row" aria-hidden="true">
+                    {['32%', '58%', '70%', '46%', '46%', '38%', '38%', '52%', '64%'].map((width, colIndex) => (
+                      <td key={`skeleton-${rowIndex}-${colIndex}`}>
+                        <span className="waquotes-skeleton-bar" style={{ width }} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
               ) : documents.length === 0 ? (
                 <tr>
                   <td colSpan="9" style={{ padding: '36px 16px', background: '#f8fafc' }}>
@@ -1046,8 +1135,13 @@ const WAQuotesPage = () => {
                               className="btn btn-sm btn-outline flex items-center gap-1"
                               style={{ color: '#2563eb', borderColor: '#bfdbfe', backgroundColor: '#eff6ff' }}
                               title={docType === 'invoice' ? "Edit Tax Invoice (Finance)" : "Edit Document"}
+                              disabled={openingDocId === doc.id}
                             >
-                              <Pencil size={13} />
+                              {openingDocId === doc.id ? (
+                                <RefreshCw size={13} className="animate-spin" />
+                              ) : (
+                                <Pencil size={13} />
+                              )}
                               Edit
                             </button>
                           ) : (
@@ -1057,18 +1151,28 @@ const WAQuotesPage = () => {
                               className="btn btn-sm btn-outline flex items-center gap-1"
                               style={{ color: '#475569', borderColor: '#cbd5e1', backgroundColor: '#f8fafc' }}
                               title="View Tax Invoice (Read-Only)"
+                              disabled={openingDocId === doc.id}
                             >
-                              <Eye size={13} />
+                              {openingDocId === doc.id ? (
+                                <RefreshCw size={13} className="animate-spin" />
+                              ) : (
+                                <Eye size={13} />
+                              )}
                               View
                             </button>
                           )}
                           <button
                             type="button"
-                            onClick={() => setSelectedDoc(doc)}
+                            onClick={() => handleOpenDetails(doc)}
                             className="btn btn-sm btn-outline flex items-center gap-1"
                             title="View Document Details"
+                            disabled={openingDocId === doc.id}
                           >
-                            <Eye size={13} />
+                            {openingDocId === doc.id ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <Eye size={13} />
+                            )}
                             Details
                           </button>
                           <button
@@ -1077,8 +1181,13 @@ const WAQuotesPage = () => {
                             className="btn btn-sm btn-outline flex items-center gap-1"
                             style={{ color: '#0f766e', borderColor: '#99f6e4', backgroundColor: '#f0fdfa' }}
                             title="Preview PDF before downloading"
+                            disabled={openingDocId === doc.id}
                           >
-                            <Eye size={13} />
+                            {openingDocId === doc.id ? (
+                              <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                              <Eye size={13} />
+                            )}
                             Preview PDF
                           </button>
                         </div>
@@ -1427,11 +1536,13 @@ const WAQuotesPage = () => {
 
       {/* Link Existing Quotation to CRM Lead */}
       {showLinkLeadModal && selectedDoc && (
-        <LinkQuotationToLeadModal
-          document={selectedDoc}
-          onClose={() => setShowLinkLeadModal(false)}
-          onLinked={handleQuotationLinked}
-        />
+        <Suspense fallback={null}>
+          <LinkQuotationToLeadModal
+            document={selectedDoc}
+            onClose={() => setShowLinkLeadModal(false)}
+            onLinked={handleQuotationLinked}
+          />
+        </Suspense>
       )}
 
       {/* Lead Context Loading Spinner Overlay */}
@@ -1614,27 +1725,33 @@ const WAQuotesPage = () => {
         </div>
       )}
 
-      {/* Native Billing & Quotation Studio Modal */}
-      <QuotationModal
-        isOpen={showQuoteModal}
-        onClose={() => {
-          setShowQuoteModal(false);
-          if (location.search) navigate('/waquotes', { replace: true });
-        }}
-        initialData={modalInitialData}
-        onSuccess={handleDocSuccess}
-      />
+      {/* Native Billing & Quotation Studio Modal (loaded on first use: pdfmake is heavy) */}
+      {showQuoteModal && (
+        <Suspense fallback={null}>
+          <QuotationModal
+            isOpen={showQuoteModal}
+            onClose={() => {
+              setShowQuoteModal(false);
+              if (location.search) navigate('/waquotes', { replace: true });
+            }}
+            initialData={modalInitialData}
+            onSuccess={handleDocSuccess}
+          />
+        </Suspense>
+      )}
 
       {/* PDF Interactive Preview & Download Modal */}
       {showPdfPreviewModal && previewPdfDoc && (
-        <DocumentPdfPreviewModal
-          isOpen={showPdfPreviewModal}
-          onClose={() => {
-            setShowPdfPreviewModal(false);
-            setPreviewPdfDoc(null);
-          }}
-          docData={previewPdfDoc}
-        />
+        <Suspense fallback={null}>
+          <DocumentPdfPreviewModal
+            isOpen={showPdfPreviewModal}
+            onClose={() => {
+              setShowPdfPreviewModal(false);
+              setPreviewPdfDoc(null);
+            }}
+            docData={previewPdfDoc}
+          />
+        </Suspense>
       )}
     </div>
   );

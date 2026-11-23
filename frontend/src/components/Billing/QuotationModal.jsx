@@ -33,7 +33,8 @@ import {
   COMPANIES,
   numberToIndianWords
 } from '../../utils/billingMoney';
-import { generateBillingPdf, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf, splitDescriptionIntoLines, WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS, BIOMETRIC_BANK } from '../../utils/quotationPdf';
+import { splitDescriptionIntoLines } from '../../utils/quotationText';
+import { WAHRMS_TERMS_AND_CONDITIONS, BIOMETRIC_TERMS_AND_CONDITIONS, BIOMETRIC_BANK } from '../../utils/quotationTerms';
 import {
   calculateBundleQuantity,
   createBundleSubscriptionFields,
@@ -69,14 +70,12 @@ import {
   getAddonByCode,
   isAddonLineItem
 } from '../../utils/addonProducts';
-import DocumentPdfPreviewModal from './PdfPreviewModal';
-import {
-  getCompanyById,
-  getCompanyDocumentPrefix,
-  getCompanyLogo,
-  resolveCompanyLogoRef,
-  resolveIssuerCompanyId
-} from '../../utils/companyBranding';
+// pdfmake and the PDF preview modal are heavy (~4.8 MB). They are loaded only
+// when the user previews or saves a document, not when the editor opens.
+const DocumentPdfPreviewModal = React.lazy(() => import('./PdfPreviewModal'));
+const loadPdfGenerators = () => import('../../utils/quotationPdf');
+import { getCompanyById, getCompanyDocumentPrefix, resolveIssuerCompanyId } from '../../utils/companyBranding';
+import { getCompanyLogo, resolveCompanyLogoRef } from '../../utils/companyLogos';
 
 const DEFAULT_TERMS_QUOTATION = WAHRMS_TERMS_AND_CONDITIONS;
 
@@ -487,7 +486,12 @@ export default function QuotationModal({
       try {
         setBundlesLoading(true);
         setBundlesError(null);
-        const res = await API.get('/integrations/waquote/bundles', { params: { category: 'all' } });
+        const res = await API.get('/integrations/waquote/bundles', {
+          params: { category: 'all' },
+          // Bundle master changes rarely; reuse it across modal opens so the
+          // studio opens instantly. Mutations invalidate the GET cache anyway.
+          cacheTTL: 10 * 60 * 1000,
+        });
         if (res.data?.ok && Array.isArray(res.data.bundles) && res.data.bundles.length > 0) {
           if (isMounted) {
             setBundles(res.data.bundles);
@@ -1124,12 +1128,13 @@ export default function QuotationModal({
           issueDateFormatted: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
           validTillFormatted: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
         };
+        const pdfGenerators = await loadPdfGenerators();
         if (docType === 'proforma') {
-          generateProformaPdf(finalDocData, true);
+          pdfGenerators.generateProformaPdf(finalDocData, true);
         } else if (docType === 'invoice') {
-          generateTaxInvoicePdf(finalDocData, true);
+          pdfGenerators.generateTaxInvoicePdf(finalDocData, true);
         } else {
-          generateQuotationPdf(finalDocData, true);
+          pdfGenerators.generateQuotationPdf(finalDocData, true);
         }
 
         PingoPopupService.triggerStatusUpdate({
@@ -1208,6 +1213,7 @@ export default function QuotationModal({
           terms
         };
         if (targetStatus === 'issued') {
+          const { generateQuotationPdf } = await loadPdfGenerators();
           generateQuotationPdf(finalDocData, true);
         }
         if (onSuccess) {
@@ -2266,14 +2272,16 @@ export default function QuotationModal({
         </div>
       </div>
 
-      {/* PDF Interactive Preview & Download Modal */}
+      {/* PDF Interactive Preview & Download Modal (lazy: pdfmake is heavy) */}
       {showPreviewModal && previewDocData && (
-        <DocumentPdfPreviewModal
-          isOpen={showPreviewModal}
-          onClose={() => setShowPreviewModal(false)}
-          docData={previewDocData}
-          title={`${docType === 'invoice' ? 'Tax Invoice' : (docType === 'po' ? 'Purchase Order' : (docType === 'proforma' ? 'Proforma Invoice' : 'Quotation'))} Preview`}
-        />
+        <React.Suspense fallback={null}>
+          <DocumentPdfPreviewModal
+            isOpen={showPreviewModal}
+            onClose={() => setShowPreviewModal(false)}
+            docData={previewDocData}
+            title={`${docType === 'invoice' ? 'Tax Invoice' : (docType === 'po' ? 'Purchase Order' : (docType === 'proforma' ? 'Proforma Invoice' : 'Quotation'))} Preview`}
+          />
+        </React.Suspense>
       )}
     </div>
   );

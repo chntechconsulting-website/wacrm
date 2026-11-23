@@ -7,6 +7,11 @@ class Quotation(Base):
     __tablename__ = "quotations"
     __table_args__ = (
         Index("ix_quotations_lead_type_status", "lead_id", "doc_type", "status"),
+        # Listing endpoints page by newest first, optionally narrowed by type
+        # or payment status. These keep the sort off a filesort as data grows.
+        Index("ix_quotations_created_at", "created_at"),
+        Index("ix_quotations_type_created_at", "doc_type", "created_at"),
+        Index("ix_quotations_payment_created_at", "payment_status", "created_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)

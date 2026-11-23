@@ -233,6 +233,35 @@
   background-color: #f8fafc;
 }
 
+/* SKELETON ROWS */
+.waquotes-skeleton-row td {
+  padding: 18px;
+}
+
+.waquotes-skeleton-row:hover td {
+  background-color: transparent;
+}
+
+.waquotes-skeleton-bar {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef2f7 25%, #e2e8f0 37%, #eef2f7 63%);
+  background-size: 400% 100%;
+  animation: waquotesSkeleton 1.2s ease-in-out infinite;
+}
+
+@keyframes waquotesSkeleton {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waquotes-skeleton-bar {
+    animation: none;
+  }
+}
+
 /* BADGES */
 .waquotes-type-badge {
   display: inline-block;

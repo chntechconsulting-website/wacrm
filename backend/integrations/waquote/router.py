@@ -3,7 +3,7 @@ import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy import desc, func, or_
 from pydantic import BaseModel
 
@@ -559,7 +559,26 @@ def get_waquote_summary(
             )
 
     authorized_query = apply_billing_scope_filter(db.query(Quotation), current_user, db)
-    local_docs = authorized_query.all()
+    # The summary only aggregates scalar columns. Avoid fetching JSON line
+    # items, terms and other large text fields just to sum amounts.
+    local_docs = authorized_query.options(
+        load_only(
+            Quotation.id,
+            Quotation.doc_type,
+            Quotation.status,
+            Quotation.payment_status,
+            Quotation.doc_number,
+            Quotation.source_quotation_id,
+            Quotation.source_quotation_number,
+            Quotation.lead_id,
+            Quotation.product_category,
+            Quotation.customer_name,
+            Quotation.company_name,
+            Quotation.phone,
+            Quotation.grand_total,
+            Quotation.amount_paid,
+        )
+    ).all()
 
     # Partition documents by type (excluding cancelled records)
     all_active_invoices = [d for d in local_docs if d.doc_type == "invoice" and d.status != "cancelled"]
@@ -593,7 +612,16 @@ def get_waquote_summary(
         inv.doc_number for inv in all_active_invoices if inv.doc_number
     }
     if active_invoice_numbers:
-        for handoff in db.query(FinanceHandoff).all():
+        handoff_rows = db.query(FinanceHandoff).options(
+            load_only(
+                FinanceHandoff.invoice_number,
+                FinanceHandoff.proforma_id,
+                FinanceHandoff.proforma_number,
+                FinanceHandoff.quotation_id,
+                FinanceHandoff.quotation_number,
+            )
+        ).all()
+        for handoff in handoff_rows:
             handoff_invoice = (handoff.invoice_number or "").strip()
             if handoff_invoice not in active_invoice_numbers:
                 continue
@@ -737,6 +765,7 @@ def list_waquote_documents(
     search: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
+    compact: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -808,7 +837,50 @@ def list_waquote_documents(
     page_val = page if isinstance(page, int) else 1
     limit_val = limit if isinstance(limit, int) else 50
     total_count = q.count()
-    local_records = q.order_by(desc(Quotation.created_at)).offset((page_val - 1) * limit_val).limit(limit_val).all()
+    record_query = q
+    if compact:
+        # List rows only need the columns the table renders. Line items,
+        # terms, notes and address fields stay in the database until the user
+        # opens a specific document.
+        record_query = q.options(
+            load_only(
+                Quotation.id,
+                Quotation.doc_number,
+                Quotation.doc_type,
+                Quotation.status,
+                Quotation.payment_status,
+                Quotation.issue_date,
+                Quotation.due_date,
+                Quotation.grand_total,
+                Quotation.tax_total,
+                Quotation.subtotal,
+                Quotation.amount_paid,
+                Quotation.customer_name,
+                Quotation.company_name,
+                Quotation.phone,
+                Quotation.email,
+                Quotation.selected_bundle,
+                Quotation.product_category,
+                Quotation.company_id,
+                Quotation.logo_ref,
+                Quotation.issuer_gstin,
+                Quotation.issuer_pan,
+                Quotation.document_prefix,
+                Quotation.source_quotation_id,
+                Quotation.source_quotation_number,
+                Quotation.pdf_url,
+                Quotation.lead_id,
+                Quotation.customer_id,
+                Quotation.destination_sync_status,
+                Quotation.external_client_id,
+                Quotation.external_proforma_id,
+                Quotation.destination_synced_at,
+                Quotation.destination_sync_error,
+                Quotation.destination_sync_attempts,
+                Quotation.created_at,
+            )
+        )
+    local_records = record_query.order_by(desc(Quotation.created_at)).offset((page_val - 1) * limit_val).limit(limit_val).all()
     linked_lead_ids = {r.lead_id for r in local_records if r.lead_id}
     linked_leads = {}
     if linked_lead_ids:
@@ -823,8 +895,13 @@ def list_waquote_documents(
         total_val = float(r.grand_total or 0.0)
         paid_val = float(r.amount_paid or 0.0)
         balance_val = max(0.0, total_val - paid_val)
-
-        local_formatted.append({
+        customer_payload = {
+            "name": r.customer_name,
+            "companyName": r.company_name,
+            "phone": r.phone,
+            "email": r.email,
+        }
+        document_payload = {
             "id": f"local_{r.id}",
             "rawId": r.id,
             "number": r.doc_number,
@@ -844,27 +921,11 @@ def list_waquote_documents(
                 "totalPaid": paid_val,
                 "balance": balance_val
             },
-            "customer": {
-                "name": r.customer_name,
-                "companyName": r.company_name,
-                "phone": r.phone,
-                "email": r.email,
-                "address": {
-                    "line1": r.address or "",
-                    "state": r.state or "Tamil Nadu",
-                    "stateCode": r.state_code or "33"
-                },
-                "gstin": r.gstin or ""
-            },
-            "lineItems": r.line_items or [],
             "selectedBundle": r.selected_bundle,
             "productCategory": getattr(r, "product_category", "wahrms") or "wahrms",
             **_serialize_issuer_fields(r),
             "sourceQuotationId": r.source_quotation_id,
             "sourceQuotationNumber": r.source_quotation_number,
-            "termsAndConditions": r.terms_and_conditions or "",
-            "notes": r.notes or "",
-            "preparedBy": r.prepared_by or "",
             "pdfUrl": r.pdf_url,
             "leadId": r.lead_id,
             "lead": serialize_lead_brief(linked_leads.get(r.lead_id)),
@@ -877,7 +938,24 @@ def list_waquote_documents(
             "destinationSyncError": getattr(r, "destination_sync_error", None),
             "destinationSyncAttempts": getattr(r, "destination_sync_attempts", 0) or 0,
             "source": "Local CRM"
-        })
+        }
+        if compact:
+            document_payload["compact"] = True
+        else:
+            customer_payload["address"] = {
+                "line1": r.address or "",
+                "state": r.state or "Tamil Nadu",
+                "stateCode": r.state_code or "33"
+            }
+            customer_payload["gstin"] = r.gstin or ""
+            document_payload.update({
+                "lineItems": r.line_items or [],
+                "termsAndConditions": r.terms_and_conditions or "",
+                "notes": r.notes or "",
+                "preparedBy": r.prepared_by or "",
+            })
+        document_payload["customer"] = customer_payload
+        local_formatted.append(document_payload)
 
     return {
         "ok": True,

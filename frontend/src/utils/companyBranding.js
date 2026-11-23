@@ -6,13 +6,6 @@
  * this module instead of selecting a default issuer or comparing company names.
  */
 import { COMPANIES, COMPANY_DEFAULTS } from './billingMoney';
-import { WAHRMS_LOGO_BASE64, CHN_LOGO_BASE64 } from './logoBase64';
-
-// Logo assets are keyed by the configured logo type, not by a company name.
-const LOGO_ASSETS = {
-  wahrms: WAHRMS_LOGO_BASE64,
-  'chn-tech': CHN_LOGO_BASE64
-};
 
 export function getCompanyById(companyId) {
   if (!companyId) return null;
@@ -56,17 +49,6 @@ export function resolveIssuerCompanyId(source = {}) {
   if (categoryCompany) return categoryCompany.id;
 
   return COMPANY_DEFAULTS.id;
-}
-
-export function resolveCompanyLogoRef(companyId, logoRef = null) {
-  const company = getCompanyById(companyId);
-  const candidates = [logoRef, company?.logoRef, company?.logoType].filter(Boolean);
-  return candidates.find((ref) => Boolean(LOGO_ASSETS[ref])) || null;
-}
-
-export function getCompanyLogo(companyId, logoRef = null) {
-  const resolvedRef = resolveCompanyLogoRef(companyId, logoRef);
-  return resolvedRef ? LOGO_ASSETS[resolvedRef] : null;
 }
 
 export function getCompanyDocumentPrefix(companyId, docType = 'quotation') {
