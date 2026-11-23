@@ -1,9 +1,10 @@
 """CRM-facing, read-only Channel Partner endpoints.
 
-Every response is served from the local mirror created by
+Mirror responses are served from the local data created by
 ``services.channel_partner_sync``. Secrets, full PAN, bank account numbers and
-document links are never returned by these routes. Application document links
-are proxied through a separately authorised, audited endpoint.
+document links are never returned by the mirror routes. Application document
+links are proxied through a separately authorised, audited endpoint that
+returns only the short-lived link and its expiry.
 """
 
 from __future__ import annotations
@@ -279,10 +280,62 @@ def _application_detail(row: ChannelPartnerApplication) -> Dict[str, Any]:
             "partnerExternalId": row.partner_external_id,
             "documents": row.document_metadata_json,
             "sourceUpdatedAt": ist_iso(row.source_updated_at),
-            "raw": row.raw_data,
         }
     )
     return payload
+
+
+def _safe_document_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    url = value.strip()
+    if url.startswith(("https://", "http://")):
+        return url
+    return None
+
+
+def _document_link_payload(
+    application_id: str, document_type: str, payload: Any
+) -> Dict[str, Any]:
+    """Return only the short-lived document link and its expiry.
+
+    The upstream response may include S3 metadata, signed URLs and tokens.
+    Only the link and expiry are forwarded to the browser.
+    """
+    document = extract_object(payload, ["document"])
+    url = _safe_document_url(
+        first_present(
+            document,
+            ["url", "link", "downloadUrl", "signedUrl"],
+            default=None,
+        )
+    )
+    if not url:
+        url = _safe_document_url(
+            first_present(
+                payload,
+                ["url", "link", "downloadUrl", "signedUrl"],
+                default=None,
+            )
+        )
+    expires_at = first_present(
+        document,
+        ["expiresAt", "expiry", "validUntil"],
+        default=None,
+    )
+    if expires_at is None:
+        expires_at = first_present(
+            payload,
+            ["expiresAt", "expiry", "validUntil"],
+            default=None,
+        )
+    return {
+        "applicationId": application_id,
+        "documentType": document_type,
+        "url": url,
+        "expiresAt": expires_at,
+        "expiresInSeconds": 300,
+    }
 
 
 def _lead_payload(
@@ -826,10 +879,12 @@ def get_application_document(
     except ChannelPartnerNotConfigured:
         raise HTTPException(status_code=503, detail="Integration not configured.")
     except ChannelPartnerAPIError as exc:
+        # Do not forward the upstream error body: it can contain storage
+        # metadata, signed URLs or provider tokens.
         raise HTTPException(
             status_code=502,
             detail={
-                "message": exc.message,
+                "message": "The document service is temporarily unavailable.",
                 "upstreamStatus": exc.status_code,
             },
         )
@@ -845,30 +900,8 @@ def get_application_document(
         ip_address=request.client.host if request.client else None,
     )
 
-    document = payload
-    object_payload = extract_object(payload, ["document"])
-    url = first_present(
-        object_payload,
-        ["url", "link", "downloadUrl", "signedUrl"],
-        default=None,
-    )
-    expires_at = first_present(
-        object_payload,
-        ["expiresAt", "expiry", "validUntil"],
-        default=None,
-    )
     return JSONResponse(
-        content=as_json(
-            {
-                "applicationId": application_id,
-                "documentType": document_type,
-                "url": url,
-                "expiresAt": expires_at,
-                "expiresInSeconds": 300,
-                "document": document,
-                "fetchedAt": get_ist_now().isoformat(),
-            }
-        ),
+        content=as_json(_document_link_payload(application_id, document_type, payload)),
         headers={"Cache-Control": "no-store, private, max-age=0"},
     )
 

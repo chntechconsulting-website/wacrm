@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Search, ShieldCheck } from 'lucide-react';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -6,7 +6,6 @@ import {
   DefinitionList,
   EmptyState,
   ErrorState,
-  JsonBlock,
   LoadingState,
   Modal,
   PageHeader,
@@ -29,6 +28,33 @@ const STATUS_OPTIONS = [
   { value: 'rejected', label: 'Rejected' },
 ];
 
+const DOCUMENT_TYPES = ['pan', 'aadhaar'];
+const DOCUMENT_LABELS = { pan: 'PAN', aadhaar: 'Aadhaar' };
+
+function documentErrorMessage(error, label) {
+  const status = error?.response?.status;
+  if (status === 401) return 'Your session has expired. Please sign in again.';
+  if (status === 403) return 'You do not have permission to view this document.';
+  if (status === 404) return `${label} document is not available for this application.`;
+  if (status === 410) return `The ${label} document link has expired. Please try again.`;
+  if (status === 429) return 'Too many document requests. Please wait a moment and try again.';
+  if (status === 502 || status === 503) {
+    return 'The document service is temporarily unavailable. Please try again later.';
+  }
+  return `The ${label} document could not be opened. Please try again.`;
+}
+
+function safeDocumentUrl(value) {
+  if (typeof value !== 'string') return '';
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return parsed.href;
+  } catch {
+    // Ignore malformed URLs and show a clean error below.
+  }
+  return '';
+}
+
 export default function ChannelPartnerApplicationsPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState([]);
@@ -44,11 +70,20 @@ export default function ChannelPartnerApplicationsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [documentState, setDocumentState] = useState({});
+  const pendingDocumentWindowRef = useRef(null);
 
   const permission = user?.permissions?.channel_partners;
   const canViewDocuments = (user?.role || '').toUpperCase() === 'ADMIN'
     || permission?.can_edit === true
     || permission?.can_approve === true;
+
+  const closePendingDocumentWindow = useCallback(() => {
+    const pendingWindow = pendingDocumentWindowRef.current;
+    if (pendingWindow && !pendingWindow.closed) pendingWindow.close();
+    pendingDocumentWindowRef.current = null;
+  }, []);
+
+  useEffect(() => closePendingDocumentWindow, [closePendingDocumentWindow]);
 
   const fetchApplications = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -73,7 +108,15 @@ export default function ChannelPartnerApplicationsPage() {
     fetchApplications();
   }, [fetchApplications]);
 
+  const closeApplication = () => {
+    closePendingDocumentWindow();
+    setSelected(null);
+    setDocumentState({});
+    setDetailError('');
+  };
+
   const openApplication = async (row) => {
+    closePendingDocumentWindow();
     setSelected(row);
     setDocumentState({});
     setDetailError('');
@@ -96,33 +139,82 @@ export default function ChannelPartnerApplicationsPage() {
     setSearch(searchInput.trim());
   };
 
-  const fetchDocument = async (documentType) => {
-    if (!selected) return;
-    setDocumentState((prev) => ({ ...prev, [documentType]: { loading: true } }));
+  const openDocument = async (documentType) => {
+    if (!selected || documentState[documentType]?.loading) return;
+    const label = DOCUMENT_LABELS[documentType] || documentType.toUpperCase();
+    const documents = selected.documents || {};
+    if (!documents[documentType]) {
+      setDocumentState((prev) => ({
+        ...prev,
+        [documentType]: {
+          loading: false,
+          error: `${label} document is not available for this application.`,
+        },
+      }));
+      return;
+    }
+
+    // Open the tab during the click gesture so popup blockers do not reject
+    // the secure link that arrives after the API call. The signed URL is never
+    // stored in React state or rendered in the page.
+    const documentWindow = window.open('about:blank', '_blank');
+    if (!documentWindow) {
+      setDocumentState((prev) => ({
+        ...prev,
+        [documentType]: {
+          loading: false,
+          error: 'Your browser blocked the document window. Allow pop-ups for this site and try again.',
+        },
+      }));
+      return;
+    }
+    pendingDocumentWindowRef.current = documentWindow;
+    try {
+      documentWindow.opener = null;
+      documentWindow.document.title = `Opening ${label} document…`;
+      documentWindow.document.body.style.cssText = 'font-family: system-ui, sans-serif; padding: 32px; color: #334155;';
+      documentWindow.document.body.textContent = `Opening ${label} document…`;
+    } catch {
+      // Some browsers restrict access to the initial about:blank document.
+    }
+
+    setDocumentState((prev) => ({ ...prev, [documentType]: { loading: true, error: '' } }));
     try {
       const response = await API.get(
         `/channel-partners/applications/${encodeURIComponent(selected.id)}/documents/${documentType}`,
         { skipCache: true },
       );
-      setDocumentState((prev) => ({
-        ...prev,
-        [documentType]: { loading: false, data: response.data || {} },
-      }));
+      const url = safeDocumentUrl(response.data?.url);
+      if (!url) throw new Error('missing-document-url');
+      if (documentWindow.closed) {
+        pendingDocumentWindowRef.current = null;
+        setDocumentState((prev) => ({
+          ...prev,
+          [documentType]: {
+            loading: false,
+            error: 'The document window was closed before the link was ready. Please try again.',
+          },
+        }));
+        return;
+      }
+      documentWindow.location.replace(url);
+      pendingDocumentWindowRef.current = null;
+      setDocumentState((prev) => ({ ...prev, [documentType]: { loading: false, error: '' } }));
     } catch (err) {
+      if (!documentWindow.closed) documentWindow.close();
+      pendingDocumentWindowRef.current = null;
+      const error = err?.message === 'missing-document-url'
+        ? `${label} document is not available right now. Please try again later.`
+        : documentErrorMessage(err, label);
       setDocumentState((prev) => ({
         ...prev,
-        [documentType]: {
-          loading: false,
-          error: err.response?.data?.detail?.message
-            || err.response?.data?.detail
-            || 'Document link could not be retrieved.',
-        },
+        [documentType]: { loading: false, error },
       }));
     }
   };
 
   const documents = selected?.documents || {};
-  const documentKeys = Object.keys(documents);
+  const availableDocumentTypes = DOCUMENT_TYPES.filter((type) => Boolean(documents[type]));
 
   return (
     <div className="cp-page">
@@ -187,7 +279,7 @@ export default function ChannelPartnerApplicationsPage() {
         open={Boolean(selected)}
         title={selected?.businessName || 'Application'}
         subtitle={selected ? `${titleCase(selected.entityType)} · ${selected.id}` : undefined}
-        onClose={() => setSelected(null)}
+        onClose={closeApplication}
         wide
       >
         {detailLoading ? <LoadingState label="Loading application detail…" /> : null}
@@ -248,45 +340,39 @@ export default function ChannelPartnerApplicationsPage() {
               {canViewDocuments ? (
                 <div className="cp-stack">
                   <div className="cp-inline">
-                    {['pan', 'aadhaar'].map((type) => (
-                      <button
-                        key={type}
-                        type="button"
-                        className="cp-btn cp-btn-secondary"
-                        onClick={() => fetchDocument(type)}
-                        disabled={documentState[type]?.loading || !documents[type]}
-                      >
-                        {documentState[type]?.loading ? 'Fetching…' : `View ${type.toUpperCase()} document`}
-                      </button>
-                    ))}
-                    {!documentKeys.length ? <span className="cp-muted">No document metadata was returned.</span> : null}
+                    {DOCUMENT_TYPES.map((type) => {
+                      const label = DOCUMENT_LABELS[type];
+                      const available = Boolean(documents[type]);
+                      const state = documentState[type];
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          className="cp-btn cp-btn-secondary"
+                          onClick={() => openDocument(type)}
+                          disabled={state?.loading || !available}
+                          title={!available ? `${label} document is not available for this application.` : undefined}
+                        >
+                          {state?.loading ? 'Opening…' : `View ${label} document`}
+                        </button>
+                      );
+                    })}
                   </div>
-                  {documentKeys.length ? (
+                  {!availableDocumentTypes.length ? (
+                    <p className="cp-muted">No identity documents are available for this application.</p>
+                  ) : (
                     <p className="cp-muted">
-                      The document link expires after five minutes. Each view is recorded in the audit log.
+                      The secure document link expires after five minutes. Each view is recorded in the audit log.
                     </p>
-                  ) : null}
-                  {['pan', 'aadhaar'].map((type) => {
+                  )}
+                  {DOCUMENT_TYPES.map((type) => {
                     const state = documentState[type];
-                    if (!state) return null;
-                    if (state.error) return <div key={type} className="cp-alert cp-alert-error"><div><strong>{type.toUpperCase()} document</strong><p>{String(state.error)}</p></div></div>;
-                    if (!state.data) return null;
-                    const url = state.data.url;
+                    if (!state?.error) return null;
                     return (
-                      <div key={type} className="cp-alert cp-alert-info">
+                      <div key={type} className="cp-alert cp-alert-error">
                         <div>
-                          <strong>{type.toUpperCase()} document link</strong>
-                          {url ? (
-                            <p>
-                              <a href={url} target="_blank" rel="noreferrer noopener" style={{ color: '#1d4ed8', fontWeight: 700 }}>
-                                Open secure document
-                              </a>
-                              {state.data.expiresAt ? ` · expires ${formatDateTime(state.data.expiresAt)}` : ''}
-                            </p>
-                          ) : (
-                            <p>WA HRMS did not return a document URL. The raw response is shown below.</p>
-                          )}
-                          <JsonBlock value={state.data} label="Document response" />
+                          <strong>{DOCUMENT_LABELS[type]} document</strong>
+                          <p>{state.error}</p>
                         </div>
                       </div>
                     );
@@ -294,8 +380,6 @@ export default function ChannelPartnerApplicationsPage() {
                 </div>
               ) : null}
             </div>
-
-            <JsonBlock value={selected.raw} label="Raw application payload (sanitised)" />
           </>
         ) : null}
       </Modal>

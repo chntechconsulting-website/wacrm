@@ -61,8 +61,10 @@ from schemas.lead import LeadStatusRequest, LeadUpdate
 from schemas.workflow import DealWonRequest, FinancePaymentConfirmRequest
 from routers.channel_partners import (
     ChannelPartnerLeadStatusRequest,
+    _document_link_payload,
     _lead_payload,
     _page_meta,
+    get_application_document,
     require_channel_partner_document_access,
     require_channel_partner_view,
     update_partner_lead_status,
@@ -519,6 +521,207 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
                 current_user=sales, db=self.db
             )
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_document_link_payload_is_minimal_for_pan_and_aadhaar(self):
+        for document_type in ("pan", "aadhaar"):
+            signed_url = (
+                f"https://s3.example.com/{document_type}.pdf"
+                "?X-Amz-Signature=temporary-signature"
+            )
+            payload = {
+                "document": {
+                    "url": signed_url,
+                    "expiresAt": "2026-03-01T10:05:00+05:30",
+                    "bucket": "internal-bucket",
+                    "key": "private/identity.pdf",
+                    "securityToken": "temporary-token",
+                },
+                "requestId": "debug-request-id",
+                "fetchedAt": "2026-03-01T10:00:00+05:30",
+            }
+            result = _document_link_payload("app_123", document_type, payload)
+
+            self.assertEqual(
+                set(result),
+                {
+                    "applicationId",
+                    "documentType",
+                    "url",
+                    "expiresAt",
+                    "expiresInSeconds",
+                },
+            )
+            self.assertEqual(result["applicationId"], "app_123")
+            self.assertEqual(result["documentType"], document_type)
+            self.assertEqual(result["url"], signed_url)
+            self.assertEqual(result["expiresAt"], "2026-03-01T10:05:00+05:30")
+            self.assertEqual(result["expiresInSeconds"], 300)
+
+            serialised = json.dumps(result)
+            for forbidden in (
+                "internal-bucket",
+                "private/identity.pdf",
+                "temporary-token",
+                "debug-request-id",
+                "fetchedAt",
+            ):
+                self.assertNotIn(forbidden, serialised)
+
+    def test_document_link_payload_handles_missing_link(self):
+        result = _document_link_payload(
+            "app_123",
+            "pan",
+            {"document": {"bucket": "internal-bucket"}},
+        )
+        self.assertIsNone(result["url"])
+        self.assertNotIn("document", result)
+
+    def test_document_endpoint_opens_pan_and_aadhaar_without_raw_payload(self):
+        self.db.add(
+            ChannelPartnerApplication(
+                external_id="app_doc_1",
+                business_name="Document Test Partner",
+            )
+        )
+        self.db.commit()
+
+        audit_calls = []
+
+        class FakeDocumentClient:
+            def __init__(self, config):
+                self.config = config
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get_application_document(self, application_id, kind):
+                return {
+                    "document": {
+                        "url": f"https://s3.example.com/{kind}.pdf?sig=secret",
+                        "expiresAt": "2026-03-01T10:05:00+05:30",
+                        "bucket": "internal-bucket",
+                        "securityToken": "temporary-token",
+                    },
+                    "requestId": "debug-request-id",
+                }
+
+        for document_type in ("pan", "aadhaar"):
+            with patch(
+                "routers.channel_partners.load_effective_config",
+                return_value=FakeChannelPartnerConfig(),
+            ), patch(
+                "routers.channel_partners.ChannelPartnerClient",
+                FakeDocumentClient,
+            ), patch(
+                "routers.channel_partners.log_audit",
+                side_effect=lambda **kwargs: audit_calls.append(kwargs),
+            ):
+                response = get_application_document(
+                    application_id="app_doc_1",
+                    document_type=document_type,
+                    request=SimpleNamespace(
+                        client=SimpleNamespace(host="127.0.0.1")
+                    ),
+                    db=self.db,
+                    current_user=User(
+                        id=1,
+                        username="admin",
+                        role="ADMIN",
+                        is_active=True,
+                    ),
+                )
+
+            body = json.loads(response.body)
+            self.assertEqual(
+                set(body),
+                {
+                    "applicationId",
+                    "documentType",
+                    "url",
+                    "expiresAt",
+                    "expiresInSeconds",
+                },
+            )
+            self.assertEqual(body["applicationId"], "app_doc_1")
+            self.assertEqual(body["documentType"], document_type)
+            self.assertEqual(
+                body["url"],
+                f"https://s3.example.com/{document_type}.pdf?sig=secret",
+            )
+            self.assertEqual(body["expiresInSeconds"], 300)
+            serialised = json.dumps(body)
+            for forbidden in (
+                "internal-bucket",
+                "temporary-token",
+                "debug-request-id",
+                "fetchedAt",
+            ):
+                self.assertNotIn(forbidden, serialised)
+
+        self.assertEqual(len(audit_calls), 2)
+        self.assertTrue(
+            all(
+                call["action"] == "VIEW_CHANNEL_PARTNER_DOCUMENT"
+                for call in audit_calls
+            )
+        )
+
+    def test_document_endpoint_hides_upstream_error_details(self):
+        self.db.add(
+            ChannelPartnerApplication(
+                external_id="app_doc_error",
+                business_name="Document Error Partner",
+            )
+        )
+        self.db.commit()
+
+        class FailingDocumentClient:
+            def __init__(self, config):
+                self.config = config
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get_application_document(self, application_id, kind):
+                raise ChannelPartnerAPIError(
+                    "internal-bucket temporary-token",
+                    status_code=500,
+                )
+
+        with patch(
+            "routers.channel_partners.load_effective_config",
+            return_value=FakeChannelPartnerConfig(),
+        ), patch(
+            "routers.channel_partners.ChannelPartnerClient",
+            FailingDocumentClient,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                get_application_document(
+                    application_id="app_doc_error",
+                    document_type="pan",
+                    request=SimpleNamespace(
+                        client=SimpleNamespace(host="127.0.0.1")
+                    ),
+                    db=self.db,
+                    current_user=User(
+                        id=1,
+                        username="admin",
+                        role="ADMIN",
+                        is_active=True,
+                    ),
+                )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        serialised = json.dumps(ctx.exception.detail)
+        self.assertNotIn("internal-bucket", serialised)
+        self.assertNotIn("temporary-token", serialised)
+        self.assertIn("temporarily unavailable", serialised)
 
     # ------------------------------------------------------------------
     # Pagination / envelopes
