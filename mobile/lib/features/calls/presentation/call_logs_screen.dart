@@ -645,10 +645,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
                 'Native dialer',
                 capability.nativeDialerPackage ?? 'Not reported',
               ),
-              _capabilityRow(
-                'Automatic sync',
-                capability.automaticSyncLabel,
-              ),
+              _capabilityRow('Automatic sync', capability.automaticSyncLabel),
               _capabilityRow('OEM support', capability.oemSupportLabel),
               _capabilityRow(
                 'Audio permission',
@@ -932,9 +929,7 @@ class _CallLogsScreenState extends State<CallLogsScreen>
       backgroundColor: isMobile
           ? const Color(0xFFECFDF5)
           : const Color(0xFFEFF6FF),
-      textColor: isMobile
-          ? const Color(0xFF047857)
-          : const Color(0xFF1D4ED8),
+      textColor: isMobile ? const Color(0xFF047857) : const Color(0xFF1D4ED8),
       fontSize: 9.5,
     );
   }
@@ -1062,185 +1057,190 @@ class _CallLogsScreenState extends State<CallLogsScreen>
           _callLogPermissionBanner(),
           Expanded(
             child: provider.isLoading && calls.isEmpty
-          ? const LoadingIndicator(message: 'Loading call records...')
-          : provider.errorMessage != null && calls.isEmpty
-          ? ErrorView(
-              message: provider.errorMessage!,
-              onRetry: () => provider.fetchCalls(),
-            )
-          : calls.isEmpty
-          ? EmptyState(
-              title: 'No Call Logs Found',
-              subtitle: 'Calls via DooCTI, mobile SIM or manual phone calls will be logged here.',
-              pingoPose: PingoPoses.inspect,
-              actionLabel: 'Log Call',
-              onAction: _showLogManualCallDialog,
-            )
-          : RefreshIndicator(
-              color: AppColors.primary,
-              onRefresh: () => provider.fetchCalls(showLoading: false),
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-                itemCount: calls.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final call = calls[index];
-                  final isAnswered =
-                      call.callStatus == 'ANSWERED' ||
-                      call.callStatus == 'COMPLETED';
+                ? const LoadingIndicator(message: 'Loading call records...')
+                : provider.errorMessage != null && calls.isEmpty
+                ? ErrorView(
+                    message: provider.errorMessage!,
+                    onRetry: () => provider.fetchCalls(),
+                  )
+                : calls.isEmpty
+                ? EmptyState(
+                    title: 'No Call Logs Found',
+                    subtitle: 'Calls via DooCTI, mobile SIM or manual phone calls will be logged here.',
+                    pingoPose: PingoPoses.inspect,
+                    actionLabel: 'Log Call',
+                    onAction: _showLogManualCallDialog,
+                  )
+                : RefreshIndicator(
+                    color: AppColors.primary,
+                    onRefresh: () => provider.fetchCalls(showLoading: false),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                      itemCount: calls.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final call = calls[index];
+                        final isAnswered =
+                            call.callStatus == 'ANSWERED' ||
+                            call.callStatus == 'COMPLETED';
 
-                  return WacrmCard(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: isAnswered
-                                ? AppColors.successLight
-                                : AppColors.dangerLight,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            call.callType == 'INBOUND'
-                                ? Icons.call_received_rounded
-                                : Icons.call_made_rounded,
-                            color: isAnswered
-                                ? AppColors.success
-                                : AppColors.danger,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        return WacrmCard(
+                          padding: const EdgeInsets.all(14),
+                          child: Row(
                             children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      call.leadName ?? call.customerNumber,
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.textMain,
-                                      ),
-                                    ),
-                                  ),
-                                  _callSourceBadge(call),
-                                  const SizedBox(width: 6),
-                                  WacrmBadge.status(call.callStatus),
-                                ],
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                '${call.customerNumber} • ${call.formattedDuration}',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.textMuted,
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: isAnswered
+                                      ? AppColors.successLight
+                                      : AppColors.dangerLight,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  call.callType == 'INBOUND'
+                                      ? Icons.call_received_rounded
+                                      : Icons.call_made_rounded,
+                                  color: isAnswered
+                                      ? AppColors.success
+                                      : AppColors.danger,
+                                  size: 20,
                                 ),
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                DateFormatter.formatDateTime(call.createdAt),
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.textLight,
-                                ),
-                              ),
-                              if (call.isMobile) ...[
-                                const SizedBox(height: 4),
-                                Row(
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Icon(
-                                      Icons.sim_card_rounded,
-                                      size: 11,
-                                      color: Color(0xFF059669),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Flexible(
-                                      child: Text(
-                                        '${call.simLabel ?? 'Mobile SIM'}'
-                                        ' • ${call.recordingStatusLabel}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 10.5,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF059669),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                if (!call.isRecordingAvailable &&
-                                    call
-                                        .recordingStatusDetailLabel
-                                        .isNotEmpty) ...[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    call.recordingStatusDetailLabel,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 10.5,
-                                      height: 1.3,
-                                      color: call.recordingSyncStatus ==
-                                              RecordingSyncStatus.uploadFailed
-                                          ? const Color(0xFFB91C1C)
-                                          : const Color(0xFFB45309),
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 6),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 4,
-                                  children: [
-                                    if (call.hasRecording)
-                                      _recordingAction(
-                                        icon: Icons.play_arrow_rounded,
-                                        label: 'Play',
-                                        onTap: () =>
-                                            MobileRecordingService.play(
-                                              context,
-                                              url: call.recordingUrl,
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            call.leadName ??
+                                                call.customerNumber,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.textMain,
                                             ),
-                                      ),
-                                    _recordingAction(
-                                      icon: call.hasRecording
-                                          ? Icons.swap_horiz_rounded
-                                          : Icons.upload_file_rounded,
-                                      label: call.hasRecording
-                                          ? 'Replace'
-                                          : 'Import recording',
-                                      onTap: () => _attachRecording(call),
+                                          ),
+                                        ),
+                                        _callSourceBadge(call),
+                                        const SizedBox(width: 6),
+                                        WacrmBadge.status(call.callStatus),
+                                      ],
                                     ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      '${call.customerNumber} • ${call.formattedDuration}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: AppColors.textMuted,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      DateFormatter.formatDateTime(
+                                        call.createdAt,
+                                      ),
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.textLight,
+                                      ),
+                                    ),
+                                    if (call.isMobile) ...[
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.sim_card_rounded,
+                                            size: 11,
+                                            color: Color(0xFF059669),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Flexible(
+                                            child: Text(
+                                              '${call.simLabel ?? 'Mobile SIM'}'
+                                              ' • ${call.recordingStatusLabel}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 10.5,
+                                                fontWeight: FontWeight.w600,
+                                                color: Color(0xFF059669),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (!call.isRecordingAvailable &&
+                                          call
+                                              .recordingStatusDetailLabel
+                                              .isNotEmpty) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          call.recordingStatusDetailLabel,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 10.5,
+                                            height: 1.3,
+                                            color:
+                                                call.recordingSyncStatus ==
+                                                    RecordingSyncStatus
+                                                        .uploadFailed
+                                                ? const Color(0xFFB91C1C)
+                                                : const Color(0xFFB45309),
+                                          ),
+                                        ),
+                                      ],
+                                      const SizedBox(height: 6),
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          if (call.hasRecording)
+                                            _recordingAction(
+                                              icon: Icons.play_arrow_rounded,
+                                              label: 'Play',
+                                              onTap: () =>
+                                                  MobileRecordingService.play(
+                                                    context,
+                                                    url: call.recordingUrl,
+                                                  ),
+                                            ),
+                                          _recordingAction(
+                                            icon: call.hasRecording
+                                                ? Icons.swap_horiz_rounded
+                                                : Icons.upload_file_rounded,
+                                            label: call.hasRecording
+                                                ? 'Replace'
+                                                : 'Import recording',
+                                            onTap: () => _attachRecording(call),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
                                   ],
                                 ),
-                              ],
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.phone_rounded,
+                                  color: AppColors.primary,
+                                  size: 20,
+                                ),
+                                onPressed: () => _callNumber(
+                                  call.customerNumber,
+                                  leadId: call.leadId,
+                                  contactName: call.leadName,
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.phone_rounded,
-                            color: AppColors.primary,
-                            size: 20,
-                          ),
-                          onPressed: () => _callNumber(
-                            call.customerNumber,
-                            leadId: call.leadId,
-                            contactName: call.leadName,
-                          ),
-                        ),
-                      ],
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
-            ),
+                  ),
           ),
         ],
       ),

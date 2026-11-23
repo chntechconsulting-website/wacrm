@@ -119,6 +119,32 @@ class ApiEndpoints {
       '$apiPrefix/workflow/support/handoffs/$id/reassign';
   static String get supportManagers => '$apiPrefix/workflow/support-managers';
 
+  // Support Workspace (existing web Support APIs)
+  static String get supportAssignedLeads => '$apiPrefix/leads/support/assigned';
+  static String get supportTeamMembers => '$apiPrefix/leads/support/team-members';
+  static String supportAssignment(int leadId) =>
+      '$apiPrefix/leads/$leadId/support-assignment';
+  static String supportAssign(int leadId) =>
+      '$apiPrefix/leads/$leadId/support-assign';
+  static String supportCustomerHistory(int leadId) =>
+      '$apiPrefix/support/customers/$leadId/history';
+  static String supportCustomerPocs(int leadId) =>
+      '$apiPrefix/support/customers/$leadId/pocs';
+  static String supportCustomerInteractions(int leadId) =>
+      '$apiPrefix/support/customers/$leadId/interactions';
+  static String supportPoc(int pocId) => '$apiPrefix/support/pocs/$pocId';
+  static String supportPocPrimary(int pocId) =>
+      '$apiPrefix/support/pocs/$pocId/primary';
+  static String get supportBackupCustomers =>
+      '$apiPrefix/support/backup-customers';
+  static String get supportManagerOverview => '$apiPrefix/support/manager/overview';
+  static String get supportEmployees => '$apiPrefix/support/employees';
+  static String get supportLeaves => '$apiPrefix/support/leaves';
+  static String get supportIncomingCallContext =>
+      '$apiPrefix/support/incoming-call-context';
+  static String leadPurchaseDetails(int leadId) =>
+      '$apiPrefix/leads/$leadId/purchase-details';
+
   // Quotations & Proformas (WAQuote)
   static String get waquoteDocuments =>
       '$apiPrefix/integrations/waquote/documents';

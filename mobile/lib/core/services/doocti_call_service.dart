@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../constants/app_colors.dart';
 import '../utils/phone_utils.dart';
 import '../../features/calls/data/calls_repository.dart';
@@ -19,6 +21,8 @@ class DooctiCallService {
     required String phone,
     int? leadId,
     String? contactName,
+    int? customerPocId,
+    String? pocName,
   }) async {
     final cleanPhone = PhoneUtils.normalize(phone);
     if (cleanPhone.replaceAll('+', '').length < 3) {
@@ -90,6 +94,7 @@ class DooctiCallService {
         phone: cleanPhone,
         leadId: leadId,
         contactName: contactName,
+        customerPocId: customerPocId,
         missingNumberMessage:
             'No valid phone number saved for this contact. '
             'Update the number or use the dial pad.',
@@ -103,6 +108,8 @@ class DooctiCallService {
       phone: cleanPhone,
       leadId: leadId,
       contactName: contactName,
+      customerPocId: customerPocId,
+      pocName: pocName,
       station: station,
       callerDid: callerDid,
     );
@@ -113,6 +120,8 @@ class DooctiCallService {
     required String phone,
     int? leadId,
     String? contactName,
+    int? customerPocId,
+    String? pocName,
     required String station,
     required String callerDid,
   }) {
@@ -124,6 +133,8 @@ class DooctiCallService {
         phone: phone,
         leadId: leadId,
         contactName: contactName,
+        customerPocId: customerPocId,
+        pocName: pocName,
         station: station,
         callerDid: callerDid,
       ),
@@ -135,6 +146,8 @@ class _DooctiCallSheetContent extends StatefulWidget {
   final String phone;
   final int? leadId;
   final String? contactName;
+  final int? customerPocId;
+  final String? pocName;
   final String station;
   final String callerDid;
 
@@ -142,12 +155,15 @@ class _DooctiCallSheetContent extends StatefulWidget {
     required this.phone,
     this.leadId,
     this.contactName,
+    this.customerPocId,
+    this.pocName,
     required this.station,
     required this.callerDid,
   });
 
   @override
-  State<_DooctiCallSheetContent> createState() => _DooctiCallSheetContentState();
+  State<_DooctiCallSheetContent> createState() =>
+      _DooctiCallSheetContentState();
 }
 
 class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
@@ -188,7 +204,10 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
       await _callsRepo.initiateDooctiCall(
         phone: widget.phone,
         leadId: widget.leadId,
-        notes: 'Mobile DooCTI outbound call to ${widget.phone}',
+        customerPocId: widget.customerPocId,
+        notes:
+            'Mobile DooCTI outbound call to ${widget.phone}'
+            '${widget.pocName != null ? ' (POC: ${widget.pocName})' : ''}',
       );
       if (mounted) {
         setState(() {
@@ -244,9 +263,11 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
         callStatus: _selectedDisposition,
         durationSeconds: _seconds > 0 ? _seconds : 1,
         leadId: widget.leadId,
+        customerPocId: widget.customerPocId,
         notes: _notesController.text.trim().isNotEmpty
             ? _notesController.text.trim()
-            : 'Mobile DooCTI call (Ext: ${widget.station})',
+            : 'Mobile DooCTI call (Ext: ${widget.station})'
+                  '${widget.pocName != null ? ' - POC: ${widget.pocName}' : ''}',
       );
 
       if (mounted) {
@@ -271,9 +292,8 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
         setState(() {
           _isSubmitting = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error saving call: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error saving call: $e')));
       }
     }
   }
@@ -281,7 +301,9 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
       child: Container(
         decoration: const BoxDecoration(
           color: Colors.white,
@@ -311,7 +333,10 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: AppColors.navyDark,
                       borderRadius: BorderRadius.circular(12),
@@ -390,16 +415,45 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
                         color: AppColors.textMuted,
                       ),
                     ),
+                    if (widget.pocName != null &&
+                        widget.pocName!.trim().isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF0FDFA),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF99F6E4)),
+                        ),
+                        child: Text(
+                          'POC: ${widget.pocName}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF0F766E),
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFF1F5F9),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         'Outbound DID: ${widget.callerDid}',
-                        style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textMuted,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -416,7 +470,10 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
                       const SizedBox(height: 4),
                       Text(
                         _statusMessage!,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF10B981)),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF10B981),
+                        ),
                       ),
                     ],
                   ],
@@ -444,7 +501,9 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
                       d.replaceAll('_', ' '),
                       style: TextStyle(
                         fontSize: 11,
-                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                        fontWeight: isSelected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                         color: isSelected ? Colors.white : AppColors.textMain,
                       ),
                     ),
@@ -466,8 +525,14 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
                 controller: _notesController,
                 decoration: InputDecoration(
                   hintText: 'Add call notes (optional)...',
-                  hintStyle: const TextStyle(fontSize: 12, color: AppColors.textLight),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  hintStyle: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textLight,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                     borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
@@ -485,19 +550,27 @@ class _DooctiCallSheetContentState extends State<_DooctiCallSheetContent> {
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   elevation: 2,
                 ),
                 icon: _isSubmitting
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
                       )
                     : const Icon(Icons.call_end_rounded),
                 label: Text(
                   _isSubmitting ? 'Saving Call...' : 'End & Save to CRM',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 onPressed: _isSubmitting ? null : _endAndSaveCall,
               ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import 'core/constants/app_theme.dart';
 import 'core/widgets/loading_indicator.dart';
 import 'core/widgets/pingo_mascot_widget.dart';
@@ -18,6 +19,8 @@ import 'features/navigation/main_navigation_shell.dart';
 import 'features/notifications/providers/notifications_provider.dart';
 import 'features/quotations/providers/quotations_provider.dart';
 import 'features/support/providers/support_provider.dart';
+import 'features/support/providers/support_customers_provider.dart';
+import 'features/support/providers/support_manager_provider.dart';
 
 class WaCrmApp extends StatelessWidget {
   const WaCrmApp({super.key});
@@ -37,6 +40,8 @@ class WaCrmApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => QuotationsProvider()),
         ChangeNotifierProvider(create: (_) => CallsProvider()),
         ChangeNotifierProvider(create: (_) => SupportProvider()),
+        ChangeNotifierProvider(create: (_) => SupportCustomersProvider()),
+        ChangeNotifierProvider(create: (_) => SupportManagerProvider()),
         ChangeNotifierProvider(create: (_) => NotificationsProvider()),
       ],
       child: MaterialApp(
@@ -73,13 +78,17 @@ class _AuthGateState extends State<AuthGate> {
     final currentStatus = authProvider.status;
 
     // Detect logout transition: user was authenticated and signed out
-    if (_lastStatus == AuthStatus.authenticated && currentStatus == AuthStatus.unauthenticated) {
+    if (_lastStatus == AuthStatus.authenticated &&
+        currentStatus == AuthStatus.unauthenticated) {
       _hasSeenLanding = true;
       _pageController?.dispose();
       _pageController = PageController(initialPage: 1);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
+          Navigator.of(
+            context,
+            rootNavigator: true,
+          ).popUntil((route) => route.isFirst);
         }
       });
     }
@@ -102,7 +111,9 @@ class _AuthGateState extends State<AuthGate> {
         _hasSeenLanding = true;
         return const MainNavigationShell();
       case AuthStatus.unauthenticated:
-        _pageController ??= PageController(initialPage: _hasSeenLanding ? 1 : 0);
+        _pageController ??= PageController(
+          initialPage: _hasSeenLanding ? 1 : 0,
+        );
         return PageView(
           controller: _pageController!,
           children: [

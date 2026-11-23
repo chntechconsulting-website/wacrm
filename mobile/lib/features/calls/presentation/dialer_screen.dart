@@ -90,8 +90,9 @@ class _DialerScreenState extends State<DialerScreen> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final keySize =
-                ((constraints.maxWidth - 96) / 3).clamp(64.0, 88.0).toDouble();
+            final keySize = ((constraints.maxWidth - 96) / 3)
+                .clamp(64.0, 88.0)
+                .toDouble();
             return SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
               child: Column(

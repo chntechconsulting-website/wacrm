@@ -6,13 +6,18 @@ import '../models/call_log_model.dart';
 class CallsRepository {
   final ApiClient _client = ApiClient();
 
-  Future<List<CallLogModel>> getCalls({int page = 1, int pageSize = 20}) async {
+  Future<List<CallLogModel>> getCalls({
+    int page = 1,
+    int pageSize = 20,
+    int? leadId,
+  }) async {
     final response = await _client.get(
       ApiEndpoints.ivrCalls,
       queryParameters: {
         'page': page,
         'page_size': pageSize,
         'per_page': pageSize,
+        if (leadId != null) 'lead_id': leadId,
       },
     );
 
@@ -44,6 +49,7 @@ class CallsRepository {
     required String phone,
     int? leadId,
     String? notes,
+    int? customerPocId,
   }) async {
     final body = {
       'phone_number': phone,
@@ -51,6 +57,7 @@ class CallsRepository {
       'customer_phone': phone,
       if (leadId != null) 'lead_id': leadId,
       if (notes != null) 'notes': notes,
+      if (customerPocId != null) 'customer_poc_id': customerPocId,
     };
     final response = await _client.post(ApiEndpoints.dooctiCall, body: body);
     if (response is Map<String, dynamic>) {
@@ -97,6 +104,7 @@ class CallsRepository {
     String? syncOrigin,
     int? nativeCallDateMs,
     int? nativeCallId,
+    int? customerPocId,
   }) async {
     final effectivePhone = customerPhone ?? customerNumber ?? '';
     final body = {
@@ -105,6 +113,7 @@ class CallsRepository {
       'call_status': callStatus,
       'duration_seconds': durationSeconds,
       if (leadId != null) 'lead_id': leadId,
+      if (customerPocId != null) 'customer_poc_id': customerPocId,
       if (notes != null) 'notes': notes,
       if (clientCallId != null) 'client_call_id': clientCallId,
       if (callDirection != null) 'call_direction': callDirection,

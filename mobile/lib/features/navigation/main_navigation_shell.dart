@@ -11,13 +11,21 @@ import '../auth/presentation/profile_screen.dart';
 import '../auth/providers/auth_provider.dart';
 import '../calls/presentation/call_logs_screen.dart';
 import '../calls/providers/calls_provider.dart';
+import '../dashboard/presentation/admin_dashboard_screen.dart';
 import '../dashboard/presentation/dashboard_screen.dart';
 import '../followups/presentation/followups_list_screen.dart';
+import '../followups/providers/followups_provider.dart';
 import '../leads/presentation/lead_create_edit_screen.dart';
 import '../leads/presentation/leads_list_screen.dart';
 import '../notifications/providers/notifications_provider.dart';
 import '../settings/presentation/settings_screen.dart';
-import '../support/presentation/support_tickets_screen.dart';
+import '../support/presentation/support_customers_screen.dart';
+import '../support/presentation/support_backup_screen.dart';
+import '../support/presentation/support_dashboard_screen.dart';
+import '../support/presentation/support_dialogs.dart';
+import '../support/presentation/support_followups_screen.dart';
+import '../support/presentation/support_manager_dashboard_screen.dart';
+import '../support/providers/support_customers_provider.dart';
 
 class MainNavigationShell extends StatefulWidget {
   const MainNavigationShell({super.key});
@@ -167,32 +175,78 @@ class MainNavigationShellState extends State<MainNavigationShell>
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().currentUser;
+    final isSupport = user?.isSupportWorkspace == true;
+    final isSupportManager = user?.isSupportManagerWorkspace == true;
+    final isAdmin = user?.isAdmin == true;
 
-    // 4 Primary Bottom Navigation Tabs:
-    // 0: Home (Dashboard)
-    // 1: Leads (or Support Tickets if Support Executive/Manager)
-    // 2: Calls (Call Logs)
-    // 3: Settings (Settings & Enterprise Profile)
-    final List<Widget> screens = [
-      DashboardScreen(
-        onNavigateToLeads: () => _navigateToTab(1),
-        onNavigateToFollowups: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const FollowupsListScreen()),
-        ),
-        onNavigateToCalls: () => _navigateToTab(2),
-        onNavigateToProfile: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ProfileScreen()),
-        ),
-      ),
-      if (user?.isSupportExecutive == true || user?.isSupportManager == true)
-        const SupportTicketsScreen()
-      else
-        const LeadsListScreen(),
-      const CallLogsScreen(),
-      const SettingsScreen(),
-    ];
+    // Role-specific workspace:
+    // Admin  (Admin Dashboard, Leads, Calls, Settings)
+    // Sales  (Home, Leads, Calls, Settings)
+    // Support (Home, Customers, Follow-ups, Settings)
+    final List<Widget> screens = isSupport
+        ? [
+            if (isSupportManager)
+              SupportManagerDashboardScreen(
+                onNavigateToCustomers: () => _navigateToTab(1),
+                onNavigateToFollowups: () => _navigateToTab(2),
+                onNavigateToBackup: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const SupportBackupScreen(),
+                  ),
+                ),
+                onNavigateToCalls: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CallLogsScreen()),
+                ),
+                onNavigateToProfile: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                ),
+              )
+            else
+              SupportDashboardScreen(
+                onNavigateToCustomers: () => _navigateToTab(1),
+                onNavigateToFollowups: () => _navigateToTab(2),
+                onNavigateToCalls: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CallLogsScreen()),
+                ),
+                onNavigateToProfile: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                ),
+              ),
+            const SupportCustomersScreen(),
+            const SupportFollowupsScreen(),
+            const SettingsScreen(),
+          ]
+        : [
+            if (isAdmin)
+              AdminDashboardScreen(
+                onNavigateToLeads: () => _navigateToTab(1),
+                onNavigateToProfile: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                ),
+              )
+            else
+              DashboardScreen(
+                onNavigateToLeads: () => _navigateToTab(1),
+                onNavigateToFollowups: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FollowupsListScreen()),
+                ),
+                onNavigateToCalls: () => _navigateToTab(2),
+                onNavigateToProfile: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                ),
+              ),
+            const LeadsListScreen(),
+            const CallLogsScreen(),
+            const SettingsScreen(),
+          ];
 
     return Scaffold(
       drawer: WacrmDrawer(currentTabIndex: _currentIndex),
@@ -203,11 +257,35 @@ class MainNavigationShellState extends State<MainNavigationShell>
       bottomNavigationBar: WacrmWaveNavBar(
         currentIndex: _currentIndex,
         onTap: (idx) => _navigateToTab(idx),
-        onAdd: () {
-          Navigator.push(
+        secondLabel: isSupport ? 'Customers' : 'Leads',
+        thirdLabel: isSupport ? 'Follow-ups' : 'Calls',
+        secondIcon: isSupport
+            ? Icons.business_rounded
+            : Icons.people_alt_rounded,
+        thirdIcon: isSupport ? Icons.alarm_rounded : Icons.phone_rounded,
+        centerIcon: isSupport
+            ? Icons.event_available_rounded
+            : Icons.add_rounded,
+        centerTooltip: isSupport ? 'Schedule Support Follow-up' : 'Create Lead',
+        showCenterAction: isSupport
+            ? (user?.canCreateSupportFollowup ?? false)
+            : true,
+        onAdd: () async {
+          if (!isSupport) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LeadCreateEditScreen()),
+            );
+            return;
+          }
+          final supportProvider = context.read<SupportCustomersProvider>();
+          final followupsProvider = context.read<FollowupsProvider>();
+          final saved = await SupportFollowupSheet.show(
             context,
-            MaterialPageRoute(builder: (_) => const LeadCreateEditScreen()),
+            customers: supportProvider.customers,
           );
+          if (!mounted || saved != true) return;
+          await followupsProvider.fetchFollowups(showLoading: false);
         },
       ),
     );

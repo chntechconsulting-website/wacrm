@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../data/calls_repository.dart';
 import '../models/call_log_model.dart';
 
@@ -35,9 +36,19 @@ class CallsProvider extends ChangeNotifier {
     return await _repository.getAgentExtension();
   }
 
-  Future<bool> initiateDooctiCall({required String phone, int? leadId, String? notes}) async {
+  Future<bool> initiateDooctiCall({
+    required String phone,
+    int? leadId,
+    String? notes,
+    int? customerPocId,
+  }) async {
     try {
-      await _repository.initiateDooctiCall(phone: phone, leadId: leadId, notes: notes);
+      await _repository.initiateDooctiCall(
+        phone: phone,
+        leadId: leadId,
+        notes: notes,
+        customerPocId: customerPocId,
+      );
       await fetchCalls(showLoading: false);
       return true;
     } catch (e) {
@@ -65,6 +76,7 @@ class CallsProvider extends ChangeNotifier {
     required int durationSeconds,
     int? leadId,
     String? notes,
+    int? customerPocId,
   }) async {
     try {
       await _repository.logManualCall(
@@ -73,6 +85,7 @@ class CallsProvider extends ChangeNotifier {
         durationSeconds: durationSeconds,
         leadId: leadId,
         notes: notes,
+        customerPocId: customerPocId,
       );
       await fetchCalls(showLoading: false);
       return true;

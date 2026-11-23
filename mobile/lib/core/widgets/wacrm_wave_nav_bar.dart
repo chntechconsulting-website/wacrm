@@ -5,11 +5,27 @@ class WacrmWaveNavBar extends StatelessWidget {
   final ValueChanged<int> onTap;
   final VoidCallback onAdd;
 
+  /// Role-specific labels/icons. Defaults preserve the existing Sales UI.
+  final String secondLabel;
+  final String thirdLabel;
+  final IconData secondIcon;
+  final IconData thirdIcon;
+  final IconData centerIcon;
+  final String centerTooltip;
+  final bool showCenterAction;
+
   const WacrmWaveNavBar({
     super.key,
     required this.currentIndex,
     required this.onTap,
     required this.onAdd,
+    this.secondLabel = 'Leads',
+    this.thirdLabel = 'Calls',
+    this.secondIcon = Icons.people_alt_rounded,
+    this.thirdIcon = Icons.phone_rounded,
+    this.centerIcon = Icons.add_rounded,
+    this.centerTooltip = 'Create Lead',
+    this.showCenterAction = true,
   });
 
   // Reference Design Color Palette:
@@ -47,7 +63,7 @@ class WacrmWaveNavBar extends StatelessWidget {
             left: 0,
             right: 0,
             bottom: bottomInset + 8,
-            height: 44,
+            height: 46,
             child: Row(
               children: [
                 // 1. Home
@@ -59,24 +75,24 @@ class WacrmWaveNavBar extends StatelessWidget {
                   ),
                 ),
 
-                // 2. Leads
+                // 2. Second tab (Leads for Sales / Customers for Support)
                 Expanded(
                   child: _buildNavItem(
                     index: 1,
-                    icon: Icons.people_alt_rounded,
-                    label: 'Leads',
+                    icon: secondIcon,
+                    label: secondLabel,
                   ),
                 ),
 
                 // Center Spacer for 56px circular button
                 const SizedBox(width: 56),
 
-                // 3. Calls
+                // 3. Third tab (Calls for Sales / Follow-ups for Support)
                 Expanded(
                   child: _buildNavItem(
                     index: 2,
-                    icon: Icons.phone_rounded,
-                    label: 'Calls',
+                    icon: thirdIcon,
+                    label: thirdLabel,
                   ),
                 ),
 
@@ -84,7 +100,9 @@ class WacrmWaveNavBar extends StatelessWidget {
                 Expanded(
                   child: _buildNavItem(
                     index: 3,
-                    icon: Icons.settings_rounded,
+                    icon: currentIndex == 3
+                        ? Icons.settings_rounded
+                        : Icons.settings_outlined,
                     label: 'Settings',
                   ),
                 ),
@@ -92,42 +110,42 @@ class WacrmWaveNavBar extends StatelessWidget {
             ),
           ),
 
-          // Center Elevated Circular Red (+) Button (56px, overlapping top by 28px)
-          Positioned(
-            bottom: bottomInset + 40,
-            child: GestureDetector(
-              onTap: onAdd,
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: activeColor,
-                  boxShadow: [
-                    BoxShadow(
-                      color: activeColor.withValues(alpha: 0.45),
-                      blurRadius: 16,
-                      spreadRadius: 2,
-                      offset: const Offset(0, 4),
+          // Center Elevated Circular Red Action Button (56px, overlapping top by 28px)
+          if (showCenterAction)
+            Positioned(
+              bottom: bottomInset + 40,
+              child: Tooltip(
+                message: centerTooltip,
+                child: GestureDetector(
+                  onTap: onAdd,
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: activeColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: activeColor.withValues(alpha: 0.45),
+                          blurRadius: 16,
+                          spreadRadius: 2,
+                          offset: const Offset(0, 4),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
                     ),
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.18),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
+                    child: Center(
+                      child: Icon(centerIcon, color: whiteColor, size: 32),
                     ),
-                  ],
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.add_rounded,
-                    color: whiteColor,
-                    size: 32,
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -146,11 +164,7 @@ class WacrmWaveNavBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            icon,
-            size: 22,
-            color: isSelected ? activeColor : inactiveColor,
-          ),
+          Icon(icon, size: 22, color: isSelected ? activeColor : inactiveColor),
           const SizedBox(height: 2),
           Text(
             label,
@@ -199,61 +213,29 @@ class _WaveNavBarPainter extends CustomPainter {
     path.moveTo(0, cornerY);
 
     // 1. From left edge to valley above Home
-    path.cubicTo(
-      w * 0.04, 31.0,
-      w * 0.08, valleyY,
-      w * 0.13, valleyY,
-    );
+    path.cubicTo(w * 0.04, 31.0, w * 0.08, valleyY, w * 0.13, valleyY);
 
     // 2. From valley above Home to crest peak over Leads
-    path.cubicTo(
-      w * 0.19, valleyY,
-      w * 0.24, crestY,
-      w * 0.31, crestY,
-    );
+    path.cubicTo(w * 0.19, valleyY, w * 0.24, crestY, w * 0.31, crestY);
 
     // 3. From crest peak over Leads curving down towards center cradle
-    path.cubicTo(
-      w * 0.37, crestY,
-      w * 0.40, 33.0,
-      w * 0.42, 40.0,
-    );
+    path.cubicTo(w * 0.37, crestY, w * 0.40, 33.0, w * 0.42, 40.0);
 
     // 4. Down into cradle scoop under center (+) button
-    path.cubicTo(
-      w * 0.44, 50.0,
-      w * 0.46, cradleY,
-      w * 0.50, cradleY,
-    );
+    path.cubicTo(w * 0.44, 50.0, w * 0.46, cradleY, w * 0.50, cradleY);
 
     // Symmetrical right half:
     // 5. Rising up from center cradle scoop
-    path.cubicTo(
-      w * 0.54, cradleY,
-      w * 0.56, 50.0,
-      w * 0.58, 40.0,
-    );
+    path.cubicTo(w * 0.54, cradleY, w * 0.56, 50.0, w * 0.58, 40.0);
 
     // 6. Up to crest peak over Calls
-    path.cubicTo(
-      w * 0.60, 33.0,
-      w * 0.63, crestY,
-      w * 0.69, crestY,
-    );
+    path.cubicTo(w * 0.60, 33.0, w * 0.63, crestY, w * 0.69, crestY);
 
     // 7. From crest peak over Calls to valley above Settings
-    path.cubicTo(
-      w * 0.76, crestY,
-      w * 0.81, valleyY,
-      w * 0.87, valleyY,
-    );
+    path.cubicTo(w * 0.76, crestY, w * 0.81, valleyY, w * 0.87, valleyY);
 
     // 8. From valley above Settings to right corner
-    path.cubicTo(
-      w * 0.92, valleyY,
-      w * 0.96, 31.0,
-      w, cornerY,
-    );
+    path.cubicTo(w * 0.92, valleyY, w * 0.96, 31.0, w, cornerY);
 
     // Close path down through bottom including bottomInset
     path.lineTo(w, h);

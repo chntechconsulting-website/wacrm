@@ -21,7 +21,10 @@ from schemas.followup import (
 )
 from services.auth import get_current_user
 from services.notification_service import create_notification
-from services.permission_service import get_authorized_followup_employee_ids
+from services.permission_service import (
+    get_authorized_followup_employee_ids,
+    is_support_lead_authorized,
+)
 from services.department_service import (
     apply_followup_department_filter,
     employee_department,
@@ -38,7 +41,8 @@ from services.hierarchy_service import (
     ROLE_SALES_MANAGER,
     ROLE_SALES_EXECUTIVE,
     ROLE_SUPPORT_MANAGER,
-    ROLE_SUPPORT_EXECUTIVE
+    ROLE_SUPPORT_EXECUTIVE,
+    DEPT_SUPPORT,
 )
 
 router = APIRouter(prefix="/followups", tags=["Followups"])
@@ -388,8 +392,16 @@ def create_followup(
 
     # 1. Executive role authorization check
     if norm_role in [ROLE_SALES_EXECUTIVE, ROLE_SUPPORT_EXECUTIVE]:
-        # Executives can only schedule followups for leads assigned to them or unassigned
-        if lead.assigned_to and lead.assigned_to != current_emp.id:
+        if norm_role == ROLE_SUPPORT_EXECUTIVE:
+            # Support ownership is the Support handover/team scope, not the
+            # Sales lead owner. A won deal can still carry the Sales employee in
+            # ``lead.assigned_to`` while Support owns the customer.
+            if not is_support_lead_authorized(lead, current_user, db):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied. You can only schedule followups for Support customers assigned to you."
+                )
+        elif lead.assigned_to and lead.assigned_to != current_emp.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You can only schedule followups for leads assigned to you."
@@ -397,7 +409,19 @@ def create_followup(
         target_assigned_to = current_emp.id
     # 2. Manager role authorization check
     elif norm_role in [ROLE_SALES_MANAGER, ROLE_SUPPORT_MANAGER, "MANAGER"]:
-        if authorized_emp_ids is not None and lead.assigned_to and lead.assigned_to not in authorized_emp_ids:
+        if norm_role == ROLE_SUPPORT_MANAGER and not is_support_lead_authorized(
+            lead, current_user, db
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You can only schedule followups for customers in your Support team."
+            )
+        if (
+            norm_role != ROLE_SUPPORT_MANAGER
+            and authorized_emp_ids is not None
+            and lead.assigned_to
+            and lead.assigned_to not in authorized_emp_ids
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You can only schedule followups for leads in your department/team."
@@ -471,10 +495,13 @@ def create_followup(
     )
     db.add(followup_record)
 
-    # Sync lead status and dates
-    lead.status = "FOLLOW-UP"
-    lead.followup_date = f_in.followup_date
-    lead.followup_time = f_in.followup_time or "10:00 AM"
+    # Support follow-ups must never rewrite the Sales-owned lead status,
+    # follow-up date or time. A converted/WON deal's Sales record stays intact
+    # while Support schedules and completes its own follow-up record.
+    if actor_department != DEPT_SUPPORT:
+        lead.status = "FOLLOW-UP"
+        lead.followup_date = f_in.followup_date
+        lead.followup_time = f_in.followup_time or "10:00 AM"
 
     db.commit()
     db.refresh(followup_record)

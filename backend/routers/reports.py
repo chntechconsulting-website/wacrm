@@ -490,6 +490,9 @@ def build_support_dashboard_payload(
     )
 
     customer_followups = followup_query.count()
+    overdue_follow_ups = followup_query.filter(
+        Followup.followup_date < get_ist_now().date()
+    ).count()
     upcoming_followups = []
     for followup in followup_query.order_by(Followup.followup_date.asc()).limit(5).all():
         upcoming_followups.append({
@@ -503,12 +506,49 @@ def build_support_dashboard_payload(
             "notes": followup.notes,
         })
 
+    # Support-scoped call activity for today. Call logs are linked to the
+    # customer lead, so the same authorized lead scope used for tickets and
+    # follow-ups also protects the call count.
+    from services.permission_service import get_support_authorized_lead_ids
+
+    support_lead_ids = get_support_authorized_lead_ids(user, db)
+    if support_lead_ids is None:
+        support_lead_ids = [
+            row[0]
+            for row in db.query(SupportHandoff.lead_id)
+            .filter(SupportHandoff.lead_id.isnot(None))
+            .distinct()
+            .all()
+        ]
+    today = get_ist_now().date()
+    today_support_calls = 0
+    if support_lead_ids:
+        today_support_calls = (
+            db.query(func.count(CallLog.id))
+            .filter(
+                CallLog.lead_id.in_(support_lead_ids),
+                or_(
+                    func.date(CallLog.created_at) == today,
+                    func.date(CallLog.started_at) == today,
+                ),
+            )
+            .scalar()
+            or 0
+        )
+
     return {
         "total_tickets": total_tickets,
         "open_tickets": open_tickets,
         "resolved_tickets": resolved_tickets,
         "pending_tickets": pending_tickets,
         "customer_followups": customer_followups,
+        # Additive mobile Support KPIs. These keys do not change the existing
+        # web payload and are derived from the same authorized scope above.
+        "assigned_customers": total_tickets,
+        "active_customers": max(total_tickets - resolved_tickets, 0),
+        "overdue_follow_ups": overdue_follow_ups,
+        "completed_support_activities": resolved_tickets,
+        "today_support_calls": int(today_support_calls),
         "average_resolution_hours": average_resolution_hours,
         "average_resolution_display": _format_resolution_time(average_resolution_hours),
         "status_breakdown": status_breakdown,

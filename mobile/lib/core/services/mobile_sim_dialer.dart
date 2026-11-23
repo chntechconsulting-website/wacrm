@@ -24,6 +24,7 @@ class MobileSimDialer {
     required String phone,
     int? leadId,
     String? contactName,
+    int? customerPocId,
     String missingNumberMessage =
         'Enter a valid phone number with at least 3 digits.',
   }) async {
@@ -80,10 +81,7 @@ class MobileSimDialer {
       }
       if (officeSim.state == OfficeSimState.verified &&
           officeSim.mapping != null) {
-        final office = OfficeSimService.matchSim(
-          officeSim.mapping!,
-          sims,
-        );
+        final office = OfficeSimService.matchSim(officeSim.mapping!, sims);
         if (office == null) {
           _showMessage(
             context,
@@ -107,6 +105,7 @@ class MobileSimDialer {
         phone: number,
         leadId: leadId,
         contactName: contactName,
+        customerPocId: customerPocId,
         sim: selectedSim,
       );
 
@@ -115,6 +114,7 @@ class MobileSimDialer {
         callId: attemptCallId,
         leadId: leadId,
         contactName: contactName,
+        customerPocId: customerPocId,
         sim: selectedSim,
       );
 
@@ -141,6 +141,7 @@ class MobileSimDialer {
           phone: number,
           leadId: leadId,
           contactName: contactName,
+          customerPocId: customerPocId,
           reason: error.message ?? error.code,
         );
       }
@@ -176,6 +177,7 @@ class MobileSimDialer {
           phone: number,
           leadId: leadId,
           contactName: contactName,
+          customerPocId: customerPocId,
           reason: error.toString(),
         );
       }

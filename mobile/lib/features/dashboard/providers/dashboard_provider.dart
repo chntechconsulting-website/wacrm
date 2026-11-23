@@ -10,6 +10,8 @@ class DashboardProvider extends ChangeNotifier {
   String? _errorMessage;
 
   DashboardStatsModel? get stats => _stats;
+  String get dashboardType => _stats?.dashboardType ?? 'sales';
+  bool get isSupportDashboard => dashboardType == 'support';
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 

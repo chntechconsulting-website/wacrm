@@ -127,9 +127,22 @@ class ApiClient {
     }
   }
 
-  Future<dynamic> post(String url, {dynamic body}) async {
+  Future<dynamic> post(
+    String url, {
+    dynamic body,
+    Map<String, dynamic>? queryParameters,
+  }) async {
     try {
-      final uri = Uri.parse(url);
+      Uri uri = Uri.parse(url);
+      if (queryParameters != null && queryParameters.isNotEmpty) {
+        final cleanParams = <String, String>{};
+        queryParameters.forEach((key, value) {
+          if (value != null) {
+            cleanParams[key] = value.toString();
+          }
+        });
+        uri = uri.replace(queryParameters: cleanParams);
+      }
       final headers = await _getHeaders();
       final isLogin =
           url.contains('/auth/login') || url.contains('/auth/token');

@@ -25,6 +25,11 @@ class CallLogModel {
   final String? createdAt;
   final String? startedAt;
   final String? endedAt;
+  final int? customerPocId;
+  final String? pocName;
+  final String? pocPhone;
+  final String? pocDesignation;
+  final bool pocIsPrimary;
 
   CallLogModel({
     required this.id,
@@ -51,6 +56,11 @@ class CallLogModel {
     this.createdAt,
     this.startedAt,
     this.endedAt,
+    this.customerPocId,
+    this.pocName,
+    this.pocPhone,
+    this.pocDesignation,
+    this.pocIsPrimary = false,
   });
 
   bool get isMobileSim => (provider ?? '').toUpperCase().contains('MOBILE_SIM');
@@ -139,6 +149,11 @@ class CallLogModel {
       createdAt: json['created_at'] ?? json['started_at'],
       startedAt: json['started_at'],
       endedAt: json['ended_at'],
+      customerPocId: (json['customer_poc_id'] as num?)?.toInt(),
+      pocName: json['poc_name'],
+      pocPhone: json['poc_phone'],
+      pocDesignation: json['poc_designation'],
+      pocIsPrimary: json['poc_is_primary'] == true,
     );
   }
 

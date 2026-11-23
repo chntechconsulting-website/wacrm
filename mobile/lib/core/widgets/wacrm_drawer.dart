@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../constants/app_colors.dart';
 import 'pingo_mascot_widget.dart';
 import '../../features/activities/presentation/activities_screen.dart';
@@ -10,10 +11,13 @@ import '../../features/calls/presentation/dialer_screen.dart';
 import '../../features/customers/presentation/customers_list_screen.dart';
 import '../../features/deals/presentation/deals_list_screen.dart';
 import '../../features/field_visits/presentation/field_visits_list_screen.dart';
+import '../../features/followups/presentation/followups_list_screen.dart';
 import '../../features/navigation/main_navigation_shell.dart';
 import '../../features/notifications/presentation/notifications_screen.dart';
 import '../../features/quotations/presentation/quotations_list_screen.dart';
 import '../../features/reports/presentation/reports_screen.dart';
+import '../../features/support/presentation/support_backup_screen.dart';
+import '../../features/support/presentation/support_customers_screen.dart';
 import '../../features/support/presentation/support_tickets_screen.dart';
 
 /// Shows standard WACRM sign out confirmation dialog and cleanly redirects to LoginScreen
@@ -41,14 +45,19 @@ Future<void> showWacrmLogoutDialog(BuildContext context) async {
           onPressed: () => Navigator.pop(ctx),
           child: const Text(
             'Cancel',
-            style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFFE5252A),
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
             elevation: 0,
           ),
           onPressed: () async {
@@ -58,7 +67,10 @@ Future<void> showWacrmLogoutDialog(BuildContext context) async {
             nav.popUntil((route) => route.isFirst);
             await auth.logout();
           },
-          child: const Text('Sign Out', style: TextStyle(fontWeight: FontWeight.w700)),
+          child: const Text(
+            'Sign Out',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
         ),
       ],
     ),
@@ -68,10 +80,7 @@ Future<void> showWacrmLogoutDialog(BuildContext context) async {
 class WacrmDrawer extends StatelessWidget {
   final int? currentTabIndex;
 
-  const WacrmDrawer({
-    super.key,
-    this.currentTabIndex,
-  });
+  const WacrmDrawer({super.key, this.currentTabIndex});
 
   String _getInitials(String name) {
     if (name.trim().isEmpty) return 'U';
@@ -92,16 +101,22 @@ class WacrmDrawer extends StatelessWidget {
 
   void _navigateToScreen(BuildContext context, Widget screen) {
     Navigator.pop(context); // Close drawer
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().currentUser;
     final initials = user != null ? _getInitials(user.name) : 'U';
+    final isSupport = user?.isSupportWorkspace == true;
+    final isSupportManager = user?.isSupportManagerWorkspace == true;
+    final isAdmin = user?.isAdmin == true;
+    final canViewSupportModule =
+        user?.canViewSupport == true &&
+        user?.hasPermission('support_tickets', 'view') == true;
+    final canViewSupportCustomers =
+        user?.canViewSupport == true &&
+        user?.hasPermission('customers', 'view') == true;
 
     return Drawer(
       backgroundColor: Colors.white,
@@ -150,14 +165,17 @@ class WacrmDrawer extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 InkWell(
-                  onTap: () => _navigateToScreen(context, const ProfileScreen()),
+                  onTap: () =>
+                      _navigateToScreen(context, const ProfileScreen()),
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.12),
+                      ),
                     ),
                     child: Row(
                       children: [
@@ -222,82 +240,199 @@ class WacrmDrawer extends StatelessWidget {
                 _buildSectionLabel('MAIN NAVIGATION'),
                 _buildDrawerTile(
                   icon: Icons.dashboard_rounded,
-                  label: 'Dashboard',
+                  label: isSupportManager
+                      ? 'Support Manager Dashboard'
+                      : isSupport
+                      ? 'Support Dashboard'
+                      : isAdmin
+                      ? 'Admin Dashboard'
+                      : 'Dashboard',
                   isSelected: currentTabIndex == 0,
                   onTap: () => _onSelectTab(context, 0),
                 ),
-                _buildDrawerTile(
-                  icon: Icons.leaderboard_rounded,
-                  label: 'Leads Management',
-                  isSelected: currentTabIndex == 1,
-                  onTap: () => _onSelectTab(context, 1),
-                ),
-                _buildDrawerTile(
-                  icon: Icons.alarm_rounded,
-                  label: 'Follow-ups & Reminders',
-                  isSelected: currentTabIndex == 2,
-                  onTap: () => _onSelectTab(context, 2),
-                ),
-
-                const SizedBox(height: 12),
-                _buildSectionLabel('CRM MODULES'),
-                _buildDrawerTile(
-                  icon: Icons.people_alt_outlined,
-                  label: 'Customers',
-                  color: AppColors.primary,
-                  onTap: () => _navigateToScreen(context, const CustomersListScreen()),
-                ),
-                _buildDrawerTile(
-                  icon: Icons.phone_callback_rounded,
-                  label: 'Call Logs',
-                  color: AppColors.accent,
-                  onTap: () => _navigateToScreen(context, const CallLogsScreen()),
-                ),
-                _buildDrawerTile(
-                  icon: Icons.dialpad_rounded,
-                  label: 'Dial Pad',
-                  color: const Color(0xFF10B981),
-                  onTap: () => _navigateToScreen(context, const DialerScreen()),
-                ),
-                _buildDrawerTile(
-                  icon: Icons.add_location_alt_rounded,
-                  label: 'Field Visits',
-                  color: const Color(0xFF0284C7),
-                  onTap: () => _navigateToScreen(context, const FieldVisitsListScreen()),
-                ),
-                _buildDrawerTile(
-                  icon: Icons.history_rounded,
-                  label: 'Activities',
-                  color: const Color(0xFF8B5CF6),
-                  onTap: () => _navigateToScreen(context, const ActivitiesScreen()),
-                ),
-                if (user?.canViewSales == true) ...[
+                if (isSupport) ...[
                   _buildDrawerTile(
-                    icon: Icons.description_outlined,
-                    label: 'Quotations',
-                    color: const Color(0xFF0D9488),
-                    onTap: () => _navigateToScreen(context, const QuotationsListScreen()),
+                    icon: Icons.business_rounded,
+                    label: 'Support Customers',
+                    isSelected: currentTabIndex == 1,
+                    onTap: () => _onSelectTab(context, 1),
                   ),
                   _buildDrawerTile(
-                    icon: Icons.handshake_outlined,
-                    label: 'Deals & Handoff',
-                    color: const Color(0xFFD97706),
-                    onTap: () => _navigateToScreen(context, const DealsListScreen()),
+                    icon: Icons.alarm_rounded,
+                    label: 'My Follow-ups',
+                    isSelected: currentTabIndex == 2,
+                    onTap: () => _onSelectTab(context, 2),
+                  ),
+                ] else ...[
+                  _buildDrawerTile(
+                    icon: Icons.leaderboard_rounded,
+                    label: 'Leads Management',
+                    isSelected: currentTabIndex == 1,
+                    onTap: () => _onSelectTab(context, 1),
+                  ),
+                  _buildDrawerTile(
+                    icon: Icons.alarm_rounded,
+                    label: 'Follow-ups & Reminders',
+                    onTap: () =>
+                        _navigateToScreen(context, const FollowupsListScreen()),
                   ),
                 ],
-                if (user?.canViewSupport == true)
-                  _buildDrawerTile(
-                    icon: Icons.support_agent_rounded,
-                    label: 'Support Tickets',
-                    color: const Color(0xFFE11D48),
-                    onTap: () => _navigateToScreen(context, const SupportTicketsScreen()),
-                  ),
-                _buildDrawerTile(
-                  icon: Icons.bar_chart_rounded,
-                  label: 'Reports & Funnel',
-                  color: const Color(0xFF2563EB),
-                  onTap: () => _navigateToScreen(context, const ReportsScreen()),
+
+                const SizedBox(height: 12),
+                _buildSectionLabel(
+                  isSupport
+                      ? 'SUPPORT MODULES'
+                      : isAdmin
+                      ? 'ADMIN MODULES'
+                      : 'CRM MODULES',
                 ),
+                if (isSupport) ...[
+                  if (canViewSupportModule)
+                    _buildDrawerTile(
+                      icon: Icons.support_agent_rounded,
+                      label: 'Support Tickets',
+                      color: const Color(0xFFE11D48),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const SupportTicketsScreen(),
+                      ),
+                    ),
+                  if (canViewSupportModule || canViewSupportCustomers)
+                    _buildDrawerTile(
+                      icon: Icons.swap_horiz_rounded,
+                      label: 'Backup & Handover',
+                      color: const Color(0xFF2563EB),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const SupportBackupScreen(),
+                      ),
+                    ),
+                  if (user?.hasPermission('calls', 'view') == true)
+                    _buildDrawerTile(
+                      icon: Icons.phone_callback_rounded,
+                      label: 'Call Logs',
+                      color: AppColors.accent,
+                      onTap: () =>
+                          _navigateToScreen(context, const CallLogsScreen()),
+                    ),
+                  if (user?.hasPermission('calls', 'view') == true)
+                    _buildDrawerTile(
+                      icon: Icons.dialpad_rounded,
+                      label: 'Dial Pad',
+                      color: const Color(0xFF10B981),
+                      onTap: () =>
+                          _navigateToScreen(context, const DialerScreen()),
+                    ),
+                  if (user?.hasPermission('activities', 'view') == true)
+                    _buildDrawerTile(
+                      icon: Icons.history_rounded,
+                      label: 'My Activities',
+                      color: const Color(0xFF8B5CF6),
+                      onTap: () =>
+                          _navigateToScreen(context, const ActivitiesScreen()),
+                    ),
+                ] else ...[
+                  if (isAdmin && canViewSupportCustomers)
+                    _buildDrawerTile(
+                      icon: Icons.business_rounded,
+                      label: 'Support Customers',
+                      color: const Color(0xFFE11D48),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const SupportCustomersScreen(),
+                      ),
+                    ),
+                  if (user?.hasPermission('customers', 'view') == true)
+                    _buildDrawerTile(
+                      icon: Icons.people_alt_outlined,
+                      label: 'Customers',
+                      color: AppColors.primary,
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const CustomersListScreen(),
+                      ),
+                    ),
+                  if (user?.hasPermission('calls', 'view') == true) ...[
+                    _buildDrawerTile(
+                      icon: Icons.phone_callback_rounded,
+                      label: 'Call Logs',
+                      color: AppColors.accent,
+                      onTap: () =>
+                          _navigateToScreen(context, const CallLogsScreen()),
+                    ),
+                    _buildDrawerTile(
+                      icon: Icons.dialpad_rounded,
+                      label: 'Dial Pad',
+                      color: const Color(0xFF10B981),
+                      onTap: () =>
+                          _navigateToScreen(context, const DialerScreen()),
+                    ),
+                  ],
+                  if (user?.canViewSales == true)
+                    _buildDrawerTile(
+                      icon: Icons.add_location_alt_rounded,
+                      label: 'Field Visits',
+                      color: const Color(0xFF0284C7),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const FieldVisitsListScreen(),
+                      ),
+                    ),
+                  if (user?.hasPermission('activities', 'view') == true)
+                    _buildDrawerTile(
+                      icon: Icons.history_rounded,
+                      label: 'Activities',
+                      color: const Color(0xFF8B5CF6),
+                      onTap: () =>
+                          _navigateToScreen(context, const ActivitiesScreen()),
+                    ),
+                  if (user?.hasPermission('quotations', 'view') == true) ...[
+                    _buildDrawerTile(
+                      icon: Icons.description_outlined,
+                      label: 'Quotations',
+                      color: const Color(0xFF0D9488),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const QuotationsListScreen(),
+                      ),
+                    ),
+                    _buildDrawerTile(
+                      icon: Icons.handshake_outlined,
+                      label: 'Deals & Handoff',
+                      color: const Color(0xFFD97706),
+                      onTap: () =>
+                          _navigateToScreen(context, const DealsListScreen()),
+                    ),
+                  ],
+                  if (canViewSupportModule)
+                    _buildDrawerTile(
+                      icon: Icons.support_agent_rounded,
+                      label: 'Support Tickets',
+                      color: const Color(0xFFE11D48),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const SupportTicketsScreen(),
+                      ),
+                    ),
+                  if (canViewSupportModule || canViewSupportCustomers)
+                    _buildDrawerTile(
+                      icon: Icons.swap_horiz_rounded,
+                      label: 'Backup & Handover',
+                      color: const Color(0xFF2563EB),
+                      onTap: () => _navigateToScreen(
+                        context,
+                        const SupportBackupScreen(),
+                      ),
+                    ),
+                  if (user?.hasPermission('reports', 'view') == true)
+                    _buildDrawerTile(
+                      icon: Icons.bar_chart_rounded,
+                      label: 'Reports & Funnel',
+                      color: const Color(0xFF2563EB),
+                      onTap: () =>
+                          _navigateToScreen(context, const ReportsScreen()),
+                    ),
+                ],
 
                 const SizedBox(height: 12),
                 _buildSectionLabel('ACCOUNT & PREFERENCES'),
@@ -305,13 +440,21 @@ class WacrmDrawer extends StatelessWidget {
                   icon: Icons.notifications_none_rounded,
                   label: 'Notifications',
                   color: const Color(0xFFF59E0B),
-                  onTap: () => _navigateToScreen(context, const NotificationsScreen()),
+                  onTap: () =>
+                      _navigateToScreen(context, const NotificationsScreen()),
+                ),
+                _buildDrawerTile(
+                  icon: Icons.settings_rounded,
+                  label: 'Settings',
+                  isSelected: currentTabIndex == 3,
+                  onTap: () => _onSelectTab(context, 3),
                 ),
                 _buildDrawerTile(
                   icon: Icons.person_outline_rounded,
-                  label: 'My Profile & Settings',
+                  label: 'My Profile',
                   color: const Color(0xFF162A45),
-                  onTap: () => _navigateToScreen(context, const ProfileScreen()),
+                  onTap: () =>
+                      _navigateToScreen(context, const ProfileScreen()),
                 ),
               ],
             ),
@@ -334,7 +477,10 @@ class WacrmDrawer extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 14,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFFEF2F2),
                         borderRadius: BorderRadius.circular(10),
@@ -343,7 +489,11 @@ class WacrmDrawer extends StatelessWidget {
                       child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.logout_rounded, color: Color(0xFFE5252A), size: 20),
+                          Icon(
+                            Icons.logout_rounded,
+                            color: Color(0xFFE5252A),
+                            size: 20,
+                          ),
                           SizedBox(width: 8),
                           Text(
                             'Sign Out',
@@ -405,7 +555,9 @@ class WacrmDrawer extends StatelessWidget {
         onTap: onTap,
         dense: true,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        tileColor: isSelected ? activeColor.withValues(alpha: 0.1) : Colors.transparent,
+        tileColor: isSelected
+            ? activeColor.withValues(alpha: 0.1)
+            : Colors.transparent,
         leading: Icon(
           icon,
           size: 22,

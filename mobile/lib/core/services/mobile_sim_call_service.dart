@@ -231,6 +231,7 @@ class MobileSimCallService {
 
   static final Set<String> _syncedCallIds = <String>{};
   static final Map<String, int> _callRowIds = <String, int>{};
+  static final Map<String, int> _pocByCallId = <String, int>{};
   static final Map<String, Future<bool>> _syncFutures =
       <String, Future<bool>>{};
 
@@ -321,9 +322,11 @@ class MobileSimCallService {
     required String phone,
     int? leadId,
     String? contactName,
+    int? customerPocId,
     SimAccount? sim,
   }) async {
     final callId = newCallId();
+    if (customerPocId != null) _pocByCallId[callId] = customerPocId;
     final startedAt = DateTime.now().toUtc().toIso8601String();
     final identity = sim?.identityToken;
     // When an Office SIM is registered, an attempt from any other SIM must not
@@ -349,6 +352,7 @@ class MobileSimCallService {
             callStatus: 'INITIATED',
             durationSeconds: 0,
             leadId: leadId,
+            customerPocId: customerPocId,
             notes: 'Mobile SIM call attempt from device dialer.',
             clientCallId: callId,
             callDirection: 'OUTBOUND',
@@ -376,6 +380,7 @@ class MobileSimCallService {
     required String phone,
     int? leadId,
     String? contactName,
+    int? customerPocId,
     String? reason,
     SimAccount? sim,
   }) async {
@@ -400,6 +405,7 @@ class MobileSimCallService {
             callStatus: 'FAILED',
             durationSeconds: 0,
             leadId: leadId,
+            customerPocId: customerPocId,
             notes: reason == null || reason.trim().isEmpty
                 ? 'Mobile SIM call could not be started.'
                 : 'Mobile SIM call could not be started: $reason',
@@ -472,8 +478,10 @@ class MobileSimCallService {
     required String callId,
     int? leadId,
     String? contactName,
+    int? customerPocId,
     SimAccount? sim,
   }) async {
+    if (customerPocId != null) _pocByCallId[callId] = customerPocId;
     final response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
       'startCall',
       {
@@ -586,6 +594,7 @@ class MobileSimCallService {
         callStatus: result.callStatus,
         durationSeconds: result.durationSeconds,
         leadId: result.leadId,
+        customerPocId: _pocByCallId[result.callId],
         notes: result.syncNotes,
         clientCallId: result.callId,
         callDirection: result.callDirection.isEmpty
@@ -604,6 +613,7 @@ class MobileSimCallService {
         nativeCallReference: result.nativeCallReference,
       );
       _syncedCallIds.add(result.callId);
+      _pocByCallId.remove(result.callId);
       final rowId = _asInt(response?['id']);
       if (rowId != null) _callRowIds[result.callId] = rowId;
       // Enqueue any OEM/dialer recording before clearing the native pending
