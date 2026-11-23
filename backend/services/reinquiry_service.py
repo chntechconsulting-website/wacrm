@@ -7,6 +7,7 @@ from sqlalchemy import or_, func
 
 from models.lead import Lead, LeadEnquiry, LeadAssignment, LeadStatusHistory
 from models.customer import Customer
+from models.employee import Employee
 from models.activity import LeadActivity
 
 from utils.timezone import get_ist_now
@@ -140,6 +141,7 @@ class ReInquiryService:
             src = "WHATSAPP_ADS"
 
         now = get_ist_now()
+        assigned_to_id = enquiry_data.get("assigned_to")
         existing_lead = ReInquiryService.find_existing_lead(
             db,
             phone=raw_phone,
@@ -165,6 +167,49 @@ class ReInquiryService:
             existing_lead.previous_sources = ", ".join(prev_sources)
             existing_lead.latest_source = src
             existing_lead.updated_at = now
+
+            # A re-inquiry normally preserves the existing Sales owner. If the
+            # original lead was never assigned, attach it to the authenticated
+            # creator (manual creation/re-inquiry) or to the explicitly
+            # requested assignee. This prevents a manually submitted enquiry
+            # from remaining in the unassigned 1-hour timeout queue, while an
+            # existing valid assignment is never overwritten.
+            if existing_lead.assigned_to is None and assigned_to_id:
+                target_employee = (
+                    db.query(Employee)
+                    .filter(Employee.id == assigned_to_id)
+                    .first()
+                )
+                if target_employee:
+                    existing_lead.assigned_to = target_employee.id
+                    existing_lead.assigned_by = creator_emp_id
+                    existing_lead.assigned_at = now
+                    if (existing_lead.status or "").strip().upper() in (
+                        "", "NEW", "NEW LEAD", "NEW_LEAD"
+                    ):
+                        existing_lead.status = "ASSIGNED"
+                    db.add(LeadAssignment(
+                        lead_id=existing_lead.id,
+                        assigned_to=target_employee.id,
+                        assigned_by=creator_emp_id,
+                        assigned_at=now,
+                        assignment_method="MANUAL",
+                        notes=(
+                            "Assigned to creator on manual re-inquiry"
+                            if creator_emp_id else
+                            "Assigned on re-inquiry"
+                        )
+                    ))
+                    db.add(LeadActivity(
+                        lead_id=existing_lead.id,
+                        performed_by=creator_emp_id,
+                        activity_type="ASSIGNED",
+                        description=(
+                            f"Lead assigned to {target_employee.name} "
+                            "on re-inquiry"
+                        ),
+                        created_at=now
+                    ))
 
             # Preserve original lead information; fill in missing profile data only
             if not existing_lead.email and raw_email:
@@ -263,7 +308,6 @@ class ReInquiryService:
             full_name = enquiry_data.get("company") or f"Lead {raw_phone[-6:] if len(raw_phone) >= 6 else raw_phone}"
 
         req_notes = enquiry_data.get("requirement_notes") or enquiry_data.get("message")
-        assigned_to_id = enquiry_data.get("assigned_to")
 
         new_lead = Lead(
             first_name=enquiry_data.get("first_name"),

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -193,7 +193,7 @@ const CreateLeadPage = () => {
     source: 'MANUAL',
     status: 'NEW LEAD',
     campaign_name: '',
-    assigned_to: '',
+    assigned_to: currentUser?.employee_id ? String(currentUser.employee_id) : '',
     priority: 'Medium',
 
     requirement_notes: '',
@@ -206,6 +206,21 @@ const CreateLeadPage = () => {
   const [previewData, setPreviewData] = useState([]);
   const [importSummary, setImportSummary] = useState(null);
 
+  // The creator is the default Sales owner of a manually created lead. The
+  // default is applied once per logged-in employee so a deliberate reassignment
+  // made in the form is never overwritten by an auth refresh.
+  const defaultAssigneeForUserRef = useRef(currentUser?.employee_id ?? null);
+
+  useEffect(() => {
+    if (!currentUser?.employee_id) return;
+    if (defaultAssigneeForUserRef.current === currentUser.employee_id) return;
+    defaultAssigneeForUserRef.current = currentUser.employee_id;
+    setFormData(prev => ({
+      ...prev,
+      assigned_to: String(currentUser.employee_id)
+    }));
+  }, [currentUser]);
+
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
@@ -217,17 +232,12 @@ const CreateLeadPage = () => {
           console.error('Failed to load active Sales Managers:', managerErr);
         }
         setEmployees(availableManagers);
-        const currentRole = (currentUser?.role || '').toUpperCase();
-        const currentIsManager = ['ADMIN', 'SALES_MANAGER', 'MANAGER'].includes(currentRole);
-        if (currentIsManager && currentUser?.employee_id) {
-          setFormData(prev => ({ ...prev, assigned_to: currentUser.employee_id }));
-        }
       } catch (err) {
         console.error('Failed to load active employees:', err);
       }
     };
     fetchEmployees();
-  }, [currentUser]);
+  }, []);
 
   // SINGLE LEAD SUBMIT
   const handleSingleSubmit = async (e) => {
@@ -248,6 +258,17 @@ const CreateLeadPage = () => {
       const resolvedIndustry = formData.industry === 'Other'
         ? (formData.custom_industry ? formData.custom_industry.trim() : 'Other')
         : (formData.industry ? formData.industry.trim() : null);
+
+      // The creator is the default owner. If the form was submitted before the
+      // auth profile finished loading, or the Assign field was left blank, the
+      // authenticated employee is still sent explicitly. The backend enforces
+      // the same rule so a manual lead can never be created unassigned.
+      const creatorAssigneeId = currentUser?.employee_id
+        ? parseInt(currentUser.employee_id, 10)
+        : null;
+      const selectedAssigneeId = formData.assigned_to
+        ? parseInt(formData.assigned_to, 10)
+        : null;
 
       const payload = {
         first_name: fn || null,
@@ -271,7 +292,7 @@ const CreateLeadPage = () => {
         campaign_name: formData.campaign_name && formData.campaign_name.trim() ? formData.campaign_name.trim() : null,
         priority: formData.priority || 'Medium',
         requirement_notes: formData.requirement_notes && formData.requirement_notes.trim() ? formData.requirement_notes.trim() : null,
-        assigned_to: formData.assigned_to ? parseInt(formData.assigned_to, 10) : null,
+        assigned_to: selectedAssigneeId || creatorAssigneeId,
         trial_start_date: formData.status === 'TRIAL' && formData.trial_start_date ? formData.trial_start_date : null,
         trial_end_date: formData.status === 'TRIAL' && formData.trial_end_date ? formData.trial_end_date : null
       };
@@ -421,6 +442,24 @@ const CreateLeadPage = () => {
       console.error("Failed to download errors", e);
     }
   };
+
+  // The logged-in employee must always be selectable, even when their role is
+  // not part of the assignable Sales Manager list returned by the API.
+  const loggedInEmployeeId = currentUser?.employee_id ? String(currentUser.employee_id) : '';
+  const loggedInEmployeeName =
+    currentUser?.employee_name || currentUser?.name || currentUser?.username || '';
+  const assigneeOptions = (() => {
+    if (!loggedInEmployeeId || !loggedInEmployeeName) return employees;
+    if (employees.some(emp => String(emp.id) === loggedInEmployeeId)) return employees;
+    return [
+      ...employees,
+      {
+        id: currentUser.employee_id,
+        name: loggedInEmployeeName,
+        role: currentUser.role
+      }
+    ];
+  })();
 
   return (
     <div className="page-container" style={{ maxWidth: '960px', margin: '0 auto', paddingBottom: '40px' }}>
@@ -798,15 +837,15 @@ const CreateLeadPage = () => {
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginTop: '12px' }}>
                 <div className="form-group">
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Assign Sales Manager</label>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '0.88rem' }}>Assign</label>
                   <select 
                     value={formData.assigned_to} 
                     onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
                   >
-                    <option value="">-- Unassigned --</option>
-                    {employees.map(emp => (
+                    <option value="">-- Select Employee (defaults to you) --</option>
+                    {assigneeOptions.map(emp => (
                       <option key={emp.id} value={emp.id}>
-                        {emp.name} ({emp.role || 'Sales Manager'})
+                        {emp.name}
                       </option>
                     ))}
                   </select>

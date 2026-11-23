@@ -970,7 +970,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     setSuccess('');
 
     if (!formData.first_name || !formData.phone || !formData.source || !formData.status || !formData.assigned_to) {
-      setError('First Name, Mobile Number, Source, Status, and Assign To are required.');
+      setError('First Name, Mobile Number, Source, Status, and Assignee are required.');
       return;
     }
 
@@ -5022,7 +5022,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             zIndex: 100000
           }}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--text-main, #0f172a)' }}>Assign Sales Manager &middot; Lead #{selectedLead?.id}</h3>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--text-main, #0f172a)' }}>Assign &middot; Lead #{selectedLead?.id}</h3>
               <button onClick={() => setShowAssignModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
                 <X size={20} />
               </button>
@@ -5030,13 +5030,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
             <form onSubmit={handleAssignLead}>
               <div className="form-group" style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)' }}>Select Active Sales Manager</label>
+                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)' }}>Assign</label>
                 <select 
                   value={assigneeId} 
                   onChange={(e) => setAssigneeId(e.target.value)}
                   style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-color)' }}
                 >
-                  <option value="">Select Sales Manager...</option>
+                  <option value="">Select employee...</option>
                   {employees.map(emp => (
                     <option key={emp.id} value={emp.id}>{emp.name} ({emp.role})</option>
                   ))}
@@ -5051,7 +5051,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={submitting || !assigneeId}>
-                  {submitting ? 'Assigning...' : 'Assign Sales Manager'}
+                  {submitting ? 'Assigning...' : 'Assign'}
                 </button>
               </div>
             </form>

@@ -1291,25 +1291,44 @@ def create_lead(
         )
     # Users without assign permission can only assign to themselves on creation
     has_assign_permission = user_has_permission(current_user, "leads", "assign", db)
+    target_id = lead_data.get("assigned_to")
     if not has_assign_permission:
         lead_data["assigned_to"] = creator_emp_id
-    else:
-        # Manual Sales assignment is Manager-only. Reject Sales Executives,
-        # Support users, Admins and inactive employees explicitly.
-        target_id = lead_data.get("assigned_to")
-        if target_id:
-            target_emp = db.query(Employee).filter(Employee.id == target_id).first()
-            if not target_emp:
-                raise HTTPException(status_code=404, detail="Target employee not found")
-            if not is_active_sales_manager(target_emp, db):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        "Manual Sales assignment allows only active Sales Managers. "
-                        "Sales Executives, Support users, Managers/Admins and inactive "
-                        "employees are not eligible."
-                    )
+    elif target_id:
+        # The logged-in creator is always a valid default owner for the lead
+        # they are creating. Any other manual Sales assignment remains
+        # Manager-only: Sales Executives, Support users, Admins and inactive
+        # employees are rejected explicitly.
+        target_emp = db.query(Employee).filter(Employee.id == target_id).first()
+        if not target_emp:
+            raise HTTPException(status_code=404, detail="Target employee not found")
+        is_creator_self_assignment = (
+            creator_emp_id is not None and target_emp.id == creator_emp_id
+        )
+        if not is_creator_self_assignment and not is_active_sales_manager(target_emp, db):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Manual Sales assignment allows only the logged-in creator "
+                    "or an active Sales Manager. Other employees are not eligible."
                 )
+            )
+    else:
+        # No assignee was sent by the browser. A lead created through this
+        # authenticated manual endpoint always belongs to its creator. This is
+        # the server-side guarantee that a manual lead is never left in the
+        # unassigned 1-hour timeout queue, even when the client omitted the
+        # field or the auth profile had not finished loading.
+        lead_data["assigned_to"] = creator_emp_id
+
+    if not lead_data.get("assigned_to"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Your login is not linked to an employee record, so this lead "
+                "cannot be assigned. Please contact an administrator."
+            )
+        )
 
     lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
         db=db,
