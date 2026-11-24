@@ -34,7 +34,7 @@ const STATUS_OPTIONS = [
 // this page. Converted must go through the All Leads WON workflow so the CRM
 // finance and Support handoffs stay consistent.
 const CRM_STATUS_OPTIONS = [
-  { value: 'NEW', label: 'NEW / NEW LEAD — WA HRMS: submitted' },
+  { value: 'NEW LEAD', label: 'NEW LEAD — WA HRMS: submitted' },
   { value: 'INTERESTED', label: 'INTERESTED — WA HRMS: qualified' },
   { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
   { value: 'REJECTED', label: 'REJECTED — WA HRMS: rejected' },
@@ -49,11 +49,11 @@ const normalizeCrmStatus = (value) => String(value || '')
   .toUpperCase()
   .replace(/[-\s]+/g, '_');
 
-// NEW and NEW LEAD both mean the WA HRMS "submitted" state, so the editor
-// shows them as the same canonical option.
+// Legacy NEW and canonical NEW LEAD both mean the WA HRMS "submitted" state,
+// so the editor shows them as the same canonical option.
 const canonicalCrmStatus = (value) => {
   const normalized = normalizeCrmStatus(value);
-  return normalized === 'NEW_LEAD' ? 'NEW' : normalized;
+  return normalized === 'NEW' || normalized === 'NEW_LEAD' ? 'NEW LEAD' : normalized;
 };
 
 const SYNC_STATUS_META = {
@@ -452,7 +452,7 @@ export default function ChannelPartnerLeadsPage() {
                   </div>
                 ) : null}
                 <p className="cp-muted" style={{ marginTop: '8px' }}>
-                  NEW and NEW LEAD → submitted · INTERESTED and QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
+                  NEW LEAD → submitted · INTERESTED and QUALIFIED → qualified · REJECTED → rejected · LOST → lost.
                   WA HRMS keeps rejected leads as rejected; choosing LOST records the same closed
                   outcome in the CRM without sending an invalid upstream change. Converted is sent
                   through the All Leads WON workflow and is validated by WA HRMS.

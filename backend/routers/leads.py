@@ -87,7 +87,9 @@ from utils.support_status import (
 )
 from utils.lead_status import (
     STATUS_CONVERTED_TO_SUPPORT,
+    STATUS_NEW,
     STATUS_TRIAL,
+    canonical_new_status,
     is_converted_to_support_status,
     is_trial_status,
     is_won_or_converted_status,
@@ -584,7 +586,7 @@ def build_lead_out(
         country=getattr(lead, 'country', 'India') or 'India',
         location=loc,
         source=lead.source,
-        status=lead.status,
+        status=canonical_new_status(lead.status),
         campaign_name=lead.campaign_name,
         website_id=lead.website_id,
         website_name=lead.website_name,
@@ -996,7 +998,7 @@ def get_leads_stats(
         ), 1), else_=0)), 0).label("channel_partner_count"),
         func.coalesce(func.sum(case((Lead.is_reinquiry.is_(True), 1), else_=0)), 0).label("reinquiry_count"),
         func.coalesce(func.sum(case((or_(
-            Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "New"
+            Lead.status == "NEW", Lead.status == "NEW LEAD", Lead.status == "NEW_LEAD", Lead.status == "New"
         ), 1), else_=0)), 0).label("new_count"),
         func.coalesce(func.sum(case((or_(
             Lead.status == "IN_PROGRESS",
@@ -1229,7 +1231,7 @@ async def import_leads_excel(
         # arbitrary employees (their view scope is "own" anyway).
         if not can_assign_imports:
             lead_data["assigned_to"] = creator_id
-            if creator_id and str(lead_data.get("status") or "NEW").upper() == "NEW":
+            if creator_id and normalize_lead_status(lead_data.get("status")) in {"", STATUS_NEW}:
                 lead_data["status"] = "ASSIGNED"
         lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
             db=db,
@@ -1673,8 +1675,8 @@ def get_support_assigned_leads(
             "source": l.source,
             # `status` is retained for existing clients and is always the
             # read-only Sales status. Support UIs must use `support_status`.
-            "status": l.status,
-            "sales_status": l.status,
+            "status": canonical_new_status(l.status),
+            "sales_status": canonical_new_status(l.status),
             "support_status": h.support_status if h else "NEW",
             "onboarding_status": h.onboarding_status if h else "PENDING_ONBOARDING",
             "priority": l.priority or "MEDIUM",
@@ -2458,6 +2460,8 @@ def update_lead(
     if lead_in.state is not None: lead.state = lead_in.state
     if hasattr(lead_in, 'country') and lead_in.country is not None: lead.country = lead_in.country
     old_status = lead.status
+    if lead_in.status is not None:
+        lead_in.status = canonical_new_status(lead_in.status)
     conversion_requested = (
         lead_in.status is not None
         and normalize_lead_status(lead_in.status) == STATUS_CONVERTED_TO_SUPPORT
@@ -2769,7 +2773,7 @@ def assign_lead(
     lead.assigned_by = assigner_id
     lead.assigned_at = datetime.utcnow()
 
-    if lead.status == "NEW":
+    if normalize_lead_status(lead.status) == STATUS_NEW:
         lead.status = "ASSIGNED"
 
     assignment_record = LeadAssignment(
@@ -2838,7 +2842,7 @@ def change_lead_status(
             )
 
     old_status = lead.status
-    new_status = status_req.status
+    new_status = canonical_new_status(status_req.status)
     is_channel_partner_lead = bool(getattr(lead, "channel_partner_lead_id", None))
 
     # Validate the partner-facing status mapping before committing the CRM

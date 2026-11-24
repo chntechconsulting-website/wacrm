@@ -21,7 +21,7 @@ import './DataExportPage.css';
 
 const LEAD_STATUS_OPTIONS = [
   'ALL',
-  'NEW',
+  'NEW LEAD',
   'CONTACTED',
   'INTERESTED',
   'TRIAL',

@@ -520,7 +520,7 @@ const WhatsAppAdLeadsPage = () => {
                     </td>
                     <td>
                       <span className={`wa-ad-status ${statusClass(item.status)}`}>
-                        {item.status || 'NEW'}
+                        {item.status || 'NEW LEAD'}
                       </span>
                     </td>
                     <td>
@@ -611,7 +611,7 @@ const WhatsAppAdLeadsPage = () => {
                 <div className="wa-ad-detail-grid">
                   <div className="wa-ad-detail">
                     <span>Status</span>
-                    <strong className={`wa-ad-status ${statusClass(selected.status)}`}>{selected.status || 'NEW'}</strong>
+                    <strong className={`wa-ad-status ${statusClass(selected.status)}`}>{selected.status || 'NEW LEAD'}</strong>
                   </div>
                   <div className="wa-ad-detail">
                     <span>Assigned employee</span>

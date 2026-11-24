@@ -20,6 +20,19 @@ from openpyxl.utils import get_column_letter
 
 router = APIRouter(prefix="/reports/export", tags=["Admin Data Export"])
 
+# "NEW LEAD" is the canonical Sales status, but legacy rows may still store
+# "NEW" or "NEW_LEAD". A NEW LEAD filter must include all three spellings.
+_NEW_LEAD_FILTER_VALUES = ("NEW", "NEW LEAD", "NEW_LEAD", "New")
+
+
+def _filter_lead_status(query, value):
+    cleaned = (value or "").strip()
+    if not cleaned or cleaned.upper() == "ALL":
+        return query
+    if cleaned.upper() in {"NEW", "NEW LEAD", "NEW_LEAD"}:
+        return query.filter(Lead.status.in_(_NEW_LEAD_FILTER_VALUES))
+    return query.filter(Lead.status.ilike(f"%{cleaned}%"))
+
 def _format_dt(dt: Optional[datetime]) -> str:
     if not dt:
         return ""
@@ -51,7 +64,7 @@ def get_export_stats(
     # Leads count
     leads_q = db.query(Lead)
     if lead_status and lead_status.strip() and lead_status.upper() != "ALL":
-        leads_q = leads_q.filter(Lead.status.ilike(f"%{lead_status.strip()}%"))
+        leads_q = _filter_lead_status(leads_q, lead_status)
     if lead_start_date:
         try:
             s_dt = datetime.strptime(lead_start_date, "%Y-%m-%d")
@@ -203,7 +216,7 @@ def export_all_leads(
     query = db.query(Lead)
 
     if status and status.strip() and status.upper() != "ALL":
-        query = query.filter(Lead.status.ilike(f"%{status.strip()}%"))
+        query = _filter_lead_status(query, status)
 
     if start_date:
         try:

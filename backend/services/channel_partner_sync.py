@@ -74,6 +74,7 @@ from models.channel_partner import (
 )
 from models.lead import Lead, LeadStatusHistory
 from models.activity import LeadActivity
+from utils.lead_status import STATUS_NEW
 from utils.timezone import get_ist_now
 
 logger = logging.getLogger("wacrm.channel_partner")
@@ -93,7 +94,7 @@ CHANNEL_PARTNER_SOURCE = "CHANNEL_PARTNER"
 # users and synchronization never overwrites it; the WA HRMS status is kept in
 # Lead.channel_partner_status instead.
 CHANNEL_PARTNER_INITIAL_CRM_STATUS = {
-    "submitted": "NEW",
+    "submitted": STATUS_NEW,
     "qualified": "QUALIFIED",
     "converted": "WON",
     "rejected": "LOST",
@@ -127,7 +128,7 @@ CRM_TO_CHANNEL_PARTNER_STATUS = {
 # WA HRMS -> CRM for inbound webhook/poll updates. ``rejected`` is kept as a
 # distinct CRM value so the rejection reason remains visible in the pipeline.
 CHANNEL_PARTNER_TO_CRM_STATUS = {
-    "submitted": "NEW",
+    "submitted": STATUS_NEW,
     "qualified": "QUALIFIED",
     "converted": "WON",
     "rejected": "REJECTED",
@@ -1326,7 +1327,7 @@ def upsert_crm_lead_from_channel_partner(
             name=display_name,
             phone=phone or "",
             source=CHANNEL_PARTNER_SOURCE,
-            status=CHANNEL_PARTNER_INITIAL_CRM_STATUS.get(external_status or "", "NEW"),
+            status=CHANNEL_PARTNER_INITIAL_CRM_STATUS.get(external_status or "", STATUS_NEW),
             created_at=source_created_at or now,
             first_enquiry_date=source_created_at or now,
             latest_enquiry_date=source_updated_at or source_created_at or now,

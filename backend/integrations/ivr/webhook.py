@@ -11,6 +11,7 @@ from models.customer import Customer
 from models.employee import Employee
 from models.activity import LeadActivity
 from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
+from utils.lead_status import STATUS_NEW
 from utils.timezone import get_ist_now
 from services.doocti_recording_service import (
     DooctiRecordingService,
@@ -303,7 +304,7 @@ def handle_incoming_ivr_webhook(db: Session, payload: Dict[str, Any], headers: D
                     name=f"Inbound Caller ({cust_digits[-10:]})",
                     phone=formatted_phone,
                     source="IVR",
-                    status="NEW",
+                    status=STATUS_NEW,
                     requirement_notes=f"Auto-created from {detected_provider} IVR Call (Pilot Number: {pilot_phone}, Circle: {payload.get('billing_circle') or payload.get('circle', 'India')})"
                 )
                 db.add(new_lead)

@@ -121,7 +121,6 @@ const trialSupportAssigneeLabel = (lead) => {
 };
 
 const STATUS_OPTIONS = [
-  'NEW',
   'NEW LEAD',
   'QUALIFIED',
   'RE-INQUIRY',
@@ -146,7 +145,7 @@ const SOURCE_OPTIONS = ['META', 'WHATSAPP_ADS', 'WEBSITE', 'CHANNEL_PARTNER', 'M
 // the status-sync panel. Converted is sent automatically by the WON workflow
 // and is therefore not offered here.
 const CHANNEL_PARTNER_SYNC_STATUS_OPTIONS = [
-  { value: 'NEW', label: 'NEW — WA HRMS: submitted' },
+  { value: 'NEW LEAD', label: 'NEW LEAD — WA HRMS: submitted' },
   { value: 'INTERESTED', label: 'INTERESTED — WA HRMS: qualified' },
   { value: 'QUALIFIED', label: 'QUALIFIED — WA HRMS: qualified' },
   { value: 'REJECTED', label: 'REJECTED — WA HRMS: rejected' },
@@ -169,12 +168,12 @@ const PRIORITY_OPTIONS = ['High', 'Medium', 'Low'];
 const normalizeLeadStatusValue = (value) =>
   String(value || '').trim().toUpperCase().replace(/-/g, '_').replace(/\s+/g, '_');
 
-// WA HRMS maps both NEW and NEW LEAD to the same "submitted" state. The
-// status-sync select uses the canonical CRM value so an imported NEW lead and
-// a manually selected NEW LEAD show the same option.
+// WA HRMS maps both legacy NEW and NEW LEAD to the same "submitted" state.
+// The status-sync select uses the canonical CRM value so an imported legacy
+// lead and a manually selected NEW LEAD show the same option.
 const normalizeChannelPartnerCrmStatus = (value) => {
   const normalized = normalizeLeadStatusValue(value);
-  return normalized === 'NEW_LEAD' ? 'NEW' : normalized;
+  return normalized === 'NEW' || normalized === 'NEW_LEAD' ? 'NEW LEAD' : normalized;
 };
 
 // Server-side pagination window for the Leads table
@@ -616,7 +615,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     state: '',
 
     source: defaultSource || 'MANUAL',
-    status: 'NEW',
+    status: 'NEW LEAD',
     campaign_name: '',
     rating: 'Warm',
     assigned_to: '',
@@ -806,7 +805,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       state: '',
 
       source: 'Manual',
-      status: 'NEW',
+      status: 'NEW LEAD',
       campaign_name: '',
       rating: 'Warm',
       assigned_to: currentUser?.employee_id || '',
@@ -839,7 +838,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       state: lead.state || '',
 
       source: lead.source || 'Manual',
-      status: lead.status || 'NEW',
+      status: lead.status === 'NEW' || lead.status === 'NEW_LEAD' ? 'NEW LEAD' : (lead.status || 'NEW LEAD'),
       campaign_name: lead.campaign_name || '',
       rating: lead.rating || 'Warm',
       assigned_to: lead.assigned_to || '',

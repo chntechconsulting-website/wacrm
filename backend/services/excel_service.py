@@ -7,6 +7,7 @@ from datetime import datetime
 from models.lead import Lead
 from models.employee import Employee
 from utils.phone import normalize_email, normalize_phone
+from utils.lead_status import STATUS_NEW
 
 def generate_excel_template() -> io.BytesIO:
     wb = openpyxl.Workbook()
@@ -64,7 +65,7 @@ def generate_excel_template() -> io.BytesIO:
         "Delhi",
         "Delhi",
         "EXCEL",
-        "NEW",
+        STATUS_NEW,
         "HIGH",
         "Summer Campaign",
         "Interested in 50 user licenses demo",
@@ -80,7 +81,7 @@ def generate_excel_template() -> io.BytesIO:
 def normalize_status(raw_s: str, assigned_to_id: int = None) -> str:
     s = (raw_s or "").upper().strip()
     if not s:
-        return "ASSIGNED" if assigned_to_id else "NEW"
+        return "ASSIGNED" if assigned_to_id else STATUS_NEW
     if ("NOT" in s or "NO " in s or "ISNT" in s or "ISN'T" in s) and any(w in s for w in ["INTREST", "INTEREST", "INTERST", "SUITABLE", "WANT", "NEED"]):
         return "NOT_INTERESTED"
     if "CONVERT" in s and "SUPPORT" in s:
@@ -99,9 +100,11 @@ def normalize_status(raw_s: str, assigned_to_id: int = None) -> str:
         return "CONTACTED"
     if any(w in s for w in ["LOST", "DROP", "REJECT", "CANCEL"]):
         return "LOST"
-    if s in ["NEW", "ASSIGNED", "CONTACTED", "INTERESTED", "FOLLOW_UP", "QUALIFIED", "TRIAL", "CONVERTED", "CONVERTED_TO_SUPPORT", "NOT_INTERESTED", "LOST"]:
+    if s in ["NEW", "NEW LEAD", "NEW_LEAD"]:
+        return STATUS_NEW
+    if s in ["ASSIGNED", "CONTACTED", "INTERESTED", "FOLLOW_UP", "QUALIFIED", "TRIAL", "CONVERTED", "CONVERTED_TO_SUPPORT", "NOT_INTERESTED", "LOST"]:
         return s
-    return "ASSIGNED" if assigned_to_id else "NEW"
+    return "ASSIGNED" if assigned_to_id else STATUS_NEW
 
 def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
     wb = openpyxl.load_workbook(filename=io.BytesIO(file_contents), data_only=True)

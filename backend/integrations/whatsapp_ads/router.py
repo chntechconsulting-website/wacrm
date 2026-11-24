@@ -37,6 +37,7 @@ from services.hierarchy_service import (
     normalize_role,
 )
 from services.permission_service import get_user_view_scope, user_has_permission
+from utils.lead_status import canonical_new_status
 
 router = APIRouter(prefix="/whatsapp-ad-leads", tags=["WhatsApp Ad Leads"])
 
@@ -225,7 +226,7 @@ def _to_out(attribution: WhatsAppAdAttribution) -> WhatsAppAdLeadOut:
         ad_name=attribution.ad_name,
         assigned_employee_id=(lead.assigned_to if lead else None),
         assigned_employee_name=assigned_name,
-        status=(lead.status if lead else "NEW") or "NEW",
+        status=(lead.status if lead else "NEW LEAD") or "NEW LEAD",
         priority=(lead.priority if lead else None),
         rating=(lead.rating if lead else None),
         is_reinquiry=bool(lead.is_reinquiry) if lead else False,
@@ -410,7 +411,11 @@ def get_whatsapp_ad_filter_options(
     status_rows = (
         query.with_entities(Lead.status).filter(Lead.status.isnot(None)).distinct().all()
     )
-    statuses = sorted({row[0] for row in status_rows if row[0]})
+    statuses = sorted({
+        canonical_new_status(row[0])
+        for row in status_rows
+        if row[0]
+    })
 
     return WhatsAppAdFilterOptionsOut(
         campaigns=campaigns,

@@ -62,7 +62,11 @@ from utils.support_status import (
     normalize_support_status,
     support_status_storage_values,
 )
-from utils.lead_status import CONVERTED_TO_SUPPORT_STATUSES, is_trial_status
+from utils.lead_status import (
+    CONVERTED_TO_SUPPORT_STATUSES,
+    canonical_new_status,
+    is_trial_status,
+)
 from utils.timezone import get_ist_now
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -852,13 +856,20 @@ def dashboard_stats(
     )
     source_lead_counts = [{"source": src or "Unknown", "count": count} for src, count in source_counts]
 
-    # Status-wise counts (All Leads)
+    # Status-wise counts (All Leads). Legacy NEW/NEW_LEAD rows are folded into
+    # the canonical NEW LEAD bucket so the dashboard never shows duplicates.
     raw_status_counts = (
         lead_query.with_entities(Lead.status, func.count(Lead.id))
         .group_by(Lead.status)
         .all()
     )
-    status_lead_counts = [{"status": st or "NEW", "count": count} for st, count in raw_status_counts]
+    status_totals = {}
+    for st, count in raw_status_counts:
+        canonical = canonical_new_status(st) or "NEW LEAD"
+        status_totals[canonical] = status_totals.get(canonical, 0) + count
+    status_lead_counts = [
+        {"status": st, "count": count} for st, count in status_totals.items()
+    ]
 
     # Status-wise counts (Meta Leads filter)
     raw_meta_status_counts = (
@@ -871,7 +882,13 @@ def dashboard_stats(
         .group_by(Lead.status)
         .all()
     )
-    meta_status_lead_counts = [{"status": st or "NEW", "count": count} for st, count in raw_meta_status_counts]
+    meta_status_totals = {}
+    for st, count in raw_meta_status_counts:
+        canonical = canonical_new_status(st) or "NEW LEAD"
+        meta_status_totals[canonical] = meta_status_totals.get(canonical, 0) + count
+    meta_status_lead_counts = [
+        {"status": st, "count": count} for st, count in meta_status_totals.items()
+    ]
 
     # Upcoming Follow-ups (top 5) strictly scoped by department and team
     f_query = db.query(Followup).join(Lead, Followup.lead_id == Lead.id).filter(Followup.status == "Pending")
@@ -1242,6 +1259,7 @@ def sales_overview_report(
     status_colors_palette = {
         "NEW": "#3b82f6",
         "NEW LEAD": "#3b82f6",
+        "NEW_LEAD": "#3b82f6",
         "ASSIGNED": "#06b6d4",
         "CONTACTED": "#0284c7",
         "INTERESTED": "#10b981",
@@ -1256,13 +1274,17 @@ def sales_overview_report(
         "CONVERTED_TO_SUPPORT": "#0f766e"
     }
     leads_by_status = []
+    status_totals_db = {}
     for s_name, cnt in status_counts_db:
-        clean_status = (s_name or "NEW").replace("_", " ").title()
+        canonical_name = canonical_new_status(s_name) or "NEW LEAD"
+        status_totals_db[canonical_name] = status_totals_db.get(canonical_name, 0) + cnt
+    for s_name, cnt in status_totals_db.items():
+        clean_status = s_name.replace("_", " ").title()
         leads_by_status.append({
             "name": clean_status,
             "count": cnt,
             "percentage": pct(cnt, total_leads_val),
-            "color": status_colors_palette.get((s_name or "").upper(), "#64748b")
+            "color": status_colors_palette.get(s_name.upper(), "#64748b")
         })
 
     # 6. Real Leads by Location

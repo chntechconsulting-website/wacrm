@@ -111,7 +111,7 @@ def submit_website_lead(
 
     Backend Enforcement:
     - source = "WEBSITE" (ignoring any payload override attempt)
-    - status = "NEW"
+    - status = "NEW LEAD"
     - assigned_to = NULL
     - Deduplicates by phone or email
     - Records LeadActivity timeline entry

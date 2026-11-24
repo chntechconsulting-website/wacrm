@@ -1067,7 +1067,7 @@ def _build_timeline(db: Session, scope: Scope, period: Period, limit: int = 60) 
                 "lead_id": lead_id,
                 "lead_name": lead_name,
                 "title": "New lead created",
-                "description": f"{lead_name} · {source or 'Unknown source'} · {status or 'NEW'}",
+                "description": f"{lead_name} · {source or 'Unknown source'} · {status or 'NEW LEAD'}",
             }
         )
 

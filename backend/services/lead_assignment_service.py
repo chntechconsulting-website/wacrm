@@ -15,7 +15,7 @@ from services.hierarchy_service import (
     ROLE_SALES_MANAGER,
     normalize_role,
 )
-from utils.lead_status import normalize_lead_status
+from utils.lead_status import STATUS_NEW, normalize_lead_status
 from utils.timezone import get_ist_now
 
 logger = logging.getLogger("lead_assignment")
@@ -235,7 +235,7 @@ def assign_lead_immediately(
     lead.assigned_to = assignee.id
     lead.assigned_by = assigned_by
     lead.assigned_at = now
-    if normalize_lead_status(lead.status) in {"", "NEW"}:
+    if normalize_lead_status(lead.status) in {"", STATUS_NEW}:
         lead.status = "ASSIGNED"
 
     db.add(
@@ -330,7 +330,7 @@ def auto_assign_pending_leads(db: Session, override_timeout_minutes: Optional[in
         target_lead.assigned_by = None  # System auto-assignment
         target_lead.assigned_at = now
 
-        if normalize_lead_status(target_lead.status) in {"", "NEW"}:
+        if normalize_lead_status(target_lead.status) in {"", STATUS_NEW}:
             target_lead.status = "ASSIGNED"
 
         # Format waiting time label

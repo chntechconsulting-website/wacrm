@@ -856,7 +856,7 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
         )
         self.assertIsNotNone(lead)
         self.assertEqual(lead.source, "CHANNEL_PARTNER")
-        self.assertEqual(lead.status, "NEW")
+        self.assertEqual(lead.status, "NEW LEAD")
         self.assertEqual(lead.name, "Krishneshwaran D")
         self.assertEqual(lead.phone, "989943213")
         self.assertEqual(lead.email, "krish@example.com")
@@ -1792,7 +1792,7 @@ class ChannelPartnerIntegrationTests(unittest.TestCase):
 
         payload = _lead_payload(mirror, crm_lead=lead)
         self.assertEqual(payload["crmLeadId"], lead.id)
-        self.assertEqual(payload["crmStatus"], "NEW")
+        self.assertEqual(payload["crmStatus"], "NEW LEAD")
         self.assertEqual(payload["syncStatus"], "FAILED")
         self.assertEqual(payload["lastSyncError"], "HTTP 422: invalid status")
         self.assertEqual(payload["pendingStatus"], "qualified")

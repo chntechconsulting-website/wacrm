@@ -33,6 +33,7 @@ from utils.support_status import (
 )
 from utils.lead_status import (
     STATUS_CONVERTED_TO_SUPPORT,
+    canonical_new_status,
     is_converted_to_support_status,
     is_won_status,
 )
@@ -1605,8 +1606,8 @@ class WorkflowService:
         return {
             "success": True,
             "lead_id": lead.id,
-            "status": lead.status,
-            "sales_status": lead.status,
+            "status": canonical_new_status(lead.status),
+            "sales_status": canonical_new_status(lead.status),
             "support_handoff_id": support_handoff.id,
             "converted_to_support_at": now_utc.isoformat(),
             "converted_by": emp_id,

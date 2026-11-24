@@ -32,6 +32,7 @@ from services.billing_catalog import (
     get_default_bundle,
 )
 from utils.document_status import invoice_document_status
+from utils.lead_status import canonical_new_status
 
 PACKAGE_LABELS: Dict[str, str] = {
     "hr_atm": "HR + ATM",
@@ -718,7 +719,9 @@ def _handover_block(
         "support_manager_name": support_manager_name,
         "assigned_agent_id": handoff.assigned_agent_id,
         "assigned_agent_name": assigned_agent_name,
-        "sales_status": handoff.lead.status if handoff.lead else None,
+        "sales_status": (
+            canonical_new_status(handoff.lead.status) if handoff.lead else None
+        ),
         "support_status": handoff.support_status,
     }
 

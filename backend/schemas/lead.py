@@ -21,7 +21,7 @@ class LeadBase(BaseModel):
     location: Optional[str] = None
 
     source: str = "Manual"  # Meta Ads, Excel, Manual, Website, Referral
-    status: str = "NEW"     # NEW, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, CONVERTED, WON, CONVERTED_TO_SUPPORT, NOT_INTERESTED, LOST
+    status: str = "NEW LEAD"     # NEW LEAD, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, CONVERTED, WON, CONVERTED_TO_SUPPORT, NOT_INTERESTED, LOST
     campaign_name: Optional[str] = None
     website_id: Optional[str] = None
     website_name: Optional[str] = None

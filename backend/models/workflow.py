@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKe
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+from utils.lead_status import canonical_new_status
 from utils.support_status import normalize_support_status, SUPPORT_STATUS_NEW
 
 class FinanceHandoff(Base):
@@ -158,7 +159,7 @@ class SupportHandoff(Base):
     @property
     def sales_status(self):
         """Read-only Sales status for the same customer (never written here)."""
-        return self.lead.status if self.lead else None
+        return canonical_new_status(self.lead.status) if self.lead else None
 
 
 class WorkflowTimelineEvent(Base):

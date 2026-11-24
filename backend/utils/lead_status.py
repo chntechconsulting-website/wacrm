@@ -8,7 +8,10 @@ legacy status value already stored in production.
 
 from typing import Optional
 
-STATUS_NEW = "NEW"
+# "NEW LEAD" is the single canonical status for a fresh Sales lead. The
+# historical "NEW" and "NEW_LEAD" spellings are kept as aliases so existing
+# rows and integrations continue to work without a destructive migration.
+STATUS_NEW = "NEW LEAD"
 STATUS_TRIAL = "TRIAL"
 STATUS_WON = "WON"
 STATUS_CONVERTED = "CONVERTED"
@@ -38,6 +41,7 @@ WON_OR_CONVERTED_STATUSES = WON_LEAD_STATUSES | {
 }
 
 _ALIASES = {
+    "NEW": STATUS_NEW,
     "NEW LEAD": STATUS_NEW,
     "NEW_LEAD": STATUS_NEW,
     "TRIAL LEAD": STATUS_TRIAL,
@@ -54,6 +58,18 @@ def normalize_lead_status(value: Optional[str]) -> str:
     """Return the canonical upper-case Sales status for comparisons."""
     status = (value or "").strip().upper()
     return _ALIASES.get(status, status)
+
+
+def canonical_new_status(value: Optional[str]) -> Optional[str]:
+    """Return NEW LEAD for the legacy NEW/NEW_LEAD spellings.
+
+    Every other status is returned unchanged, so this helper is safe to use
+    when exposing or accepting a Sales status without normalising unrelated
+    values such as ``FOLLOW-UP``.
+    """
+    if value is None:
+        return None
+    return STATUS_NEW if normalize_lead_status(value) == STATUS_NEW else value
 
 
 def is_trial_status(value: Optional[str]) -> bool:

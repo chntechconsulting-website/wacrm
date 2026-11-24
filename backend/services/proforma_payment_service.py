@@ -49,6 +49,7 @@ from models.user import User
 from models.workflow import FinanceHandoff, SupportHandoff, WorkflowTimelineEvent
 from services.purchase_details_service import build_purchase_snapshot
 from utils.lead_status import (
+    STATUS_NEW,
     STATUS_WON,
     WON_OR_CONVERTED_STATUSES,
     normalize_lead_status,
@@ -1574,7 +1575,7 @@ class ProformaPaymentService:
             event.payment_id = payment.id
 
             # ---- Lead status -> WON ------------------------------------
-            old_lead_status = lead.status or "NEW"
+            old_lead_status = lead.status or STATUS_NEW
             canonical_old = normalize_lead_status(old_lead_status)
             status_changed = False
             if canonical_old not in WON_OR_CONVERTED_STATUSES:

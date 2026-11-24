@@ -65,7 +65,7 @@ const Layout = () => {
           from_number: data.from_number || data.customer_phone,
           lead_name: data.lead_name || 'Incoming Caller',
           company: data.company || '',
-          lead_status: data.lead_status || 'NEW',
+          lead_status: data.lead_status || 'NEW LEAD',
           employee_name: data.employee_name || 'Assigned Representative',
           call_status: 'RINGING',
           call_direction: 'INBOUND',

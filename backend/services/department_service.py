@@ -38,6 +38,7 @@ from services.hierarchy_service import (
     normalize_department,
     normalize_role,
 )
+from utils.lead_status import canonical_new_status
 from utils.support_status import (
     SUPPORT_STATUS_RESOLVED,
     normalize_support_status,
@@ -982,7 +983,7 @@ def _serialize_handover(db: Session, handoff: SupportHandoff) -> Dict[str, Any]:
         "payment_status": handoff.payment_status,
         # Independent status pair for the Admin handover table. The legacy
         # keys remain for backwards compatibility with existing clients.
-        "sales_status": lead.status if lead else None,
+        "sales_status": canonical_new_status(lead.status) if lead else None,
         "support_status": handoff.support_status,
         "onboarding_status": handoff.onboarding_status,
         "handover_date": handoff.created_at.isoformat() if handoff.created_at else None,

@@ -12,6 +12,7 @@ from models.activity import LeadActivity
 
 from utils.timezone import get_ist_now
 from utils.phone import normalize_email
+from utils.lead_status import STATUS_NEW, canonical_new_status, normalize_lead_status
 
 logger = logging.getLogger("reinquiry_service")
 
@@ -184,9 +185,7 @@ class ReInquiryService:
                     existing_lead.assigned_to = target_employee.id
                     existing_lead.assigned_by = creator_emp_id
                     existing_lead.assigned_at = now
-                    if (existing_lead.status or "").strip().upper() in (
-                        "", "NEW", "NEW LEAD", "NEW_LEAD"
-                    ):
+                    if normalize_lead_status(existing_lead.status) in {"", STATUS_NEW}:
                         existing_lead.status = "ASSIGNED"
                     db.add(LeadAssignment(
                         lead_id=existing_lead.id,
@@ -309,6 +308,8 @@ class ReInquiryService:
 
         req_notes = enquiry_data.get("requirement_notes") or enquiry_data.get("message")
 
+        requested_status = canonical_new_status(enquiry_data.get("status"))
+
         new_lead = Lead(
             first_name=enquiry_data.get("first_name"),
             last_name=enquiry_data.get("last_name"),
@@ -326,7 +327,7 @@ class ReInquiryService:
             country=enquiry_data.get("country") or "India",
             location=enquiry_data.get("location"),
             source=src,
-            status=enquiry_data.get("status") or ("ASSIGNED" if assigned_to_id else "NEW"),
+            status=requested_status or ("ASSIGNED" if assigned_to_id else STATUS_NEW),
             campaign_name=enquiry_data.get("campaign_name"),
             website_id=enquiry_data.get("website_id"),
             website_name=enquiry_data.get("website_name"),

@@ -770,7 +770,7 @@ class WhatsAppAdLeadTests(unittest.TestCase):
 
         options = self.client.get("/api/whatsapp-ad-leads/filter-options")
         self.assertEqual(options.status_code, 200, options.text)
-        self.assertEqual(options.json()["statuses"], ["NEW"])
+        self.assertEqual(options.json()["statuses"], ["NEW LEAD"])
 
 
 if __name__ == "__main__":

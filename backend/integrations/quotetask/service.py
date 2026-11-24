@@ -9,6 +9,7 @@ from models.lead import Lead
 from models.activity import LeadActivity
 from models.integration import IntegrationLog
 from integrations.quotetask.config import QuoteTaskConfig
+from utils.lead_status import STATUS_NEW, normalize_lead_status
 
 logger = logging.getLogger("quotetask_service")
 
@@ -130,7 +131,13 @@ class QuoteTaskService:
         lead.quotetask_synced_at = now
 
         # Update Lead status if currently QUALIFIED / INTERESTED to PROPOSAL SENT
-        if lead.status in ["NEW", "ASSIGNED", "CONTACTED", "INTERESTED", "QUALIFIED"]:
+        if normalize_lead_status(lead.status) in {
+            STATUS_NEW,
+            "ASSIGNED",
+            "CONTACTED",
+            "INTERESTED",
+            "QUALIFIED",
+        }:
             lead.status = "PROPOSAL SENT"
 
         # 3. LOG ACTIVITY TIMELINE

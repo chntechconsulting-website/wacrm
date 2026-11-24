@@ -39,7 +39,7 @@ from services.hierarchy_service import (
     ROLE_SUPPORT_MANAGER,
     normalize_role,
 )
-from utils.lead_status import is_trial_status
+from utils.lead_status import canonical_new_status, is_trial_status
 from utils.timezone import get_ist_now
 
 
@@ -276,7 +276,7 @@ def get_assignment_state(
             handoff.customer_id if handoff else getattr(lead, "customer_id", None)
         ),
         "support_handoff_id": handoff.id if handoff else None,
-        "sales_status": lead.status,
+        "sales_status": canonical_new_status(lead.status),
         "support_employee_id": owner_id,
         "support_employee_name": owner.name if owner else None,
         "support_manager_id": support_manager_id,

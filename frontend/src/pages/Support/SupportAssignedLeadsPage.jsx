@@ -780,7 +780,7 @@ export default function SupportAssignedLeadsPage() {
                     lead.support_status || lead.onboarding_status
                   );
                   const supportStatusClean = supportStatus.toLowerCase().replace(/[\s-]/g, '_');
-                  const salesStatus = lead.sales_status || lead.status || 'NEW';
+                  const salesStatus = lead.sales_status || lead.status || 'NEW LEAD';
                   const salesStatusClean = salesStatus.toLowerCase().replace(/[\s-]/g, '_');
                   const priorityClean = (lead.priority || 'medium').toLowerCase();
 
@@ -1178,7 +1178,7 @@ export default function SupportAssignedLeadsPage() {
                     <span className="detail-label">Sales Status (read-only)</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                       <span className="detail-value" style={{ textTransform: 'capitalize' }}>
-                        {(selectedLead.sales_status || selectedLead.status)?.replace(/_/g, ' ') || 'NEW'}
+                        {(selectedLead.sales_status || selectedLead.status)?.replace(/_/g, ' ') || 'NEW LEAD'}
                       </span>
                       {selectedLead.is_trial_expired && (
                         <span style={{

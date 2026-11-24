@@ -17,6 +17,7 @@ from models.user import User
 from models.integration import IntegrationConfig
 from services.auth import get_current_user, require_roles
 from utils.timezone import get_ist_now, IST_TIMEZONE
+from utils.lead_status import STATUS_NEW, canonical_new_status
 from utils.phone import normalize_phone, find_existing_lead_by_phone, find_existing_customer_by_phone
 from services.doocti_recording_service import (
     DooctiRecordingService,
@@ -557,7 +558,7 @@ def get_lead_by_number(
             name=f"Inbound Caller ({raw_display_num})",
             phone=raw_display_num,
             source="DOOCTI_INBOUND",
-            status="NEW",
+            status=STATUS_NEW,
             priority="MEDIUM",
             rating="Warm",
             requirement_notes="Lead automatically created via Doocti Inbound Call retrieval."
@@ -1859,7 +1860,7 @@ def update_lead_from_doocti(
                 lead.company = str(payload.company).strip() if str(payload.company).strip() else None
 
             if payload.status:
-                lead.status = payload.status.strip().upper()
+                lead.status = canonical_new_status(payload.status.strip().upper())
             if payload.source and lead.source in [None, "", "DOOCTI"]:
                 lead.source = payload.source.strip()
 
@@ -1903,7 +1904,7 @@ def update_lead_from_doocti(
                 email=str(payload.email).strip() if payload.email and str(payload.email).strip() else None,
                 company=str(payload.company).strip() if payload.company and str(payload.company).strip() else None,
                 source=lead_source,
-                status=(payload.status or "CONTACTED").strip().upper(),
+                status=canonical_new_status((payload.status or "CONTACTED").strip().upper()),
                 priority="MEDIUM",
                 requirement_notes=str(payload.requirement_notes).strip() if payload.requirement_notes and str(payload.requirement_notes).strip() else None,
                 product_category=clean_cat,

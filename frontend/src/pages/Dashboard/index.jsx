@@ -1014,7 +1014,7 @@ const Dashboard = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '9px', width: '100%', flex: 1, justifyContent: 'center' }}>
             {funnelStages.map((stage) => {
               const stageStatusMap = {
-                'New Leads': 'NEW',
+                'New Leads': 'NEW LEAD',
                 'Assigned Leads': '',
                 'Contacted': 'CONTACTED',
                 'Interested': 'INTERESTED',
@@ -1142,7 +1142,7 @@ const Dashboard = () => {
                         <td style={{ padding: '10px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                             <span style={{ padding: '3px 8px', borderRadius: '12px', backgroundColor: stStyle.bg, color: stStyle.color, fontWeight: '700', fontSize: '0.72rem' }}>
-                              {ld.status || 'NEW'}
+                              {ld.status || 'NEW LEAD'}
                             </span>
                             {ld.is_trial_expired && (
                               <span style={{

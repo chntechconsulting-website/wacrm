@@ -66,7 +66,7 @@ class Lead(Base):
     landing_page = Column(String(255), nullable=True)
 
     source = Column(String(50), index=True, default="Manual", nullable=False)  # META, EXCEL, MANUAL, WEBSITE, REFERRAL
-    status = Column(String(50), index=True, default="NEW", nullable=False)     # NEW, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, WON, CONVERTED_TO_SUPPORT, CONVERTED, NOT_INTERESTED, LOST
+    status = Column(String(50), index=True, default="NEW LEAD", nullable=False)     # NEW LEAD, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, WON, CONVERTED_TO_SUPPORT, CONVERTED, NOT_INTERESTED, LOST
     campaign_name = Column(String(100), nullable=True)
     rating = Column(String(50), default="Warm", nullable=True)                  # Hot, Warm, Cold
     priority = Column(String(20), default="MEDIUM", nullable=True)              # High, Medium, Low
