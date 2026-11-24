@@ -10,10 +10,64 @@ from models.employee import Employee
 from models.user import User
 from models.lead import Lead, LeadAssignment, AutoAssignConfig
 from models.activity import LeadActivity
+from services.hierarchy_service import (
+    ROLE_SALES_EXECUTIVE,
+    ROLE_SALES_MANAGER,
+    normalize_role,
+)
+from utils.lead_status import normalize_lead_status
+from utils.timezone import get_ist_now
 
 logger = logging.getLogger("lead_assignment")
 
-TERMINAL_STATUSES = ["CONVERTED", "WON", "CONVERTED_TO_SUPPORT", "LOST", "NOT_INTERESTED"]
+# Employee.role stores the real system roles (SALES_EXECUTIVE, SALES_MANAGER),
+# not the legacy EMPLOYEE/MANAGER labels used by the first Settings UI.
+DEFAULT_ELIGIBLE_ROLES = f"{ROLE_SALES_EXECUTIVE},{ROLE_SALES_MANAGER}"
+
+# Sales statuses that must never receive a new owner. Lead.status is free-form,
+# so historical spellings are listed for the SQL workload filter as well.
+TERMINAL_STATUSES = [
+    "CONVERTED",
+    "CONVERTED_TO_SUPPORT",
+    "CONVERTED TO SUPPORT",
+    "CONVERTED-TO-SUPPORT",
+    "WON",
+    "CLOSED_WON",
+    "CLOSED_LOST",
+    "LOST",
+    "NOT_INTERESTED",
+    "NOT INTERESTED",
+    "CANCELLED",
+    "CANCELED",
+    "REJECTED",
+    "RNR",
+    "JUNK",
+    "PENDING_ONBOARDING",
+    "ONBOARDING_IN_PROGRESS",
+    "COMPLETED_ONBOARDING",
+]
+NON_ASSIGNABLE_STATUSES = {
+    normalize_lead_status(status) for status in TERMINAL_STATUSES
+}
+
+
+def normalize_eligible_roles(raw_roles: Optional[str]) -> List[str]:
+    """Return canonical Employee.role values from a comma-separated setting.
+
+    Older configurations and the first Settings UI used ``EMPLOYEE`` and
+    ``MANAGER``. ``normalize_role`` maps those aliases to the actual
+    ``SALES_EXECUTIVE`` and ``SALES_MANAGER`` values stored on Employee, so a
+    saved legacy configuration keeps working instead of silently matching
+    nobody.
+    """
+    roles: List[str] = []
+    for raw_role in (raw_roles or "").split(","):
+        role = normalize_role(raw_role)
+        if role and role not in roles:
+            roles.append(role)
+    if not roles:
+        roles = [ROLE_SALES_EXECUTIVE, ROLE_SALES_MANAGER]
+    return roles
 
 def get_or_create_auto_assign_config(db: Session) -> AutoAssignConfig:
     """
@@ -26,12 +80,21 @@ def get_or_create_auto_assign_config(db: Session) -> AutoAssignConfig:
             enabled=True,
             waiting_time_minutes=60,
             assignment_method="LEAST_ASSIGNED",
-            eligible_roles="EMPLOYEE,MANAGER",
+            eligible_roles=DEFAULT_ELIGIBLE_ROLES,
             working_hours_enabled=False,
             working_hours_start="09:00",
             working_hours_end="18:00"
         )
         db.add(cfg)
+        db.commit()
+        db.refresh(cfg)
+        return cfg
+
+    # Upgrade a legacy EMPLOYEE/MANAGER value once so the Settings UI and the
+    # scheduler agree on the same real roles. Unknown custom roles are kept.
+    normalized_roles = ",".join(normalize_eligible_roles(cfg.eligible_roles))
+    if (cfg.eligible_roles or "") != normalized_roles:
+        cfg.eligible_roles = normalized_roles
         db.commit()
         db.refresh(cfg)
     return cfg
@@ -41,16 +104,19 @@ def get_eligible_employees(db: Session, config: AutoAssignConfig) -> List[Employ
     Returns list of active, eligible employees who can receive auto-assigned leads.
     Filters by employee active status, linked user active status, and configured roles.
     """
-    roles = [r.strip().upper() for r in (config.eligible_roles or "EMPLOYEE,MANAGER").split(",") if r.strip()]
-    if not roles:
-        roles = ["EMPLOYEE", "MANAGER"]
+    roles = set(normalize_eligible_roles(config.eligible_roles))
 
-    query = db.query(Employee).outerjoin(User, Employee.user_id == User.id)\
+    employees = db.query(Employee).outerjoin(User, Employee.user_id == User.id)\
         .filter(Employee.status == "ACTIVE")\
         .filter(or_(Employee.user_id == None, User.is_active == True))\
-        .filter(Employee.role.in_(roles))
-    
-    return query.all()
+        .all()
+
+    # Compare canonical roles rather than raw strings so legacy aliases such as
+    # EMPLOYEE/MANAGER and any mixed casing behave identically.
+    return [
+        employee for employee in employees
+        if normalize_role(employee.role) in roles
+    ]
 
 def get_employee_workload(db: Session, employee_id: int) -> int:
     return db.query(Lead).filter(
@@ -86,8 +152,10 @@ def select_eligible_assignee(db: Session, config: AutoAssignConfig) -> Optional[
         # Primary: last_assigned_at ascending, Secondary: workload ascending
         eligible.sort(key=lambda emp: (get_last_assignment_time(db, emp.id), get_employee_workload(db, emp.id), emp.id))
     elif method == "HIERARCHICAL":
-        # Role rank: EMPLOYEE (1), MANAGER (2), then workload
-        role_rank = lambda emp: 1 if emp.role == "EMPLOYEE" else 2
+        # Role rank: Sales Executive (1), Manager/other (2), then workload
+        role_rank = lambda emp: (
+            1 if normalize_role(emp.role) == ROLE_SALES_EXECUTIVE else 2
+        )
         eligible.sort(key=lambda emp: (role_rank(emp), get_employee_workload(db, emp.id), get_last_assignment_time(db, emp.id), emp.id))
     else:  # LEAST_ASSIGNED
         # Primary: workload ascending, Secondary: last_assigned_at ascending
@@ -144,7 +212,7 @@ def assign_lead_immediately(
             enabled=True,
             waiting_time_minutes=60,
             assignment_method="LEAST_ASSIGNED",
-            eligible_roles="EMPLOYEE,MANAGER",
+            eligible_roles=DEFAULT_ELIGIBLE_ROLES,
             working_hours_enabled=False,
             working_hours_start="09:00",
             working_hours_end="18:00",
@@ -167,7 +235,7 @@ def assign_lead_immediately(
     lead.assigned_to = assignee.id
     lead.assigned_by = assigned_by
     lead.assigned_at = now
-    if (lead.status or "").strip().upper() in {"", "NEW", "NEW LEAD", "NEW_LEAD"}:
+    if normalize_lead_status(lead.status) in {"", "NEW"}:
         lead.status = "ASSIGNED"
 
     db.add(
@@ -221,12 +289,23 @@ def auto_assign_pending_leads(db: Session, override_timeout_minutes: Optional[in
         return 0
 
     waiting_mins = override_timeout_minutes if override_timeout_minutes is not None else config.waiting_time_minutes
-    cutoff = datetime.utcnow() - timedelta(minutes=waiting_mins)
-    
+    # Lead.created_at is written with get_ist_now(), so the waiting-time cutoff
+    # must use the same clock. Using UTC here delayed every fresh lead by 5.5h.
+    cutoff = get_ist_now() - timedelta(minutes=waiting_mins)
+
     unassigned_leads = db.query(Lead).filter(
         Lead.assigned_to == None,
-        Lead.created_at <= cutoff
+        Lead.created_at <= cutoff,
+        ~Lead.status.in_(TERMINAL_STATUSES)
     ).order_by(Lead.created_at.asc()).all()
+
+    # The SQL filter above cannot cover every historical spelling/casing; the
+    # canonical check below makes sure closed leads are never re-opened by an
+    # automatic assignment.
+    unassigned_leads = [
+        lead for lead in unassigned_leads
+        if normalize_lead_status(lead.status) not in NON_ASSIGNABLE_STATUSES
+    ]
 
     if not unassigned_leads:
         return 0
@@ -251,7 +330,7 @@ def auto_assign_pending_leads(db: Session, override_timeout_minutes: Optional[in
         target_lead.assigned_by = None  # System auto-assignment
         target_lead.assigned_at = now
 
-        if target_lead.status == "NEW":
+        if normalize_lead_status(target_lead.status) in {"", "NEW"}:
             target_lead.status = "ASSIGNED"
 
         # Format waiting time label

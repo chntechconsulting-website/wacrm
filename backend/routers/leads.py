@@ -3291,13 +3291,18 @@ def update_auto_assign_config(
     STRICT ADMIN ONLY: Update Lead Auto-Assignment Settings.
     Managers and Employees cannot change auto-assignment rules.
     """
-    from services.lead_assignment_service import get_or_create_auto_assign_config
+    from services.lead_assignment_service import (
+        get_or_create_auto_assign_config,
+        normalize_eligible_roles,
+    )
     cfg = get_or_create_auto_assign_config(db)
 
     cfg.enabled = config_in.enabled
     cfg.waiting_time_minutes = max(1, config_in.waiting_time_minutes)
     cfg.assignment_method = config_in.assignment_method
-    cfg.eligible_roles = config_in.eligible_roles
+    cfg.eligible_roles = ",".join(
+        normalize_eligible_roles(config_in.eligible_roles)
+    )
     cfg.working_hours_enabled = config_in.working_hours_enabled
     cfg.working_hours_start = config_in.working_hours_start
     cfg.working_hours_end = config_in.working_hours_end

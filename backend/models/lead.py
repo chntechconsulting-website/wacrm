@@ -185,7 +185,7 @@ class AutoAssignConfig(Base):
     enabled = Column(Boolean, default=True, nullable=False)
     waiting_time_minutes = Column(Integer, default=60, nullable=False)  # Configurable: 15, 30, 60, 120, etc.
     assignment_method = Column(String(50), default="LEAST_ASSIGNED", nullable=False)  # LEAST_ASSIGNED, ROUND_ROBIN, HIERARCHICAL
-    eligible_roles = Column(String(100), default="EMPLOYEE,MANAGER", nullable=False)
+    eligible_roles = Column(String(100), default="SALES_EXECUTIVE,SALES_MANAGER", nullable=False)
     working_hours_enabled = Column(Boolean, default=False, nullable=False)
     working_hours_start = Column(String(10), default="09:00", nullable=False)
     working_hours_end = Column(String(10), default="18:00", nullable=False)

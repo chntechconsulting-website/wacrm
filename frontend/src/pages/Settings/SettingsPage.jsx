@@ -30,6 +30,24 @@ import {
 import IntegrationsPage from './IntegrationsPage';
 import MetaIntegrationPage from './MetaIntegrationPage';
 
+// The first Settings UI stored EMPLOYEE/MANAGER, but Employee.role uses the
+// real Sales roles. Normalise old saved values so the checkboxes and scheduler
+// always agree on the same roles.
+const LEGACY_AUTO_ASSIGN_ROLE_ALIASES = {
+  EMPLOYEE: 'SALES_EXECUTIVE',
+  SALES: 'SALES_EXECUTIVE',
+  MANAGER: 'SALES_MANAGER',
+};
+
+const normalizeEligibleRoles = (value) => {
+  const roles = String(value || '')
+    .split(',')
+    .map((role) => role.trim().toUpperCase())
+    .filter(Boolean)
+    .map((role) => LEGACY_AUTO_ASSIGN_ROLE_ALIASES[role] || role);
+  return [...new Set(roles)].join(',') || 'SALES_EXECUTIVE,SALES_MANAGER';
+};
+
 const SettingsPage = () => {
   const { user: currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState('meta');
@@ -43,7 +61,7 @@ const SettingsPage = () => {
     enabled: true,
     waiting_time_minutes: 60,
     assignment_method: 'LEAST_ASSIGNED',
-    eligible_roles: 'EMPLOYEE,MANAGER',
+    eligible_roles: 'SALES_EXECUTIVE,SALES_MANAGER',
     working_hours_enabled: false,
     working_hours_start: '09:00',
     working_hours_end: '18:00'
@@ -98,7 +116,10 @@ const SettingsPage = () => {
       setLoadingAutoConfig(true);
       const res = await API.get('/leads/auto-assign/config');
       if (res.data) {
-        setAutoAssignConfig(res.data);
+        setAutoAssignConfig({
+          ...res.data,
+          eligible_roles: normalizeEligibleRoles(res.data.eligible_roles),
+        });
       }
     } catch (e) {
       console.error("Failed to load auto assign config:", e);
@@ -119,7 +140,10 @@ const SettingsPage = () => {
       setAutoConfigSuccess('');
       const res = await API.put('/leads/auto-assign/config', autoAssignConfig);
       if (res.data) {
-        setAutoAssignConfig(res.data);
+        setAutoAssignConfig({
+          ...res.data,
+          eligible_roles: normalizeEligibleRoles(res.data.eligible_roles),
+        });
         setAutoConfigSuccess('Auto-assignment settings saved and applied to backend scheduler successfully!');
         setTimeout(() => setAutoConfigSuccess(''), 4000);
       }
@@ -754,43 +778,29 @@ META_API_VERSION=v26.0`}
                 </p>
 
                 <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: currentUser?.role === 'ADMIN' ? 'pointer' : 'not-allowed', fontSize: '0.88rem', fontWeight: 600 }}>
-                    <input 
-                      type="checkbox"
-                      disabled={currentUser?.role !== 'ADMIN'}
-                      checked={autoAssignConfig.eligible_roles.includes('EMPLOYEE')}
-                      onChange={(e) => {
-                        let roles = autoAssignConfig.eligible_roles.split(',').map(r => r.trim()).filter(Boolean);
-                        if (e.target.checked) {
-                          if (!roles.includes('EMPLOYEE')) roles.push('EMPLOYEE');
-                        } else {
-                          roles = roles.filter(r => r !== 'EMPLOYEE');
-                        }
-                        setAutoAssignConfig({ ...autoAssignConfig, eligible_roles: roles.join(',') });
-                      }}
-                      style={{ width: '18px', height: '18px', accentColor: '#2563eb' }}
-                    />
-                    Sales Representatives (EMPLOYEE)
-                  </label>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: currentUser?.role === 'ADMIN' ? 'pointer' : 'not-allowed', fontSize: '0.88rem', fontWeight: 600 }}>
-                    <input 
-                      type="checkbox"
-                      disabled={currentUser?.role !== 'ADMIN'}
-                      checked={autoAssignConfig.eligible_roles.includes('MANAGER')}
-                      onChange={(e) => {
-                        let roles = autoAssignConfig.eligible_roles.split(',').map(r => r.trim()).filter(Boolean);
-                        if (e.target.checked) {
-                          if (!roles.includes('MANAGER')) roles.push('MANAGER');
-                        } else {
-                          roles = roles.filter(r => r !== 'MANAGER');
-                        }
-                        setAutoAssignConfig({ ...autoAssignConfig, eligible_roles: roles.join(',') });
-                      }}
-                      style={{ width: '18px', height: '18px', accentColor: '#2563eb' }}
-                    />
-                    Team Managers (MANAGER)
-                  </label>
+                  {[
+                    { role: 'SALES_EXECUTIVE', label: 'Sales Executives (SALES_EXECUTIVE)' },
+                    { role: 'SALES_MANAGER', label: 'Sales Managers (SALES_MANAGER)' },
+                  ].map(({ role, label }) => (
+                    <label key={role} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: currentUser?.role === 'ADMIN' ? 'pointer' : 'not-allowed', fontSize: '0.88rem', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        disabled={currentUser?.role !== 'ADMIN'}
+                        checked={autoAssignConfig.eligible_roles.split(',').map(r => r.trim()).includes(role)}
+                        onChange={(e) => {
+                          let roles = autoAssignConfig.eligible_roles.split(',').map(r => r.trim()).filter(Boolean);
+                          if (e.target.checked) {
+                            if (!roles.includes(role)) roles.push(role);
+                          } else {
+                            roles = roles.filter(r => r !== role);
+                          }
+                          setAutoAssignConfig({ ...autoAssignConfig, eligible_roles: roles.join(',') });
+                        }}
+                        style={{ width: '18px', height: '18px', accentColor: '#2563eb' }}
+                      />
+                      {label}
+                    </label>
+                  ))}
                 </div>
               </div>
 

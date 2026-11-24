@@ -293,7 +293,7 @@ class AutoAssignConfigBase(BaseModel):
     enabled: bool = True
     waiting_time_minutes: int = 60
     assignment_method: str = "LEAST_ASSIGNED"  # LEAST_ASSIGNED, ROUND_ROBIN, HIERARCHICAL
-    eligible_roles: str = "EMPLOYEE,MANAGER"
+    eligible_roles: str = "SALES_EXECUTIVE,SALES_MANAGER"
     working_hours_enabled: bool = False
     working_hours_start: str = "09:00"
     working_hours_end: str = "18:00"
