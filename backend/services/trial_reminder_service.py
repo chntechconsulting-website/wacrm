@@ -205,6 +205,19 @@ def _support_recipient(db: Session, lead: Lead) -> Optional[Dict[str, Any]]:
     contact - only an explicitly selected manager is notified - because the
     requirement is to notify whoever actually owns the follow-up.
     """
+    support_employee: Optional[Employee] = None
+
+    # A trial reminder belongs to the Support Manager selected in the Set
+    # Trial Period modal, even after a Support Executive has been allocated.
+    # Resolve it first so a handoff or legacy assignment row cannot silently
+    # move the reminder away from the trial owner.
+    if is_trial_status(lead.status) and getattr(lead, "trial_support_employee_id", None):
+        support_employee = (
+            db.query(Employee)
+            .filter(Employee.id == lead.trial_support_employee_id)
+            .first()
+        )
+
     handoff = (
         db.query(SupportHandoff)
         .filter(SupportHandoff.lead_id == lead.id)
@@ -212,8 +225,7 @@ def _support_recipient(db: Session, lead: Lead) -> Optional[Dict[str, Any]]:
         .first()
     )
 
-    support_employee: Optional[Employee] = None
-    if handoff and handoff.assigned_agent_id:
+    if not support_employee and handoff and handoff.assigned_agent_id:
         support_employee = (
             db.query(Employee)
             .filter(Employee.id == handoff.assigned_agent_id)

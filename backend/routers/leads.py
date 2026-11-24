@@ -481,7 +481,8 @@ def build_lead_out(
     # row, keeping both Sales and Support attribution intact.
     support_assignment_rows = [
         a for a in ((lead.assignments if include_timeline else []) or [])
-        if (getattr(a, "assignment_method", "") or "").upper() == "MANUAL_SUPPORT"
+        if (getattr(a, "assignment_method", "") or "").upper()
+        in ("MANUAL_SUPPORT", "TRIAL_SUPPORT_EXECUTIVE")
     ]
     if support_assignment_rows:
         latest_support_assignment = max(
@@ -503,6 +504,7 @@ def build_lead_out(
     # is only a display/reminder fallback: a Support handoff, a legacy direct
     # Support owner or a MANUAL_SUPPORT row always win, and no Support status
     # is written from here.
+    is_converted = normalize_lead_status(lead.status) == STATUS_CONVERTED_TO_SUPPORT
     trial_support_emp = None
     trial_support_id = getattr(lead, "trial_support_employee_id", None)
     if trial_support_id and db:
@@ -525,13 +527,21 @@ def build_lead_out(
                 support_manager_id = trial_support_manager.id
                 support_manager_name = trial_support_manager.name
 
+    if (
+        trial_support_emp
+        and not is_converted
+        and normalize_role(trial_support_emp.role) == ROLE_SUPPORT_MANAGER
+    ):
+        # A trial Executive allocation must not move manager attribution away
+        # from the Support Manager selected when the trial period was set.
+        support_manager_id = trial_support_emp.id
+        support_manager_name = trial_support_emp.name
+
     conversion_event = None
     for history in ((lead.status_history if include_timeline else []) or []):
         if normalize_lead_status(history.new_status) == STATUS_CONVERTED_TO_SUPPORT:
             if conversion_event is None or (history.changed_at or datetime.min) > (conversion_event.changed_at or datetime.min):
                 conversion_event = history
-
-    is_converted = normalize_lead_status(lead.status) == STATUS_CONVERTED_TO_SUPPORT
     if is_converted:
         support_assignment_status = "ASSIGNED" if support_assigned_to else "NOT_ASSIGNED"
     else:
@@ -1424,6 +1434,7 @@ def get_support_assigned_leads(
         query = query.filter(
             or_(
                 Lead.id.in_(handoff_lead_ids),
+                Lead.support_employee_id.in_(support_emp_ids),
                 Lead.assigned_to.in_(support_emp_ids),
                 Lead.trial_support_employee_id.is_not(None),
             )
@@ -1534,14 +1545,17 @@ def get_support_assigned_leads(
     # Batch-resolve support managers for the visible page.
     exec_ids = set()
     for l in leads:
+        # The Trial Support Manager is resolved even when an Executive has
+        # already been allocated, so the trial manager attribution stays
+        # visible in the queue.
+        if getattr(l, "trial_support_employee_id", None):
+            exec_ids.add(l.trial_support_employee_id)
         if getattr(l, "support_employee_id", None):
             exec_ids.add(l.support_employee_id)
             continue
         h = handoffs_map.get(l.id)
         if h and h.assigned_agent_id:
             exec_ids.add(h.assigned_agent_id)
-        elif getattr(l, "trial_support_employee_id", None):
-            exec_ids.add(l.trial_support_employee_id)
         elif l.assigned_employee and (
             l.assigned_employee.department == 'SUPPORT'
             or 'SUPPORT' in (l.assigned_employee.role or '')
@@ -1570,7 +1584,11 @@ def get_support_assigned_leads(
         
         assigned_exec_id = None
         assigned_exec_name = None
-        trial_assignee = None
+        trial_assignee = (
+            execs_by_id.get(l.trial_support_employee_id)
+            if getattr(l, "trial_support_employee_id", None)
+            else None
+        )
         support_owner_id = getattr(l, "support_employee_id", None)
         if support_owner_id:
             assigned_exec_id = support_owner_id
@@ -1579,20 +1597,14 @@ def get_support_assigned_leads(
         elif h and h.assigned_agent_id:
             assigned_exec_id = h.assigned_agent_id
             assigned_exec_name = h.assigned_agent_name
-        elif getattr(l, "trial_support_employee_id", None):
-            trial_assignee = execs_by_id.get(l.trial_support_employee_id)
+        elif trial_assignee:
             # A trial customer can be owned by a Support Manager. That person
             # is projected as the assigned manager below, never as a Support
             # Executive, so the queue never reports an executive who is not
             # actually assigned.
-            if not (
-                trial_assignee
-                and normalize_role(trial_assignee.role) == ROLE_SUPPORT_MANAGER
-            ):
+            if normalize_role(trial_assignee.role) != ROLE_SUPPORT_MANAGER:
                 assigned_exec_id = l.trial_support_employee_id
-                assigned_exec_name = (
-                    trial_assignee.name if trial_assignee else None
-                )
+                assigned_exec_name = trial_assignee.name
         elif l.assigned_employee and (l.assigned_employee.department == 'SUPPORT' or 'SUPPORT' in (l.assigned_employee.role or '')):
             assigned_exec_id = l.assigned_to
             assigned_exec_name = l.assigned_employee.name
@@ -1602,6 +1614,7 @@ def get_support_assigned_leads(
         if (
             trial_assignee
             and normalize_role(trial_assignee.role) == ROLE_SUPPORT_MANAGER
+            and (h is None or is_trial_status(l.status))
         ):
             assigned_mgr_id = trial_assignee.id
             assigned_mgr_name = trial_assignee.name
@@ -1964,22 +1977,30 @@ def assign_support_lead(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Assign or reassign a Support employee to a customer that is already in the
-    Support workflow. A dedicated ``CONVERTED_TO_SUPPORT`` status or an
-    existing Support handoff both qualify; some legitimate handovers keep the
-    Sales status at WON.
+    Assign or reassign a Support employee to a customer.
+
+    A dedicated ``CONVERTED_TO_SUPPORT`` status or an existing Support handoff
+    both qualify; some legitimate handovers keep the Sales status at WON.
+
+    A regular Support Manager/Admin assignment to a **TRIAL** lead is also
+    supported before any handoff exists. The deal stays TRIAL, the Sales owner
+    is untouched, the Trial Support Manager attribution
+    (``trial_support_employee_id``) is preserved and only an active Support
+    Executive may be selected.
 
     * Admin has global reassignment access.
-    * Support Manager may only reassign within their managed Support team.
-    * The target must be an active Support Executive or Support Manager.
-      Assigning a Support Manager makes that manager the Support owner and
-      the customer's Support Manager, never their own reporting manager.
+    * Support Manager may only reassign within their managed Support team and,
+      during a trial, only the manager recorded on the lead may assign.
+    * After conversion the target may be an active Support Executive or
+      Support Manager. Assigning a Support Manager makes that manager the
+      Support owner and the customer's Support Manager, never their own
+      reporting manager.
     * A reassignment (changing the existing owner) requires a reason.
 
     The whole change is transactional: the previous active assignment is
-    closed, the new one is created, the client/handoff ownership is updated,
-    the history and audit rows are written and the new employee, previous
-    employee and Support Manager are notified in one commit.
+    closed, the new one is created, ownership is updated, the history and audit
+    rows are written and the new employee, previous employee and Support
+    Manager are notified in one commit.
     """
     norm_role = normalize_role(current_user.role)
     if norm_role not in [ROLE_ADMIN, ROLE_SUPPORT_MANAGER]:
@@ -2027,8 +2048,10 @@ def assign_support_lead(
 
     from models.workflow import SupportHandoff
     from services.support_assignment_service import (
+        assign_trial_support_owner,
         reassign_support_owner,
         resolve_current_support_owner,
+        resolve_trial_owner_id,
     )
 
     handoff = (
@@ -2037,18 +2060,29 @@ def assign_support_lead(
         .order_by(desc(SupportHandoff.id))
         .first()
     )
+    is_trial_assignment = handoff is None and is_trial_status(lead.status)
+
+    if is_trial_assignment and not is_active_support_executive(agent, db):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "During a trial only an active Support Executive can be assigned. "
+                "The Trial Support Manager is selected in the Set Trial Period form."
+            ),
+        )
+
     # A Support handoff is the real signal that the customer is already in the
     # Support workflow. Some legitimate handovers (for example a paid finance
     # handoff) keep the Sales status at WON instead of rewriting it to
     # CONVERTED_TO_SUPPORT, so gating only on Lead.status locked Support
     # Managers out of customers that are visibly in their onboarding queue.
-    if not handoff:
+    if not handoff and not is_trial_assignment:
         if normalize_lead_status(lead.status) != STATUS_CONVERTED_TO_SUPPORT:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "Support assignment is available only after the deal is marked "
-                    "Won and then handed over to Support."
+                    "Support assignment is available only during a trial or after "
+                    "the deal is marked Won and handed over to Support."
                 )
             )
         raise HTTPException(
@@ -2057,7 +2091,15 @@ def assign_support_lead(
         )
 
     current_emp = get_employee_for_user(current_user, db)
-    current_owner_id, owner_source = resolve_current_support_owner(db, lead, handoff)
+    if is_trial_assignment:
+        current_owner_id = resolve_trial_owner_id(db, lead)
+        owner_source = (
+            "TRIAL_ASSIGNMENT" if current_owner_id else "TRIAL_UNASSIGNED"
+        )
+    else:
+        current_owner_id, owner_source = resolve_current_support_owner(
+            db, lead, handoff
+        )
 
     # A genuine reassignment always needs an auditable reason. The first
     # assignment can still be submitted without one.
@@ -2085,6 +2127,16 @@ def assign_support_lead(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This client is outside your managed Support team and cannot be reassigned by you.",
             )
+        if is_trial_assignment:
+            trial_manager_id = getattr(lead, "trial_support_employee_id", None)
+            if trial_manager_id and trial_manager_id != current_emp.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "Only the Trial Support Manager assigned to this customer "
+                        "can allocate a Support Executive during the trial."
+                    ),
+                )
         if not is_support_lead_authorized(lead, current_user, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -2095,16 +2147,26 @@ def assign_support_lead(
     # reassignment the dedicated reason is stored instead.
     effective_reason = reason or (remarks if not current_owner_id else None)
 
-    result = reassign_support_owner(
-        db,
-        lead=lead,
-        handoff=handoff,
-        new_employee=agent,
-        actor_user=current_user,
-        actor_employee=current_emp,
-        reason=effective_reason or None,
-        source="MANUAL_REASSIGN" if current_owner_id else "MANUAL_ASSIGN",
-    )
+    if is_trial_assignment:
+        result = assign_trial_support_owner(
+            db,
+            lead=lead,
+            new_employee=agent,
+            actor_user=current_user,
+            actor_employee=current_emp,
+            reason=effective_reason or None,
+        )
+    else:
+        result = reassign_support_owner(
+            db,
+            lead=lead,
+            handoff=handoff,
+            new_employee=agent,
+            actor_user=current_user,
+            actor_employee=current_emp,
+            reason=effective_reason or None,
+            source="MANUAL_REASSIGN" if current_owner_id else "MANUAL_ASSIGN",
+        )
     result["conversion_remarks"] = remarks or None
     result["owner_source"] = owner_source
     return result
@@ -2155,16 +2217,18 @@ def get_support_assignment(
     state = get_assignment_state(db, lead, handoff)
 
     is_converted = normalize_lead_status(lead.status) == STATUS_CONVERTED_TO_SUPPORT
+    is_trial = is_trial_status(lead.status)
     # A handoff is sufficient: it means the customer is already in Support even
     # when the Sales status stayed at WON instead of CONVERTED_TO_SUPPORT.
-    assignment_enabled = handoff is not None
+    # A trial customer can be assigned an Executive before any handoff exists.
+    assignment_enabled = handoff is not None or is_trial
     can_reassign = False
     blocked_reason = None
     if norm_role == ROLE_ADMIN:
         can_reassign = assignment_enabled
         if not assignment_enabled:
             blocked_reason = (
-                "The deal must be won and handed over to Support before reassignment."
+                "The deal must be in Trial or handed over to Support before assignment."
                 if not is_converted
                 else "No Support handoff exists for this lead yet."
             )
@@ -2174,17 +2238,33 @@ def get_support_assignment(
         if current_emp:
             team_ids.add(current_emp.id)
         owner_id = state.get("support_employee_id")
-        can_reassign = bool(
-            assignment_enabled and (owner_id is None or owner_id in team_ids)
-        )
-        if not assignment_enabled:
+        trial_manager_id = getattr(lead, "trial_support_employee_id", None)
+        if not current_emp:
             blocked_reason = (
-                "The deal must be won and handed over to Support before reassignment."
-                if not is_converted
-                else "No Support handoff exists for this lead yet."
+                "No employee profile is linked to this Support Manager account."
             )
-        elif owner_id and owner_id not in team_ids:
-            blocked_reason = "This client is outside your managed Support team."
+        elif (
+            is_trial
+            and handoff is None
+            and trial_manager_id
+            and trial_manager_id != current_emp.id
+        ):
+            blocked_reason = (
+                "Only the Trial Support Manager assigned to this customer can "
+                "allocate a Support Executive during the trial."
+            )
+        else:
+            can_reassign = bool(
+                assignment_enabled and (owner_id is None or owner_id in team_ids)
+            )
+            if not assignment_enabled:
+                blocked_reason = (
+                    "The deal must be in Trial or handed over to Support before assignment."
+                    if not is_converted
+                    else "No Support handoff exists for this lead yet."
+                )
+            elif owner_id and owner_id not in team_ids:
+                blocked_reason = "This client is outside your managed Support team."
     else:
         blocked_reason = "Only Support Managers and Admin can reassign clients."
 
@@ -2192,6 +2272,7 @@ def get_support_assignment(
     state["assignment_enabled"] = assignment_enabled
     state["reassign_blocked_reason"] = blocked_reason
     state["is_converted_to_support"] = is_converted
+    state["is_trial"] = is_trial
     return state
 
 

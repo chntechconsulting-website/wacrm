@@ -39,6 +39,7 @@ from services.hierarchy_service import (
     ROLE_SUPPORT_MANAGER,
     normalize_role,
 )
+from utils.lead_status import is_trial_status
 from utils.timezone import get_ist_now
 
 
@@ -74,6 +75,29 @@ def resolve_employee_manager(
         if manager:
             return manager
     return None
+
+
+def resolve_trial_manager(
+    db: Session, lead: Optional[Lead]
+) -> Optional[Employee]:
+    """Resolve the Support Manager responsible for a trial customer.
+
+    ``leads.trial_support_employee_id`` is written by the Set Trial Period
+    modal and normally points at a Support Manager. A legacy row may still
+    point at a Support Executive; in that case the reporting manager is used
+    so trial attribution is never lost.
+    """
+    if not lead:
+        return None
+    trial_support_id = getattr(lead, "trial_support_employee_id", None)
+    if not trial_support_id:
+        return None
+    employee = db.query(Employee).filter(Employee.id == trial_support_id).first()
+    if not employee:
+        return None
+    if normalize_role(employee.role) == ROLE_SUPPORT_MANAGER:
+        return employee
+    return resolve_employee_manager(db, employee)
 
 
 def get_latest_handoff(db: Session, lead_id: int) -> Optional[SupportHandoff]:
@@ -226,7 +250,13 @@ def get_assignment_state(
 
     support_manager_id = handoff.support_manager_id if handoff else None
     support_manager_name = handoff.support_manager_name if handoff else None
-    if not support_manager_name and owner:
+    trial_manager = None if handoff else resolve_trial_manager(db, lead)
+    if trial_manager:
+        # During a trial the manager attribution comes from the Set Trial
+        # Period selection, never from the assigned Executive's reporting line.
+        support_manager_id = trial_manager.id
+        support_manager_name = trial_manager.name
+    elif not support_manager_name and owner:
         if normalize_role(owner.role) == ROLE_SUPPORT_MANAGER:
             # The Support owner is itself a Manager: keep the projection on
             # that manager instead of resolving their reporting Admin.
@@ -237,6 +267,8 @@ def get_assignment_state(
             if manager:
                 support_manager_id = manager.id
                 support_manager_name = manager.name
+
+    is_trial = is_trial_status(lead.status)
 
     return {
         "lead_id": lead.id,
@@ -253,6 +285,8 @@ def get_assignment_state(
         "history": history,
         "history_count": len(history),
         "reason_required": bool(owner_id),
+        "is_trial": is_trial,
+        "assignment_scope": "TRIAL" if is_trial and not handoff else "SUPPORT",
     }
 
 
@@ -264,33 +298,36 @@ def _assignment_message(
     new_name: str,
     reassigned_by: str,
     when: datetime,
+    is_reassignment: bool = True,
 ) -> str:
+    action = "Reassigned" if is_reassignment else "Assigned"
+    date_label = "Reassignment" if is_reassignment else "Assignment"
     return (
         f"Client Name: {client_name}\n"
         f"Company Name: {company_name or 'N/A'}\n"
         f"Previous Employee: {previous_name or 'Unassigned'}\n"
         f"Newly Assigned Employee: {new_name}\n"
-        f"Reassigned By: {reassigned_by}\n"
-        f"Reassignment Date & Time: {when.strftime('%d %b %Y, %I:%M %p')}"
+        f"{action} By: {reassigned_by}\n"
+        f"{date_label} Date & Time: {when.strftime('%d %b %Y, %I:%M %p')}"
     )
 
 
-def _add_reassignment_notifications(
+def _add_assignment_notifications(
     db: Session,
     *,
     lead: Lead,
-    handoff: SupportHandoff,
     new_employee: Employee,
     previous_employee_id: Optional[int],
-    actor_user: User,
-    actor_employee: Optional[Employee],
+    manager_employee_id: Optional[int],
     reassigned_by: str,
     when: datetime,
     client_name: str,
     company_name: Optional[str],
+    notification_type: str,
+    title: str,
+    is_reassignment: bool,
 ) -> List[int]:
-    """Queue notifications inside the caller's transaction (no commit)."""
-    manager_employee_id = handoff.support_manager_id
+    """Queue assignment notifications inside the caller's transaction."""
     if not manager_employee_id:
         manager = resolve_employee_manager(db, new_employee)
         manager_employee_id = manager.id if manager else None
@@ -310,17 +347,18 @@ def _add_reassignment_notifications(
         new_name=new_employee.name,
         reassigned_by=reassigned_by,
         when=when,
+        is_reassignment=is_reassignment,
     )
 
-    for recipient_kind, user_id in targets:
+    for _recipient_kind, user_id in targets:
         if not user_id or user_id in seen:
             continue
         seen.add(user_id)
         notification = Notification(
             user_id=user_id,
-            title=f"Support Client Reassigned: {client_name}",
+            title=title,
             message=message,
-            notification_type="SUPPORT_REASSIGNMENT",
+            notification_type=notification_type,
             link_url=f"/support/assigned?openLeadId={lead.id}",
             is_read=False,
             created_at=datetime.utcnow(),
@@ -584,18 +622,19 @@ def reassign_support_owner(
             or f"Lead #{locked_lead.id}"
         )
         company_name = locked_handoff.company_name or locked_lead.company
-        _add_reassignment_notifications(
+        _add_assignment_notifications(
             db,
             lead=locked_lead,
-            handoff=locked_handoff,
             new_employee=new_employee,
             previous_employee_id=previous_employee_id,
-            actor_user=actor_user,
-            actor_employee=actor_employee,
+            manager_employee_id=locked_handoff.support_manager_id,
             reassigned_by=actor_label,
             when=now,
             client_name=client_name,
             company_name=company_name,
+            notification_type="SUPPORT_REASSIGNMENT",
+            title=f"Support Client Reassigned: {client_name}",
+            is_reassignment=True,
         )
 
         db.commit()
@@ -623,6 +662,255 @@ def reassign_support_owner(
             "support_manager_id": locked_handoff.support_manager_id,
             "support_manager_name": locked_handoff.support_manager_name,
             "sales_owner_id": locked_lead.assigned_to,
+        }
+    except Exception:
+        db.rollback()
+        raise
+
+
+def resolve_trial_owner_id(db: Session, lead: Lead) -> Optional[int]:
+    """Return the Support Executive currently assigned to a trial customer.
+
+    The Trial Support Manager stored in ``trial_support_employee_id`` is a
+    manager attribution, not a Support Executive assignment, so it is
+    deliberately excluded here. ``Lead.assigned_to`` also belongs to Sales and
+    is never treated as a trial Executive owner.
+    """
+    active = get_active_assignment(db, lead.id)
+    if active:
+        return active.employee_id
+    return getattr(lead, "support_employee_id", None)
+
+
+def assign_trial_support_owner(
+    db: Session,
+    *,
+    lead: Lead,
+    new_employee: Employee,
+    actor_user: User,
+    actor_employee: Optional[Employee],
+    reason: Optional[str],
+) -> Dict[str, Any]:
+    """Assign or reassign a Support Executive while the deal is still TRIAL.
+
+    The trial Support Manager attribution (``trial_support_employee_id``) and
+    the Sales owner (``Lead.assigned_to``) are never changed. The Executive is
+    stored on ``Lead.support_employee_id`` and in an active
+    ``SupportClientAssignment`` row whose handoff/customer columns stay null
+    until the deal is converted. Trial reminders keep resolving the Manager
+    from ``trial_support_employee_id``.
+    """
+    try:
+        locked_lead = (
+            db.query(Lead)
+            .filter(Lead.id == lead.id)
+            .with_for_update()
+            .first()
+        )
+        if not locked_lead:
+            raise ValueError("Lead no longer exists.")
+        if get_latest_handoff(db, locked_lead.id) is not None:
+            raise ValueError(
+                "A Support handoff already exists for this lead. Use the "
+                "regular Support assignment workflow instead."
+            )
+
+        active_rows = (
+            db.query(SupportClientAssignment)
+            .filter(
+                SupportClientAssignment.lead_id == locked_lead.id,
+                SupportClientAssignment.status == "ACTIVE",
+            )
+            .order_by(desc(SupportClientAssignment.id))
+            .with_for_update()
+            .all()
+        )
+
+        previous_employee_id = (
+            active_rows[0].employee_id
+            if active_rows
+            else getattr(locked_lead, "support_employee_id", None)
+        )
+        previous_name = _employee_name(db, previous_employee_id)
+        manager = resolve_trial_manager(db, locked_lead)
+        manager_employee_id = manager.id if manager else None
+        manager_name = manager.name if manager else None
+        now = get_ist_now()
+        actor_label = (
+            actor_employee.name
+            if actor_employee
+            else (actor_user.username if actor_user else "System")
+        )
+
+        # Idempotent re-submit: never create a second active row or duplicate
+        # the audit feed.
+        if previous_employee_id == new_employee.id:
+            if not locked_lead.support_employee_id:
+                locked_lead.support_employee_id = new_employee.id
+            if not active_rows:
+                active_row = SupportClientAssignment(
+                    lead_id=locked_lead.id,
+                    customer_id=None,
+                    support_handoff_id=None,
+                    employee_id=new_employee.id,
+                    previous_employee_id=None,
+                    assigned_by_employee_id=(
+                        actor_employee.id if actor_employee else None
+                    ),
+                    assigned_by_user_id=actor_user.id if actor_user else None,
+                    source="TRIAL_SYNC",
+                    reason=reason,
+                    status="ACTIVE",
+                    assigned_at=now,
+                )
+                db.add(active_row)
+                db.commit()
+                db.refresh(active_row)
+                active = active_row
+            else:
+                active = active_rows[0]
+                db.commit()
+            return {
+                "success": True,
+                "already_assigned": True,
+                "reassigned": False,
+                "lead_id": locked_lead.id,
+                "support_handoff_id": None,
+                "assignment_id": active.id,
+                "assigned_agent_id": new_employee.id,
+                "assigned_agent_name": new_employee.name,
+                "previous_agent_id": previous_employee_id,
+                "previous_agent_name": previous_name,
+                "support_assigned_at": (
+                    active.assigned_at.isoformat()
+                    if active.assigned_at
+                    else now.isoformat()
+                ),
+                "reassigned_at": None,
+                "reassigned_by_id": (
+                    actor_employee.id if actor_employee else None
+                ),
+                "reassigned_by_name": actor_label,
+                "reassigned_by_username": (
+                    actor_user.username if actor_user else None
+                ),
+                "reason": active.reason,
+                "support_manager_id": manager_employee_id,
+                "support_manager_name": manager_name,
+                "sales_owner_id": locked_lead.assigned_to,
+                "assignment_scope": "TRIAL",
+            }
+
+        for row in active_rows:
+            row.status = "ENDED"
+            row.ended_at = now
+            row.end_reason = "REASSIGNED"
+
+        is_reassignment = previous_employee_id is not None
+        locked_lead.support_employee_id = new_employee.id
+
+        assignment_row = SupportClientAssignment(
+            lead_id=locked_lead.id,
+            customer_id=None,
+            support_handoff_id=None,
+            employee_id=new_employee.id,
+            previous_employee_id=previous_employee_id,
+            assigned_by_employee_id=actor_employee.id if actor_employee else None,
+            assigned_by_user_id=actor_user.id if actor_user else None,
+            source="TRIAL_REASSIGN" if is_reassignment else "TRIAL_ASSIGN",
+            reason=reason,
+            status="ACTIVE",
+            assigned_at=now,
+        )
+        db.add(assignment_row)
+
+        audit_note = (
+            f"Trial Support Executive assigned from {previous_name or 'Unassigned'} "
+            f"to {new_employee.name} by {actor_label}."
+            + (f" Reason: {reason}" if reason else "")
+        )
+
+        db.add(
+            LeadAssignment(
+                lead_id=locked_lead.id,
+                assigned_to=new_employee.id,
+                assigned_by=actor_employee.id if actor_employee else None,
+                assigned_at=now,
+                assignment_method="TRIAL_SUPPORT_EXECUTIVE",
+                notes=audit_note,
+            )
+        )
+        db.add(
+            LeadActivity(
+                lead_id=locked_lead.id,
+                performed_by=actor_employee.id if actor_employee else None,
+                activity_type="TRIAL_SUPPORT_EXECUTIVE_ASSIGNED",
+                department="SUPPORT",
+                description=audit_note,
+                created_at=now,
+            )
+        )
+        db.add(
+            AuditLog(
+                user_id=actor_user.id if actor_user else None,
+                username=actor_user.username if actor_user else "system",
+                action="TRIAL_SUPPORT_ASSIGN",
+                entity_type="LEAD",
+                entity_id=str(locked_lead.id),
+                details=audit_note,
+                created_at=now,
+            )
+        )
+
+        client_name = locked_lead.name or f"Lead #{locked_lead.id}"
+        company_name = locked_lead.company
+        _add_assignment_notifications(
+            db,
+            lead=locked_lead,
+            new_employee=new_employee,
+            previous_employee_id=previous_employee_id,
+            manager_employee_id=manager_employee_id,
+            reassigned_by=actor_label,
+            when=now,
+            client_name=client_name,
+            company_name=company_name,
+            notification_type=(
+                "SUPPORT_REASSIGNMENT" if is_reassignment else "SUPPORT_ASSIGNMENT"
+            ),
+            title=(
+                f"Trial Client Reassigned: {client_name}"
+                if is_reassignment
+                else f"Trial Client Assigned: {client_name}"
+            ),
+            is_reassignment=is_reassignment,
+        )
+
+        db.commit()
+        db.refresh(assignment_row)
+
+        return {
+            "success": True,
+            "already_assigned": False,
+            "reassigned": is_reassignment,
+            "lead_id": locked_lead.id,
+            "support_handoff_id": None,
+            "assignment_id": assignment_row.id,
+            "assigned_agent_id": new_employee.id,
+            "assigned_agent_name": new_employee.name,
+            "previous_agent_id": previous_employee_id,
+            "previous_agent_name": previous_name,
+            "support_assigned_at": now.isoformat(),
+            "reassigned_at": now.isoformat() if is_reassignment else None,
+            "reassigned_by_id": actor_employee.id if actor_employee else None,
+            "reassigned_by_name": actor_label,
+            "reassigned_by_username": (
+                actor_user.username if actor_user else None
+            ),
+            "reason": reason,
+            "support_manager_id": manager_employee_id,
+            "support_manager_name": manager_name,
+            "sales_owner_id": locked_lead.assigned_to,
+            "assignment_scope": "TRIAL",
         }
     except Exception:
         db.rollback()

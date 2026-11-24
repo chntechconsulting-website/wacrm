@@ -1393,11 +1393,12 @@ class WorkflowService:
         """
         Explicitly converts a WON Sales deal into the Support onboarding queue.
 
-        This is the only transition that enables Support assignment. It never
-        assigns a Support Manager or Executive; that remains a separate,
-        auditable Support Manager/Admin action. Duplicate conversions are
-        rejected and the converter is recorded on LeadStatusHistory, the
-        workflow timeline and the audit log.
+        This is the only transition that enables post-conversion Support
+        assignment. It never creates a new Support Manager/Executive
+        assignment; a Support Executive pre-allocated during the trial is
+        carried into the handoff so the customer keeps its owner. Duplicate
+        conversions are rejected and the converter is recorded on
+        LeadStatusHistory, the workflow timeline and the audit log.
         """
         from services.hierarchy_service import (
             normalize_role,
@@ -1479,8 +1480,70 @@ class WorkflowService:
             db.add(support_handoff)
             db.flush()
 
-        # Keep the Support queue clean: conversion itself never assigns a
-        # Support Manager or Executive.
+        # Keep the Support queue clean, but preserve a Support Executive that
+        # was explicitly allocated during the trial. The active trial
+        # assignment row is attached to the real handoff/customer and becomes
+        # the authoritative post-conversion owner. A newer handoff assignment
+        # made after Won always wins over the trial allocation.
+        from services.hierarchy_service import (
+            normalize_role,
+            ROLE_SUPPORT_MANAGER,
+        )
+        from services.support_assignment_service import (
+            get_active_assignment,
+            resolve_employee_manager,
+            resolve_trial_manager,
+        )
+
+        trial_assignment = get_active_assignment(db, lead.id)
+        trial_exec = None
+        if trial_assignment and trial_assignment.support_handoff_id is None:
+            trial_exec = (
+                db.query(Employee)
+                .filter(Employee.id == trial_assignment.employee_id)
+                .first()
+            )
+            if not trial_exec:
+                trial_assignment.status = "ENDED"
+                trial_assignment.ended_at = now_utc
+                trial_assignment.end_reason = "EMPLOYEE_MISSING"
+            elif (
+                not support_handoff.assigned_agent_id
+                or support_handoff.assigned_agent_id == trial_exec.id
+            ):
+                support_handoff.assigned_agent_id = trial_exec.id
+                support_handoff.assigned_agent_name = trial_exec.name
+                lead.support_employee_id = trial_exec.id
+                trial_assignment.support_handoff_id = support_handoff.id
+                trial_assignment.customer_id = customer.id
+            else:
+                # A Support Manager explicitly reassigned the handoff after
+                # Won; that newer assignment supersedes the trial allocation.
+                trial_assignment.status = "ENDED"
+                trial_assignment.ended_at = now_utc
+                trial_assignment.end_reason = "SUPERSEDED_BY_HANDOFF"
+                lead.support_employee_id = support_handoff.assigned_agent_id
+                trial_exec = None
+
+        if not support_handoff.support_manager_id:
+            trial_manager = resolve_trial_manager(db, lead)
+            if (
+                trial_manager
+                and normalize_role(trial_manager.role) == ROLE_SUPPORT_MANAGER
+            ):
+                support_handoff.support_manager_id = trial_manager.id
+                support_handoff.support_manager_name = trial_manager.name
+            elif support_handoff.assigned_agent_id:
+                owner_emp = (
+                    db.query(Employee)
+                    .filter(Employee.id == support_handoff.assigned_agent_id)
+                    .first()
+                )
+                owner_manager = resolve_employee_manager(db, owner_emp)
+                if owner_manager:
+                    support_handoff.support_manager_id = owner_manager.id
+                    support_handoff.support_manager_name = owner_manager.name
+
         lead.status = STATUS_CONVERTED_TO_SUPPORT
         lead.updated_at = now_utc
 

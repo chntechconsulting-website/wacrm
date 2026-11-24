@@ -76,15 +76,29 @@ const supportStatusLabel = (value) => {
   return option?.label || canonical.replace(/_/g, ' ');
 };
 
+const isTrialLead = (lead) => {
+  if (!lead) return false;
+  const status = String(lead.sales_status || lead.status || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]/g, '_');
+  return status === 'TRIAL' || status === 'TRIAL_LEAD';
+};
+
 // Support actions must follow the Support handoff, not only the Sales status
 // label. Legitimate handovers can stay at WON (for example a paid finance
 // handoff), and those customers are already visible in the Support queue.
+// A TRIAL customer can be allocated a Support Executive before any handoff
+// exists; the backend keeps the deal in TRIAL and preserves Sales ownership.
 const isSupportAssignmentReady = (lead) => {
   if (!lead) return false;
   if (
     normalizeSupportStatus(lead.sales_status || lead.status || '') ===
     'CONVERTED_TO_SUPPORT'
   ) {
+    return true;
+  }
+  if (isTrialLead(lead)) {
     return true;
   }
   return Boolean(
@@ -417,9 +431,9 @@ export default function SupportAssignedLeadsPage() {
   };
 
   // Assign / Reassign Support Agent (Support Manager & Admin). The backend
-  // additionally enforces that the deal is explicitly CONVERTED_TO_SUPPORT,
-  // that the target is an active Support Executive, and that a reassignment
-  // carries a reason.
+  // accepts a TRIAL customer without a handoff (only an active Support
+  // Executive may be selected there) and a converted/handed-over customer.
+  // A reassignment always carries a reason.
   const handleSaveAssign = async () => {
     if (!selectedAgentId || !assignModalLead) return;
     const assignmentEnabled =
@@ -427,7 +441,7 @@ export default function SupportAssignedLeadsPage() {
       Boolean(assignState?.assignment_enabled);
     if (!assignmentEnabled) {
       showToast(
-        'Support assignment becomes available after the deal is handed over to Support.'
+        'Support assignment becomes available during a trial or after the deal is handed over to Support.'
       );
       return;
     }
@@ -496,6 +510,8 @@ export default function SupportAssignedLeadsPage() {
         support_assigned_at: res.data?.support_assigned_at,
         support_manager_id: res.data?.support_manager_id,
         support_manager_name: res.data?.support_manager_name,
+        assigned_support_manager_id: res.data?.support_manager_id,
+        assigned_support_manager_name: res.data?.support_manager_name,
         support_assignment_status: 'ASSIGNED'
       });
 
@@ -1011,7 +1027,7 @@ export default function SupportAssignedLeadsPage() {
                                   ? (lead.assigned_support_executive_id
                                       ? 'Reassign Client'
                                       : 'Assign Client')
-                                  : 'Support assignment becomes available after the deal is handed over to Support'}
+                                  : 'Assign a Support Executive during the trial or after the deal is handed over to Support'}
                                 disabled={!assignmentEnabled}
                                 onClick={() => {
                                   if (!assignmentEnabled) return;
@@ -1656,9 +1672,15 @@ export default function SupportAssignedLeadsPage() {
               </button>
             </div>
             <div className="modal-body">
+              {isTrialLead(assignModalLead) && (
+                <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '0.82rem', fontWeight: 600 }}>
+                  Trial client: assigning a Support Executive does not convert the deal. The Trial Support Manager remains responsible for the trial and its reminders.
+                </div>
+              )}
+
               {!assignReady && (
                 <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '0.82rem', fontWeight: 600 }}>
-                  Support assignment becomes available after the deal is won and handed over to Support.
+                  Support assignment becomes available during a trial or after the deal is handed over to Support.
                 </div>
               )}
 

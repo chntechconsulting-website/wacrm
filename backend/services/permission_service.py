@@ -1165,6 +1165,16 @@ def is_support_lead_authorized(lead: Any, user: User, db: Session) -> bool:
         if emp.id not in team_emp_ids:
             team_emp_ids.append(emp.id)
 
+        # The Trial Support Manager keeps access to the trial customer even
+        # after an Executive is allocated (including a cross-team allocation
+        # made by Admin). Converted customers never use the trial owner.
+        if (
+            not is_converted
+            and getattr(lead, "trial_support_employee_id", None)
+            and lead.trial_support_employee_id in team_emp_ids
+        ):
+            return True
+
         # The dedicated owner column is authoritative after reassignment. It
         # prevents the previous employee's legacy Lead.assigned_to value from
         # leaking the client back into their queue.
