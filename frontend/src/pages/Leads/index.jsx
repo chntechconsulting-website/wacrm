@@ -2067,25 +2067,8 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     const rows = [
       ['Partner Name', cp.channel_partner_name || details.partnerName || '-'],
       ['Partner Code', cp.channel_partner_code || details.partnerCode || '-'],
-      ['Partner ID', cp.channel_partner_id || details.partnerId || '-'],
-      ['External Lead ID', cp.channel_partner_lead_id || details.id || '-'],
-      ['Created Date', createdLabel],
-      ['External Updated At', details.updatedAt ? formatLeadReceivedFull(details.updatedAt) : '-'],
       ['Lead Stage', details.leadStage || '-'],
-      ['Partner API Source', details.source || '-'],
-      ['Website', details.website || '-'],
-      ['Employee Count', details.employeeCount != null ? String(details.employeeCount) : '-'],
-      ['Protected Until', details.protectedUntil ? formatLeadReceivedFull(details.protectedUntil) : '-'],
-      ['Last Contacted', details.lastContactedAt ? formatLeadReceivedFull(details.lastContactedAt) : '-'],
-      ['Next Action', details.nextActionAt ? formatLeadReceivedFull(details.nextActionAt) : '-'],
-      ['Reviewed At', details.reviewedAt ? formatLeadReceivedFull(details.reviewedAt) : '-'],
-      ['Reviewed By User ID', details.reviewedByUserId || '-'],
-      ['Organization ID', details.organizationId || '-'],
-      ['Subscription Order ID', details.subscriptionOrderId || '-'],
-      ['Submitted By Partner User ID', details.submittedByPartnerUserId || '-'],
-      ['Lead Owner User ID', details.leadOwnerUserId || '-'],
-      ['Duplicate Reason', details.duplicateReason || '-'],
-      ['Duplicate Of Lead ID', details.duplicateOfLeadId || '-']
+      ['Created Date', createdLabel]
     ];
 
     return (
