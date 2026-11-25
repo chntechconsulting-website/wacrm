@@ -2062,16 +2062,22 @@ def download_quotation_pdf(
             detail="Access denied: You are not authorized to download this quotation."
         )
 
-    from services.pdf_service import generate_quotation_pdf
+    from services.pdf_service import generate_quotation_pdf, quotation_filename
     pdf_bytes = generate_quotation_pdf(r)
     clean_num = (r.doc_number or f"QT-{r.id}").replace("/", "-").replace("\\", "-")
-    filename = f"Quotation_{clean_num}.pdf"
+    filename = quotation_filename(
+        getattr(r, "company_id", None),
+        getattr(r, "product_category", None),
+        getattr(r, "logo_ref", None),
+        f"Quotation_{clean_num}.pdf",
+    )
 
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
             "X-Document-Type": "quotation"
         }
     )

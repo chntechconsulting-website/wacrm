@@ -141,6 +141,11 @@ const formatApiError = (err, fallback = 'Failed to process request.') => {
   return fallback;
 };
 
+// Bulk imports parse and commit the whole spreadsheet in one request, so a
+// large file can legitimately take much longer than the 15s default timeout.
+// Keep this aligned with the 600s nginx read timeout for /api/leads/import/.
+const BULK_IMPORT_TIMEOUT_MS = 10 * 60 * 1000;
+
 const CreateLeadPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -400,7 +405,8 @@ const CreateLeadPage = () => {
       uploadData.append('file', selectedFile);
       
       const res = await API.post('/leads/import/excel', uploadData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: BULK_IMPORT_TIMEOUT_MS
       });
 
       setImportSummary({
@@ -412,7 +418,14 @@ const CreateLeadPage = () => {
         invalid_rows: res.data.invalid_rows || []
       });
     } catch (err) {
-      setError(formatApiError(err, 'Failed to import spreadsheet file.'));
+      const timedOut = err?.code === 'ECONNABORTED'
+        || /timeout/i.test(err?.message || '')
+        || err?.response?.status === 504;
+      if (timedOut) {
+        setError('This import is taking longer than expected. Wait a moment and refresh the Leads list before retrying — the file may still have been imported.');
+      } else {
+        setError(formatApiError(err, 'Failed to import spreadsheet file.'));
+      }
     } finally {
       setLoading(false);
     }
@@ -422,7 +435,8 @@ const CreateLeadPage = () => {
     if (!importSummary?.invalid_rows?.length) return;
     try {
       const res = await API.post('/leads/import/download-errors', importSummary.invalid_rows, {
-        responseType: 'blob'
+        responseType: 'blob',
+        timeout: BULK_IMPORT_TIMEOUT_MS
       });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');

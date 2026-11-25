@@ -5,6 +5,7 @@ import { getCompanyById, resolveIssuerCompanyId } from './companyBranding';
 import { getCompanyLogo } from './companyLogos';
 import { CHN_QR_CARD_BASE64 } from './paymentQrBase64';
 import { splitDescriptionIntoLines } from './quotationText';
+import { quotationFilename } from './documentFilename';
 import {
   BIOMETRIC_BANK,
   WAHRMS_TERMS_AND_CONDITIONS,
@@ -819,7 +820,7 @@ export function generateBillingPdf(docData, download = true) {
     if (isProforma) {
       filename = `Proforma_Invoice_${cleanNum}.pdf`;
     } else if (isQuotation) {
-      filename = `Quotation_${cleanNum}.pdf`;
+      filename = quotationFilename(docData, `Quotation_${cleanNum}.pdf`);
     } else if (isInvoice) {
       filename = `Tax_Invoice_${cleanNum}.pdf`;
     } else {

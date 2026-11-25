@@ -11,7 +11,7 @@ from models.employee import Employee
 from models.activity import LeadActivity
 
 from utils.timezone import get_ist_now
-from utils.phone import normalize_email
+from utils.phone import normalize_email, normalize_phone
 from utils.lead_status import STATUS_NEW, canonical_new_status, normalize_lead_status
 
 logger = logging.getLogger("reinquiry_service")
@@ -50,7 +50,8 @@ class ReInquiryService:
         db: Session,
         phone: Optional[str] = None,
         email: Optional[str] = None,
-        exclude_lead_ids: Optional[Any] = None
+        exclude_lead_ids: Optional[Any] = None,
+        lookup_cache: Optional["ReInquiryLookupCache"] = None
     ) -> Optional[Lead]:
         """
         Searches for an existing lead or customer.
@@ -64,7 +65,19 @@ class ReInquiryService:
 
         ``exclude_lead_ids`` skips leads created earlier in the same import
         batch so an upload cannot turn its own rows into re-inquiries.
+
+        ``lookup_cache`` is an optional pre-built ``ReInquiryLookupCache``.
+        Bulk callers (Excel import) use it to avoid running several unindexed
+        full-table scans per row, which made large files exceed request
+        timeouts. The cache applies exactly the same matching rules.
         """
+        if lookup_cache is not None:
+            return lookup_cache.find_lead(
+                phone=phone,
+                email=email,
+                exclude_lead_ids=exclude_lead_ids
+            )
+
         clean_phone = ReInquiryService.normalize_phone(phone)
         clean_email = normalize_email(email)
         excluded = set(exclude_lead_ids or [])
@@ -123,7 +136,8 @@ class ReInquiryService:
         creator_emp_id: Optional[int] = None,
         creator_name: Optional[str] = None,
         commit: bool = True,
-        exclude_lead_ids: Optional[Any] = None
+        exclude_lead_ids: Optional[Any] = None,
+        lookup_cache: Optional["ReInquiryLookupCache"] = None
     ) -> Tuple[Lead, bool, LeadEnquiry]:
         """
         Processes an incoming enquiry.
@@ -147,7 +161,8 @@ class ReInquiryService:
             db,
             phone=raw_phone,
             email=raw_email,
-            exclude_lead_ids=exclude_lead_ids
+            exclude_lead_ids=exclude_lead_ids,
+            lookup_cache=lookup_cache
         )
 
         if existing_lead:
@@ -399,3 +414,133 @@ class ReInquiryService:
 
         logger.info(f"Created NEW LEAD #{new_lead.id} ({new_lead.name}, Source: {src}).")
         return new_lead, False, enquiry_record
+
+
+class ReInquiryLookupCache:
+    """
+    Pre-computed duplicate/re-inquiry index for bulk enquiry processing.
+
+    ``find_existing_lead`` normally issues up to four queries per row. Those
+    queries wrap the phone column in SQL functions and use ``LIKE '%...%'``,
+    so no index can be used and every call scans the leads/customers tables.
+    On a large CRM a 1,000-row Excel import therefore takes minutes and hits
+    the browser request timeout.
+
+    The cache loads the required normalized keys once and keeps the same
+    matching precedence as the per-row queries: lead phone -> customer phone
+    -> lead email -> customer email. Newest records win ties, matching the
+    SQL ``ORDER BY id DESC`` behaviour.
+    """
+
+    def __init__(self, db: Session, phones=None, emails=None):
+        self.db = db
+        self.wanted_phones = {
+            normalize_phone(value) for value in (phones or []) if value
+        }
+        self.wanted_phones.discard("")
+        self.wanted_emails = {
+            normalize_email(value) for value in (emails or []) if value
+        }
+        self.wanted_emails.discard("")
+        self.lead_ids_by_phone: Dict[str, List[int]] = {}
+        self.lead_ids_by_email: Dict[str, List[int]] = {}
+        self.customer_lead_ids_by_phone: Dict[str, int] = {}
+        self.customer_lead_ids_by_email: Dict[str, int] = {}
+        if self.wanted_phones or self.wanted_emails:
+            self._load()
+
+    @staticmethod
+    def _append(mapping: Dict[str, List[int]], key: str, lead_id: int) -> None:
+        bucket = mapping.setdefault(key, [])
+        if not bucket or bucket[-1] != lead_id:
+            bucket.append(lead_id)
+
+    def _load(self) -> None:
+        lead_query = self.db.query(
+            Lead.id, Lead.phone, Lead.whatsapp_number, Lead.email
+        ).order_by(Lead.id.asc())
+        for lead_id, phone, whatsapp, email in lead_query.yield_per(2000):
+            if self.wanted_phones:
+                for raw in (phone, whatsapp):
+                    key = normalize_phone(raw)
+                    if key in self.wanted_phones:
+                        self._append(self.lead_ids_by_phone, key, lead_id)
+            if self.wanted_emails and email:
+                key = str(email).strip().lower()
+                if key in self.wanted_emails:
+                    self._append(self.lead_ids_by_email, key, lead_id)
+
+        customer_query = self.db.query(
+            Customer.id,
+            Customer.phone,
+            Customer.email,
+            Customer.converted_from_lead,
+        ).order_by(Customer.id.asc())
+        for _customer_id, phone, email, converted_from_lead in customer_query.yield_per(2000):
+            if converted_from_lead is None:
+                continue
+            if self.wanted_phones:
+                key = normalize_phone(phone)
+                if key in self.wanted_phones:
+                    self.customer_lead_ids_by_phone[key] = converted_from_lead
+            if self.wanted_emails and email:
+                key = str(email).strip().lower()
+                if key in self.wanted_emails:
+                    self.customer_lead_ids_by_email[key] = converted_from_lead
+
+    def _lead_from_index(self, mapping, key, excluded) -> Optional[Lead]:
+        for lead_id in reversed(mapping.get(key, [])):
+            if lead_id in excluded:
+                continue
+            lead = self.db.get(Lead, lead_id)
+            if lead:
+                return lead
+        return None
+
+    def _customer_lead(self, lead_id, excluded) -> Optional[Lead]:
+        if not lead_id or lead_id in excluded:
+            return None
+        return self.db.get(Lead, lead_id)
+
+    def find_lead(
+        self,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+        exclude_lead_ids: Optional[Any] = None
+    ) -> Optional[Lead]:
+        # Do not copy the exclusion collection here: the import passes a set
+        # that grows with every created row, and copying it per row would make
+        # the whole import quadratic.
+        excluded = exclude_lead_ids if exclude_lead_ids is not None else ()
+
+        # 1. Primary Match: Phone number (same order as find_existing_lead).
+        clean_phone = normalize_phone(phone)
+        if clean_phone and len(clean_phone) >= 7:
+            lead = self._lead_from_index(self.lead_ids_by_phone, clean_phone, excluded)
+            if lead:
+                logger.info(f"Re-Inquiry match by PHONE: incoming '{phone}' matched Lead #{lead.id} ('{lead.phone}').")
+                return lead
+
+            lead = self._customer_lead(
+                self.customer_lead_ids_by_phone.get(clean_phone), excluded
+            )
+            if lead:
+                logger.info(f"Re-Inquiry match by CUSTOMER PHONE: Lead #{lead.id}.")
+                return lead
+
+        # 2. Secondary Match: Email address (valid addresses only).
+        clean_email = normalize_email(email)
+        if clean_email:
+            lead = self._lead_from_index(self.lead_ids_by_email, clean_email, excluded)
+            if lead:
+                logger.info(f"Re-Inquiry match by EMAIL: incoming '{email}' matched Lead #{lead.id}.")
+                return lead
+
+            lead = self._customer_lead(
+                self.customer_lead_ids_by_email.get(clean_email), excluded
+            )
+            if lead:
+                logger.info(f"Re-Inquiry match by CUSTOMER EMAIL: Lead #{lead.id}.")
+                return lead
+
+        return None

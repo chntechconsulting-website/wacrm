@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import API from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDateDDMMYYYY } from '../../utils/dateUtils';
+import { quotationFilename, readDownloadFilename } from '../../utils/documentFilename';
 import QuotationModal from '../../components/Billing/QuotationModal';
 import CustomerPurchaseDetails from '../../components/Support/CustomerPurchaseDetails';
 import { 
@@ -115,7 +116,10 @@ const Customers = () => {
       const link = document.createElement('a');
       link.href = url;
       const cleanNum = (doc.number || doc.doc_number || cleanId).replace(/[\\/]/g, '-');
-      link.download = `${dType}_${cleanNum}.pdf`;
+      const fallbackName = `${dType}_${cleanNum}.pdf`;
+      link.download = dType === 'quotation'
+        ? readDownloadFilename(response.headers, quotationFilename(doc, fallbackName))
+        : fallbackName;
       document.body.appendChild(link);
       link.click();
       link.remove();

@@ -9,6 +9,38 @@ from models.employee import Employee
 from utils.phone import normalize_email, normalize_phone
 from utils.lead_status import STATUS_NEW
 
+# Database limits for the Lead columns filled by the importer (see
+# backend/models/lead.py). Spreadsheet cells are free text, so users often
+# paste notes into short columns; without clipping, MySQL raises
+# "Data too long for column ..." and the whole upload fails with a 500.
+LEAD_FIELD_LIMITS = {
+    "first_name": 50,
+    "last_name": 50,
+    "name": 100,
+    "phone": 30,
+    "whatsapp_number": 30,
+    "email": 100,
+    "company": 100,
+    "company_size": 50,
+    "designation": 100,
+    "industry": 100,
+    "website": 150,
+    "city": 100,
+    "state": 100,
+    "country": 100,
+    "location": 150,
+    "campaign_name": 100,
+}
+
+
+def _clip_to(value, field):
+    """Trim a spreadsheet value to the database column limit."""
+    if not value:
+        return None
+    text = str(value)
+    limit = LEAD_FIELD_LIMITS[field]
+    return text[:limit] if len(text) > limit else text
+
 def generate_excel_template() -> io.BytesIO:
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -349,6 +381,24 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
         if status_raw and len(status_raw) > 8 and status_raw not in (requirement_notes or ""):
             requirement_notes = f"{status_raw} | {requirement_notes}" if requirement_notes else status_raw
 
+        # Users often paste detailed notes into the Company column. Preserve
+        # the complete text in Requirement Notes (a TEXT column) and store a
+        # clipped company name instead of failing the entire import.
+        if company and len(company) > LEAD_FIELD_LIMITS["company"]:
+            overflow_note = company.strip()
+            if overflow_note and overflow_note not in (requirement_notes or ""):
+                requirement_notes = (
+                    f"{overflow_note}\n\n{requirement_notes}"
+                    if requirement_notes else overflow_note
+                )
+            company = company[:LEAD_FIELD_LIMITS["company"]].strip()
+
+        # Keep the actual number when a phone cell also contains notes.
+        if len(phone) > LEAD_FIELD_LIMITS["phone"]:
+            phone = normalize_phone(phone)
+        if whatsapp_number and len(whatsapp_number) > LEAD_FIELD_LIMITS["whatsapp_number"]:
+            whatsapp_number = normalize_phone(whatsapp_number)
+
         # Normalize priority & rating
         priority = "MEDIUM"
         rating = "Warm"
@@ -372,22 +422,22 @@ def parse_and_validate_excel_leads(file_contents: bytes, db: Session):
         source_value = source_value[:50]
 
         imported_leads.append({
-            "first_name": first_name if first_name else None,
-            "last_name": last_name if last_name else None,
-            "name": name,
-            "phone": phone,
-            "whatsapp_number": whatsapp_number if whatsapp_number else None,
-            "email": email if email else None,
-            "company": company if company else None,
-            "company_size": company_size if company_size else None,
-            "designation": designation if designation else None,
-            "industry": industry if industry else None,
-            "website": website if website else None,
-            "city": city if city else None,
-            "state": state if state else None,
-            "country": country if country else "India",
-            "location": location if location else None,
-            "campaign_name": campaign_name if campaign_name else None,
+            "first_name": _clip_to(first_name, "first_name"),
+            "last_name": _clip_to(last_name, "last_name"),
+            "name": _clip_to(name, "name") or "Unnamed Lead",
+            "phone": _clip_to(phone, "phone"),
+            "whatsapp_number": _clip_to(whatsapp_number, "whatsapp_number"),
+            "email": _clip_to(email, "email"),
+            "company": _clip_to(company, "company"),
+            "company_size": _clip_to(company_size, "company_size"),
+            "designation": _clip_to(designation, "designation"),
+            "industry": _clip_to(industry, "industry"),
+            "website": _clip_to(website, "website"),
+            "city": _clip_to(city, "city"),
+            "state": _clip_to(state, "state"),
+            "country": _clip_to(country, "country") or "India",
+            "location": _clip_to(location, "location"),
+            "campaign_name": _clip_to(campaign_name, "campaign_name"),
             "status": status,
             "priority": priority,
             "rating": rating,

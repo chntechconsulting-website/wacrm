@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, 
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_, desc, asc, func, select, case
+from sqlalchemy.exc import DataError, IntegrityError
 from typing import List, Optional
 from datetime import datetime, timedelta
 
@@ -49,7 +50,7 @@ from services.permission_service import (
 )
 from services.delete_request_service import handle_entity_deletion
 from services.audit import log_audit
-from services.reinquiry_service import ReInquiryService
+from services.reinquiry_service import ReInquiryService, ReInquiryLookupCache
 from services.followup_visibility_service import apply_followup_visibility_filter
 from services.channel_partner_sync import (
     ChannelPartnerStatusSyncError,
@@ -1218,47 +1219,74 @@ async def import_leads_excel(
     created_count = 0
     reinquiry_count = 0
     now = get_ist_now()
+
+    # Duplicate/re-inquiry detection used to run several unindexed queries per
+    # row. On a large leads table that made bulk uploads exceed the browser
+    # request timeout. Build the normalized phone/email index once per file
+    # instead; matching rules are unchanged.
+    lookup_cache = ReInquiryLookupCache(
+        db,
+        phones=[lead_data.get("phone") for lead_data in valid_leads],
+        emails=[lead_data.get("email") for lead_data in valid_leads],
+    )
+
     # Every lead created by this import. They are excluded from duplicate
     # matching so that a row can never be classified as a re-inquiry of a row
     # created moments earlier in the same file.
     created_lead_ids = set()
-    for lead_data in valid_leads:
-        # The parser defaults the source to EXCEL; an explicit Source column is kept.
-        if not lead_data.get("source"):
-            lead_data["source"] = "EXCEL"
-        # Users without assignment rights may only import leads for themselves.
-        # This keeps a sales executive from using the importer to assign leads to
-        # arbitrary employees (their view scope is "own" anyway).
-        if not can_assign_imports:
-            lead_data["assigned_to"] = creator_id
-            if creator_id and normalize_lead_status(lead_data.get("status")) in {"", STATUS_NEW}:
-                lead_data["status"] = "ASSIGNED"
-        lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
-            db=db,
-            enquiry_data=lead_data,
-            creator_emp_id=creator_id,
-            creator_name=creator_name,
-            commit=False,
-            exclude_lead_ids=created_lead_ids
-        )
-        if is_reinquiry:
-            reinquiry_count += 1
-        else:
-            created_count += 1
-            created_lead_ids.add(lead.id)
-            assigned_emp_id = lead_data.get("assigned_to")
-            if assigned_emp_id:
-                asgn = LeadAssignment(
-                    lead_id=lead.id,
-                    assigned_to=assigned_emp_id,
-                    assigned_by=creator_id,
-                    assigned_at=now,
-                    assignment_method="EXCEL_IMPORT",
-                    notes="Assigned during Excel import"
-                )
-                db.add(asgn)
+    try:
+        for lead_data in valid_leads:
+            # The parser defaults the source to EXCEL; an explicit Source column is kept.
+            if not lead_data.get("source"):
+                lead_data["source"] = "EXCEL"
+            # Users without assignment rights may only import leads for themselves.
+            # This keeps a sales executive from using the importer to assign leads to
+            # arbitrary employees (their view scope is "own" anyway).
+            if not can_assign_imports:
+                lead_data["assigned_to"] = creator_id
+                if creator_id and normalize_lead_status(lead_data.get("status")) in {"", STATUS_NEW}:
+                    lead_data["status"] = "ASSIGNED"
+            lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
+                db=db,
+                enquiry_data=lead_data,
+                creator_emp_id=creator_id,
+                creator_name=creator_name,
+                commit=False,
+                exclude_lead_ids=created_lead_ids,
+                lookup_cache=lookup_cache
+            )
+            if is_reinquiry:
+                reinquiry_count += 1
+            else:
+                created_count += 1
+                created_lead_ids.add(lead.id)
+                assigned_emp_id = lead_data.get("assigned_to")
+                if assigned_emp_id:
+                    asgn = LeadAssignment(
+                        lead_id=lead.id,
+                        assigned_to=assigned_emp_id,
+                        assigned_by=creator_id,
+                        assigned_at=now,
+                        assignment_method="EXCEL_IMPORT",
+                        notes="Assigned during Excel import"
+                    )
+                    db.add(asgn)
 
-    db.commit()
+        db.commit()
+    except (DataError, IntegrityError) as exc:
+        # A value the database rejects must not surface as an empty 500. The
+        # whole upload is one transaction, so rolling back leaves no partial
+        # import behind.
+        db.rollback()
+        logger.exception("Excel import failed while saving leads from '%s'", file.filename)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Import failed because the database rejected one or more rows. "
+                "No leads from this upload were saved. Check the file for very "
+                "long text values (Company/Name/Notes) and try again."
+            )
+        ) from exc
 
     log_audit(
         db=db,
@@ -3459,10 +3487,11 @@ def download_lead_quotation(
     if not doc:
         doc = db.query(Quotation).filter(Quotation.lead_id == lead.id).order_by(desc(Quotation.created_at)).first()
     
-    from services.pdf_service import generate_quotation_pdf
+    from services.pdf_service import generate_quotation_pdf, quotation_filename
     if doc:
         pdf_bytes = generate_quotation_pdf(doc)
         clean_num = (doc.doc_number or f"QT-{doc.id}").replace("/", "-").replace("\\", "-")
+        issuer_source = doc
     else:
         amt = float(lead.quotetask_quotation_amount or 15000.0)
         sub = round(amt / 1.18, 2)
@@ -3489,13 +3518,27 @@ def download_lead_quotation(
         }
         pdf_bytes = generate_quotation_pdf(snapshot)
         clean_num = f"CHN-QT-2627-{lead.id:04d}"
+        issuer_source = snapshot
 
-    filename = f"Quotation_{clean_num}.pdf"
+    if isinstance(issuer_source, dict):
+        issuer_fields = (
+            issuer_source.get("company_id"),
+            issuer_source.get("product_category"),
+            issuer_source.get("logo_ref"),
+        )
+    else:
+        issuer_fields = (
+            getattr(issuer_source, "company_id", None),
+            getattr(issuer_source, "product_category", None),
+            getattr(issuer_source, "logo_ref", None),
+        )
+    filename = quotation_filename(*issuer_fields, f"Quotation_{clean_num}.pdf")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
             "X-Document-Type": "quotation"
         }
     )

@@ -56,6 +56,7 @@ import {
   formatLeadReceivedTime,
   formatLeadReceivedFull
 } from '../../utils/dateUtils';
+import { quotationFilename, readDownloadFilename } from '../../utils/documentFilename';
 
 // ---------------------------------------------------------------------------
 // Trial date helpers. Everything is built from the *local* calendar so "today"
@@ -538,7 +539,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       const link = document.createElement('a');
       link.href = url;
       const cleanNum = (lead.quotetask_quotation_number || `LEAD-${lead.id}`).replace(/[\\/]/g, '-').replace(/[^a-zA-Z0-9-_]/g, '');
-      link.download = type === 'proforma' ? `Proforma_Invoice_${cleanNum}.pdf` : `Quotation_${cleanNum}.pdf`;
+      const fallbackName = type === 'proforma'
+        ? `Proforma_Invoice_${cleanNum}.pdf`
+        : quotationFilename(lead, `Quotation_${cleanNum}.pdf`);
+      link.download = type === 'quotation'
+        ? readDownloadFilename(response.headers, fallbackName)
+        : fallbackName;
       document.body.appendChild(link);
       link.click();
       link.remove();

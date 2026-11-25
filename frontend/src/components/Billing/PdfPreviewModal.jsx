@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, FileText, CheckCircle, ExternalLink, RefreshCw } from 'lucide-react';
 import { getPdfBlob, generateQuotationPdf, generateProformaPdf, generatePoPdf, generateTaxInvoicePdf } from '../../utils/quotationPdf';
+import { quotationFilename, readDownloadFilename } from '../../utils/documentFilename';
 import PingoPopupService from '../../services/pingoPopupService';
 import API from '../../services/api';
 
@@ -19,6 +20,7 @@ export default function DocumentPdfPreviewModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  const [serverFilename, setServerFilename] = useState(null);
 
   useEffect(() => {
     let activeUrl = null;
@@ -28,12 +30,14 @@ export default function DocumentPdfPreviewModal({
       setBlobUrl(null);
       setLoading(false);
       setError(null);
+      setServerFilename(null);
       return;
     }
 
     const loadPdfBlob = async () => {
       setLoading(true);
       setError(null);
+      setServerFilename(null);
 
       const dType = (docData.docType || docData.doc_type || 'quotation').toLowerCase();
       const isPoDoc = dType === 'po' || dType === 'purchase_order';
@@ -59,6 +63,9 @@ export default function DocumentPdfPreviewModal({
           const res = await API.get(endpoint, { responseType: 'blob' });
           if (res.data && res.data.size > 500) {
             fetchedBlob = new Blob([res.data], { type: 'application/pdf' });
+            if (isMounted) {
+              setServerFilename(readDownloadFilename(res.headers, null));
+            }
           }
         } catch (backendErr) {
           console.warn('Backend download endpoint not reachable for preview, generating client-side preview:', backendErr);
@@ -118,7 +125,8 @@ export default function DocumentPdfPreviewModal({
     if (isInvoice) return `Tax_Invoice_${cleanDocNum}.pdf`;
     if (isProforma) return `Proforma_Invoice_${cleanDocNum}.pdf`;
     if (isPO) return `Purchase_Order_${cleanDocNum}.pdf`;
-    return `Quotation_${cleanDocNum}.pdf`;
+    if (serverFilename) return serverFilename;
+    return quotationFilename(docData, `Quotation_${cleanDocNum}.pdf`);
   };
 
   const handleDownload = () => {

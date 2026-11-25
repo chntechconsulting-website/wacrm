@@ -106,6 +106,48 @@ def resolve_issuer_profile(company_id=None, product_category=None, logo_ref=None
     return ISSUER_PROFILES[DEFAULT_ISSUER_ID]
 
 
+# Downloaded quotation filenames start with the company that issued the PDF.
+ISSUER_FILENAME_PREFIXES = {
+    "wahrms": "WAHRMS",
+    "chn-tech": "CHN",
+}
+
+_FILENAME_PREFIX_PATTERN = re.compile(r"^(WAHRMS|CHN)(?=[-_ ]|$)", re.IGNORECASE)
+
+
+def resolve_issuer_filename_prefix(company_id=None, product_category=None, logo_ref=None):
+    """Return the filename prefix matching the document's PDF issuer."""
+    profile = resolve_issuer_profile(
+        company_id=company_id,
+        product_category=product_category,
+        logo_ref=logo_ref,
+    )
+    return ISSUER_FILENAME_PREFIXES[profile["company_id"]]
+
+
+def apply_issuer_filename_prefix(filename, prefix):
+    """Replace a leading CHN/WAHRMS token, or prepend the issuer prefix.
+
+    Everything after the company token is preserved exactly, so the quotation
+    number and the rest of the filename never change.
+    """
+    name = str(filename or "")
+    match = _FILENAME_PREFIX_PATTERN.match(name)
+    if match:
+        return f"{prefix}{name[match.end(1):]}"
+    return f"{prefix}-{name}"
+
+
+def quotation_filename(company_id, product_category, logo_ref, base_filename):
+    """Build a quotation download filename prefixed with its actual issuer."""
+    prefix = resolve_issuer_filename_prefix(
+        company_id=company_id,
+        product_category=product_category,
+        logo_ref=logo_ref,
+    )
+    return apply_issuer_filename_prefix(base_filename, prefix)
+
+
 def _issuer_logo_flowable(profile, max_width=36 * mm, max_height=12 * mm):
     """Build a proportional logo image, degrading to text when unavailable."""
     logo_file = profile.get("logo_file")

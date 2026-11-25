@@ -284,6 +284,33 @@ class TestExcelReInquiryClassification(unittest.TestCase):
         leads = self.db.query(Lead).filter(Lead.phone.in_(["7770000171", "7770000172"])).all()
         self.assertEqual(len(leads), 2, "a re-upload must not duplicate leads")
 
+    def test_long_company_text_is_preserved_without_failing_import(self):
+        """Long free text in the Company column must not cause a 500.
+
+        ``Lead.company`` is VARCHAR(100). Users commonly paste full notes into
+        that column, which previously raised MySQL error 1406 and aborted the
+        entire upload.
+        """
+        long_company = (
+            "Retailer - Madurai - 25 staffs - payroll asked - "
+            "new Tamil Nadu 30rs plan - Mercury installation pending - demo Monday"
+        )
+        self.assertGreater(len(long_company), 100)
+
+        res = upload([
+            ["Long", "Company", "7770000181", "", "", long_company],
+        ])
+        self.assertEqual(res.status_code, 200, res.text)
+        body = res.json()
+        self.assertEqual(body["imported"], 1)
+        self.assertEqual(body["invalid"], 0)
+
+        self._populate()
+        lead = self.db.query(Lead).filter(Lead.phone == "7770000181").first()
+        self.assertIsNotNone(lead)
+        self.assertLessEqual(len(lead.company or ""), 100)
+        self.assertIn(long_company, lead.requirement_notes or "")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
