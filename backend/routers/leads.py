@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 from types import SimpleNamespace
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, status
 from fastapi.responses import StreamingResponse, Response
@@ -19,6 +20,7 @@ from models.user import User
 from models.employee import Employee
 from models.lead import Lead, LeadAssignment, LeadStatusHistory, LeadEnquiry
 from models.excel_import import ExcelImportBatch
+from models.audit_log import AuditLog
 from models.activity import LeadActivity
 from models.customer import Customer
 from models.followup import Followup
@@ -36,7 +38,8 @@ from schemas.lead import (
     LeadEnquiryOut,
     AutoAssignConfigOut,
     AutoAssignConfigUpdate,
-    QuoteTaskQuotationCreateRequest
+    QuoteTaskQuotationCreateRequest,
+    LegacyImportBatchAdoptRequest,
 )
 from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
@@ -1282,6 +1285,23 @@ def _serialize_excel_import_batch(
     }
 
 
+def _parse_import_audit_counts(details: Optional[str]):
+    """Read "imported N new leads and M re-inquiries" from an audit entry."""
+    if not details:
+        return None
+    match = re.search(
+        r"Imported\s+(\d+)\s+new\s+leads?\s+and\s+(\d+)\s+re-?inquir",
+        details,
+        re.IGNORECASE,
+    )
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    match = re.search(r"Imported\s+(\d+)\s+new\s+leads?", details, re.IGNORECASE)
+    if match:
+        return int(match.group(1)), 0
+    return None
+
+
 @router.post("/import/excel")
 @router.post("/import")
 async def import_leads_excel(
@@ -1486,6 +1506,207 @@ def list_excel_import_batches(
             for batch in batches
         ],
     }
+
+
+@router.post("/import/batches/adopt-legacy")
+def adopt_legacy_excel_import_batch(
+    payload: LegacyImportBatchAdoptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("leads", "delete")),
+):
+    """Link leads from a pre-tracking Excel upload to a new batch.
+
+    Imports made before batch tracking existed have no ``import_batch_id``.
+    This endpoint finds the matching audit-log entry, verifies that the exact
+    expected number of Excel leads was created in the requested time window,
+    and tags only those leads with a new ACTIVE batch. It never deletes
+    anything; the normal revoke endpoint performs the deletion afterwards
+    with all of its safety checks.
+    """
+    is_admin = current_user.role.upper() == "ADMIN"
+    can_approve = is_admin or user_has_permission(
+        current_user, "leads", "approve", db
+    )
+    if not can_approve:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only an administrator or a user with lead approval permission "
+                "can adopt a legacy Excel import."
+            ),
+        )
+
+    filename = (payload.filename or "").strip()
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+    if payload.expected_imported < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="expected_imported must be greater than zero",
+        )
+
+    audit_query = db.query(AuditLog).filter(
+        AuditLog.action == "IMPORT_EXCEL"
+    )
+    if payload.audit_log_id is not None:
+        audit_query = audit_query.filter(AuditLog.id == payload.audit_log_id)
+    else:
+        audit_query = audit_query.filter(
+            AuditLog.details.like(f"%{filename}%")
+        )
+    audit = audit_query.order_by(AuditLog.id.desc()).first()
+    if not audit:
+        raise HTTPException(
+            status_code=404,
+            detail="No IMPORT_EXCEL audit entry was found for that file.",
+        )
+    if filename.lower() not in (audit.details or "").lower():
+        raise HTTPException(
+            status_code=400,
+            detail="The audit entry does not belong to the supplied filename.",
+        )
+
+    parsed_counts = _parse_import_audit_counts(audit.details)
+    if not parsed_counts:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not read the imported lead count from the audit entry.",
+        )
+    imported_count, reinquiry_count = parsed_counts
+    if imported_count != payload.expected_imported:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The audit entry says {imported_count} new lead(s), not "
+                f"{payload.expected_imported}. Nothing was changed."
+            ),
+        )
+
+    if payload.created_from or payload.created_to:
+        if not payload.created_from or not payload.created_to:
+            raise HTTPException(
+                status_code=400,
+                detail="created_from and created_to must be supplied together.",
+            )
+        created_from = payload.created_from
+        created_to = payload.created_to
+        if created_from > created_to:
+            raise HTTPException(
+                status_code=400,
+                detail="created_from must be earlier than created_to.",
+            )
+    else:
+        if payload.window_minutes < 1 or payload.window_minutes > 1440:
+            raise HTTPException(
+                status_code=400,
+                detail="window_minutes must be between 1 and 1440.",
+            )
+        # AuditLog.created_at is UTC-naive while Lead.created_at is IST-naive.
+        audit_ist = audit.created_at + timedelta(hours=5, minutes=30)
+        created_from = audit_ist - timedelta(minutes=payload.window_minutes)
+        created_to = audit_ist + timedelta(minutes=2)
+
+    existing_batch = (
+        db.query(ExcelImportBatch)
+        .filter(
+            ExcelImportBatch.filename == filename,
+            ExcelImportBatch.imported_count == imported_count,
+            ExcelImportBatch.status == "ACTIVE",
+        )
+        .first()
+    )
+    if existing_batch:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This import is already tracked as batch "
+                f"#{existing_batch.id}."
+            ),
+        )
+
+    candidates = (
+        db.query(Lead)
+        .filter(
+            Lead.source.in_(["EXCEL", "Excel"]),
+            Lead.import_batch_id.is_(None),
+            Lead.created_at >= created_from,
+            Lead.created_at <= created_to,
+            or_(Lead.is_reinquiry.is_(False), Lead.is_reinquiry.is_(None)),
+        )
+        .order_by(Lead.id.asc())
+        .all()
+    )
+    if len(candidates) != imported_count:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Expected {imported_count} untracked Excel lead(s) between "
+                f"{created_from.isoformat()} and {created_to.isoformat()}, "
+                f"but found {len(candidates)}. Nothing was changed."
+            ),
+        )
+
+    sample = [
+        {
+            "id": lead.id,
+            "name": lead.name,
+            "phone": lead.phone,
+            "created_at": lead.created_at.isoformat() if lead.created_at else None,
+        }
+        for lead in candidates[:5]
+    ]
+    common = {
+        "filename": filename,
+        "audit_log_id": audit.id,
+        "imported": imported_count,
+        "reinquiries": reinquiry_count,
+        "created_from": created_from.isoformat(),
+        "created_to": created_to.isoformat(),
+        "sample": sample,
+    }
+    if payload.dry_run:
+        return {"status": "dry_run", **common}
+
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true to adopt this batch.",
+        )
+
+    batch = ExcelImportBatch(
+        filename=filename,
+        uploaded_by_id=audit.user_id,
+        uploaded_by_username=audit.username,
+        created_at=audit.created_at + timedelta(hours=5, minutes=30),
+        total_rows=imported_count + reinquiry_count,
+        imported_count=imported_count,
+        reinquiry_count=reinquiry_count,
+        duplicate_count=0,
+        invalid_count=0,
+        status="ACTIVE",
+    )
+    db.add(batch)
+    db.flush()
+    for lead in candidates:
+        lead.import_batch_id = batch.id
+    db.commit()
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="IMPORT_EXCEL_BATCH_ADOPTED",
+        entity_type="EXCEL_IMPORT_BATCH",
+        entity_id=str(batch.id),
+        details=(
+            f"Adopted legacy Excel import '{filename}' from audit entry "
+            f"#{audit.id}: tagged {imported_count} lead(s) created between "
+            f"{created_from.isoformat()} and {created_to.isoformat()}. "
+            "No leads were deleted."
+        ),
+    )
+
+    return {"status": "adopted", "batch_id": batch.id, **common}
 
 
 @router.post("/import/batches/{batch_id}/revoke")

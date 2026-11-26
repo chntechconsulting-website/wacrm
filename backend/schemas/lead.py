@@ -289,6 +289,24 @@ class LeadOut(LeadBase):
     class Config:
         from_attributes = True
 
+class LegacyImportBatchAdoptRequest(BaseModel):
+    """Adopt leads from an Excel upload made before batch tracking existed.
+
+    This never deletes anything. It links the exact leads that the audit log
+    says were created by the upload to a new ACTIVE batch, after which the
+    normal revoke endpoint can remove them with all of its safety checks.
+    """
+
+    filename: str
+    audit_log_id: Optional[int] = None
+    expected_imported: int
+    created_from: Optional[datetime] = None
+    created_to: Optional[datetime] = None
+    window_minutes: int = 60
+    dry_run: bool = True
+    confirm: bool = False
+
+
 class AutoAssignConfigBase(BaseModel):
     enabled: bool = True
     waiting_time_minutes: int = 60

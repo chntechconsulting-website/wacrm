@@ -12,7 +12,7 @@ import os
 import sys
 import unittest
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.abspath("backend"))
 
@@ -112,6 +112,14 @@ class TestExcelImportRevoke(unittest.TestCase):
             self.db.commit()
         self.db.query(ExcelImportBatch).filter(
             ExcelImportBatch.filename.like(f"{TEST_FILENAME_PREFIX}%")
+        ).delete(synchronize_session=False)
+        self.db.query(AuditLog).filter(
+            AuditLog.action.in_([
+                "IMPORT_EXCEL",
+                "IMPORT_EXCEL_BATCH_ADOPTED",
+                "IMPORT_EXCEL_REVOKED",
+            ]),
+            AuditLog.details.like(f"%{TEST_FILENAME_PREFIX}%"),
         ).delete(synchronize_session=False)
         self.db.commit()
 
@@ -320,6 +328,82 @@ class TestExcelImportRevoke(unittest.TestCase):
             ).count(),
             1,
         )
+
+    def test_adopt_legacy_import_then_revoke(self):
+        """A pre-tracking upload can be linked to a batch, then revoked."""
+        filename = self._unique_filename("legacy")
+        audit_time = datetime(2026, 11, 20, 5, 0, 0)
+        lead_time = audit_time + timedelta(hours=5, minutes=30)
+
+        audit = AuditLog(
+            user_id=1,
+            username="admin",
+            action="IMPORT_EXCEL",
+            entity_type="LEAD",
+            entity_id=None,
+            details=(
+                f"Imported 2 new leads and 0 re-inquiries from Excel "
+                f"'{filename}'."
+            ),
+            created_at=audit_time,
+        )
+        self.db.add(audit)
+        self.db.commit()
+        self.db.refresh(audit)
+
+        for suffix, phone in [("One", "7770000241"), ("Two", "7770000242")]:
+            self.db.add(Lead(
+                first_name="Legacy",
+                last_name=suffix,
+                name=f"Legacy {suffix}",
+                phone=phone,
+                source="EXCEL",
+                status="ASSIGNED",
+                is_reinquiry=False,
+                reinquiry_count=0,
+                total_enquiries=1,
+                created_at=lead_time,
+            ))
+        self.db.commit()
+
+        payload = {
+            "filename": filename,
+            "audit_log_id": audit.id,
+            "expected_imported": 2,
+            "created_from": lead_time.isoformat(),
+            "created_to": (lead_time + timedelta(minutes=1)).isoformat(),
+        }
+
+        dry = client.post(
+            "/api/leads/import/batches/adopt-legacy",
+            json={**payload, "dry_run": True},
+            headers=AUTH,
+        )
+        self.assertEqual(dry.status_code, 200, dry.text)
+        self.assertEqual(dry.json()["status"], "dry_run")
+        self.assertEqual(dry.json()["imported"], 2)
+
+        adopted = client.post(
+            "/api/leads/import/batches/adopt-legacy",
+            json={**payload, "dry_run": False, "confirm": True},
+            headers=AUTH,
+        )
+        self.assertEqual(adopted.status_code, 200, adopted.text)
+        batch_id = adopted.json()["batch_id"]
+        self.assertIsNotNone(batch_id)
+
+        self._refresh()
+        tagged = self.db.query(Lead).filter(
+            Lead.import_batch_id == batch_id
+        ).all()
+        self.assertEqual(len(tagged), 2)
+
+        revoke = client.post(
+            f"/api/leads/import/batches/{batch_id}/revoke",
+            headers=AUTH,
+        )
+        self.assertEqual(revoke.status_code, 200, revoke.text)
+        self.assertEqual(revoke.json()["deleted_leads"], 2)
 
 
 if __name__ == "__main__":
