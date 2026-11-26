@@ -23,6 +23,13 @@ class ExcelImportBatch(Base):
     filename = Column(String(255), nullable=False)
     uploaded_by_id = Column(Integer, nullable=True, index=True)
     uploaded_by_username = Column(String(100), nullable=True)
+
+    # The authenticated employee who performed the upload. Every lead created
+    # by this batch is owned by this employee; ``uploaded_by_id`` above remains
+    # the login/user id for the existing audit trail.
+    imported_by = Column(Integer, nullable=True, index=True)
+    imported_by_name = Column(String(100), nullable=True)
+
     created_at = Column(DateTime, default=get_ist_now, nullable=False, index=True)
 
     total_rows = Column(Integer, default=0, nullable=False)
@@ -41,3 +48,20 @@ class ExcelImportBatch(Base):
     revoked_activity_count = Column(Integer, default=0, nullable=False)
     revoked_enquiry_count = Column(Integer, default=0, nullable=False)
     revoked_assignment_count = Column(Integer, default=0, nullable=False)
+
+    @property
+    def successful_rows(self) -> int:
+        """Rows that produced a usable lead or a recorded re-inquiry."""
+        return (self.imported_count or 0) + (self.reinquiry_count or 0)
+
+    @property
+    def failed_rows(self) -> int:
+        """Rows rejected as duplicates or invalid, plus any unaccounted rows."""
+        rejected = (self.duplicate_count or 0) + (self.invalid_count or 0)
+        unaccounted = (
+            (self.total_rows or 0)
+            - (self.imported_count or 0)
+            - (self.reinquiry_count or 0)
+            - rejected
+        )
+        return rejected + max(unaccounted, 0)

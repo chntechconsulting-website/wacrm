@@ -200,7 +200,10 @@ def assign_lead_immediately(
     The caller owns the transaction: this helper flushes but never commits.
     Returns the selected employee, or None when assignment did not apply.
     """
-    if lead is None or lead.assigned_to:
+    if lead is None or lead.assigned_to or lead.import_batch_id:
+        # Bulk Excel imports are owned by the importing employee. They are
+        # never eligible for automatic/round-robin assignment, even if a
+        # legacy or corrupted row is missing its owner.
         return None
 
     # Do not use get_or_create_auto_assign_config() here: it commits when the
@@ -295,6 +298,9 @@ def auto_assign_pending_leads(db: Session, override_timeout_minutes: Optional[in
 
     unassigned_leads = db.query(Lead).filter(
         Lead.assigned_to == None,
+        # Excel-imported leads belong to their importer for life. They must
+        # never be auto-assigned, even if an old batch row lost its owner.
+        Lead.import_batch_id == None,
         Lead.created_at <= cutoff,
         ~Lead.status.in_(TERMINAL_STATUSES)
     ).order_by(Lead.created_at.asc()).all()
@@ -315,7 +321,11 @@ def auto_assign_pending_leads(db: Session, override_timeout_minutes: Optional[in
 
     for lead in unassigned_leads:
         # Atomic lock/re-check: ensure lead is still unassigned
-        target_lead = db.query(Lead).filter(Lead.id == lead.id, Lead.assigned_to == None).first()
+        target_lead = db.query(Lead).filter(
+            Lead.id == lead.id,
+            Lead.assigned_to == None,
+            Lead.import_batch_id == None,
+        ).first()
         if not target_lead:
             logger.info(f"Lead #{lead.id} was assigned manually or concurrently. Skipping auto-assignment.")
             continue

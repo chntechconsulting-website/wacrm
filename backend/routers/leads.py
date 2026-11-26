@@ -1263,9 +1263,13 @@ def _serialize_excel_import_batch(
         "id": batch.id,
         "filename": batch.filename,
         "uploaded_by": batch.uploaded_by_username,
+        "imported_by": batch.imported_by,
+        "imported_by_name": batch.imported_by_name,
         "created_at": batch.created_at.isoformat() if batch.created_at else None,
         "created_at_label": format_ist_datetime(batch.created_at),
         "total_rows": batch.total_rows or 0,
+        "successful_rows": batch.successful_rows,
+        "failed_rows": batch.failed_rows,
         "imported": batch.imported_count or 0,
         "reinquiries": batch.reinquiry_count or 0,
         "duplicates": batch.duplicate_count or 0,
@@ -1317,14 +1321,21 @@ async def import_leads_excel(
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an Excel (.xlsx) file.")
 
     contents = await file.read()
-    current_emp = get_employee_for_user(current_user, db)
-    creator_id = current_emp.id if current_emp else None
-    creator_name = current_emp.name if current_emp else current_user.username
 
-    # Assigning a lead to somebody else is a separate privilege (leads:assign).
-    # Without it (e.g. a sales executive) the imported leads belong to the
-    # importer, otherwise a restricted role could hand leads to any employee.
-    can_assign_imports = user_has_permission(current_user, "leads", "assign", db)
+    # Bulk Excel imports are always owned by the authenticated employee who
+    # uploads the file. The identity is resolved from the login token; the
+    # frontend and the spreadsheet can never choose a different owner.
+    importer = get_employee_for_user(current_user, db)
+    if not importer:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Your login is not linked to an employee record, so imported "
+                "leads cannot be assigned. Please contact an administrator."
+            ),
+        )
+    importer_id = importer.id
+    importer_name = importer.name or current_user.username
 
     try:
         results = parse_and_validate_excel_leads(contents, db)
@@ -1357,18 +1368,16 @@ async def import_leads_excel(
             # The parser defaults the source to EXCEL; an explicit Source column is kept.
             if not lead_data.get("source"):
                 lead_data["source"] = "EXCEL"
-            # Users without assignment rights may only import leads for themselves.
-            # This keeps a sales executive from using the importer to assign leads to
-            # arbitrary employees (their view scope is "own" anyway).
-            if not can_assign_imports:
-                lead_data["assigned_to"] = creator_id
-                if creator_id and normalize_lead_status(lead_data.get("status")) in {"", STATUS_NEW}:
-                    lead_data["status"] = "ASSIGNED"
+            # Ignore any "Assigned To" value from the spreadsheet. Re-inquiry
+            # detection must run without an assignee so an existing lead's
+            # owner is never changed by an import; new leads are assigned to
+            # the importer immediately below.
+            lead_data["assigned_to"] = None
             lead, is_reinquiry, enq = ReInquiryService.register_enquiry(
                 db=db,
                 enquiry_data=lead_data,
-                creator_emp_id=creator_id,
-                creator_name=creator_name,
+                creator_emp_id=importer_id,
+                creator_name=importer_name,
                 commit=False,
                 exclude_lead_ids=created_lead_ids,
                 lookup_cache=lookup_cache
@@ -1376,20 +1385,25 @@ async def import_leads_excel(
             if is_reinquiry:
                 reinquiry_count += 1
             else:
+                # The importer is the only valid owner for a new imported lead.
+                # This assignment happens before commit, so no auto-assignment
+                # job or retry can ever see it as unassigned.
+                lead.assigned_to = importer_id
+                lead.assigned_by = importer_id
+                lead.assigned_at = now
+                if normalize_lead_status(lead.status) in {"", STATUS_NEW}:
+                    lead.status = "ASSIGNED"
+                db.add(LeadAssignment(
+                    lead_id=lead.id,
+                    assigned_to=importer_id,
+                    assigned_by=importer_id,
+                    assigned_at=now,
+                    assignment_method="EXCEL_IMPORT",
+                    notes="Assigned to the importing employee during Excel import"
+                ))
                 created_count += 1
                 created_lead_ids.add(lead.id)
                 created_leads.append(lead)
-                assigned_emp_id = lead_data.get("assigned_to")
-                if assigned_emp_id:
-                    asgn = LeadAssignment(
-                        lead_id=lead.id,
-                        assigned_to=assigned_emp_id,
-                        assigned_by=creator_id,
-                        assigned_at=now,
-                        assignment_method="EXCEL_IMPORT",
-                        notes="Assigned during Excel import"
-                    )
-                    db.add(asgn)
 
         # Track this upload as a batch only when it actually created leads.
         # Re-inquiries already existed before the upload and are intentionally
@@ -1399,6 +1413,8 @@ async def import_leads_excel(
                 filename=file.filename,
                 uploaded_by_id=current_user.id,
                 uploaded_by_username=current_user.username,
+                imported_by=importer_id,
+                imported_by_name=importer_name,
                 total_rows=results["total_rows"],
                 imported_count=created_count,
                 reinquiry_count=reinquiry_count,
@@ -1443,6 +1459,8 @@ async def import_leads_excel(
     return {
         "filename": file.filename,
         "batch_id": import_batch.id if import_batch else None,
+        "imported_by": importer_id,
+        "imported_by_name": importer_name,
         "total_rows": results["total_rows"],
         "imported": created_count,
         "reinquiries": reinquiry_count,
@@ -1674,10 +1692,23 @@ def adopt_legacy_excel_import_batch(
             detail="Set confirm=true to adopt this batch.",
         )
 
+    # Best-effort importer identification for the legacy audit entry. Existing
+    # lead assignments are never changed by an adoption.
+    legacy_user = (
+        db.query(User).filter(User.id == audit.user_id).first()
+        if audit.user_id
+        else None
+    )
+    legacy_employee = (
+        get_employee_for_user(legacy_user, db) if legacy_user else None
+    )
+
     batch = ExcelImportBatch(
         filename=filename,
         uploaded_by_id=audit.user_id,
         uploaded_by_username=audit.username,
+        imported_by=legacy_employee.id if legacy_employee else None,
+        imported_by_name=legacy_employee.name if legacy_employee else None,
         created_at=audit.created_at + timedelta(hours=5, minutes=30),
         total_rows=imported_count + reinquiry_count,
         imported_count=imported_count,

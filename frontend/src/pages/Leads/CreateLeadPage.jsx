@@ -1256,8 +1256,9 @@ const CreateLeadPage = () => {
                   <thead>
                     <tr>
                       <th>File</th>
-                      <th>Imported</th>
-                      <th>Re-inquiries</th>
+                      <th>Imported By</th>
+                      <th>Successful</th>
+                      <th>Failed</th>
                       <th>Status</th>
                       <th>Uploaded</th>
                       <th style={{ textAlign: 'right' }}>Action</th>
@@ -1272,13 +1273,37 @@ const CreateLeadPage = () => {
                             <div>
                               <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{batch.filename}</div>
                               <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                                Batch #{batch.id} - {batch.remaining_lead_count} lead(s) remaining
+                                Batch #{batch.id} - {batch.total_rows} total row(s) - {batch.remaining_lead_count} lead(s) remaining
                               </div>
                             </div>
                           </div>
                         </td>
-                        <td>{batch.imported}</td>
-                        <td>{batch.reinquiries}</td>
+                        <td>
+                          <div style={{ fontSize: '0.84rem', fontWeight: 600 }}>
+                            {batch.imported_by_name || 'Not recorded'}
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            {batch.imported_by
+                              ? `Employee #${batch.imported_by}`
+                              : (batch.uploaded_by ? `Login: ${batch.uploaded_by}` : 'Legacy upload')}
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ fontSize: '0.84rem', fontWeight: 600 }}>
+                            {batch.successful_rows ?? ((batch.imported || 0) + (batch.reinquiries || 0))}
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            {batch.imported} new - {batch.reinquiries} re-inquiry
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ fontSize: '0.84rem', fontWeight: 600 }}>
+                            {batch.failed_rows ?? ((batch.duplicates || 0) + (batch.invalid || 0))}
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            {batch.duplicates} duplicate - {batch.invalid} invalid
+                          </div>
+                        </td>
                         <td>
                           <span
                             className="role-badge"

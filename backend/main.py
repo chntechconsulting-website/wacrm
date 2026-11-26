@@ -700,6 +700,50 @@ async def startup_db_client():
             except Exception as ex:
                 print(f"Lead assignments column sync check: {ex}")
 
+            # excel_import_batches table schema sync for importer audit fields.
+            # create_all() does not add columns to an existing table, so these
+            # must be added explicitly for databases created before importer
+            # tracking existed.
+            try:
+                result = conn.execute(
+                    text("SHOW COLUMNS FROM excel_import_batches")
+                )
+                eib_cols = [row[0] for row in result.fetchall()]
+                missing_eib_cols = {
+                    "imported_by": "INT NULL",
+                    "imported_by_name": "VARCHAR(100) NULL",
+                }
+                for col_name, col_type in missing_eib_cols.items():
+                    if col_name not in eib_cols:
+                        conn.execute(text(
+                            f"ALTER TABLE excel_import_batches "
+                            f"ADD COLUMN {col_name} {col_type}"
+                        ))
+                        conn.commit()
+                        print(
+                            "Auto-added missing column "
+                            f"'{col_name}' to 'excel_import_batches'."
+                        )
+                eib_index_result = conn.execute(
+                    text("SHOW INDEX FROM excel_import_batches")
+                )
+                eib_indexes = {
+                    row[2] for row in eib_index_result.fetchall()
+                }
+                if "ix_excel_import_batches_imported_by" not in eib_indexes:
+                    conn.execute(text(
+                        "ALTER TABLE excel_import_batches ADD INDEX "
+                        "ix_excel_import_batches_imported_by (imported_by)"
+                    ))
+                    conn.commit()
+                    print(
+                        "Auto-added missing index "
+                        "'ix_excel_import_batches_imported_by'."
+                    )
+                print("Excel import batches table schema synchronized successfully.")
+            except Exception as ex:
+                print(f"Excel import batches column sync check: {ex}")
+
             # lead_activities table schema sync
             try:
                 result = conn.execute(text("SHOW COLUMNS FROM lead_activities"))
