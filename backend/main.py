@@ -353,6 +353,7 @@ async def startup_db_client():
                     "latest_enquiry_date": "DATETIME NULL",
                     "previous_sources": "VARCHAR(255) NULL",
                     "latest_source": "VARCHAR(50) NULL",
+                    "import_batch_id": "INT NULL",
                     "product_category": "VARCHAR(50) NULL",
                     "product_category_confirmed": "TINYINT(1) DEFAULT 0 NOT NULL",
                     "trial_start_date": "DATE NULL",
@@ -422,6 +423,21 @@ async def startup_db_client():
                         print("Added leads.support_employee_id index.")
                 except Exception as ex:
                     print(f"Leads support_employee_id index check: {ex}")
+                try:
+                    has_import_batch_index = bool(conn.execute(text(
+                        "SELECT COUNT(*) FROM information_schema.statistics "
+                        "WHERE table_schema = DATABASE() "
+                        "AND table_name = 'leads' "
+                        "AND index_name = 'ix_leads_import_batch_id'"
+                    )).scalar())
+                    if not has_import_batch_index:
+                        conn.execute(text(
+                            "ALTER TABLE leads ADD INDEX ix_leads_import_batch_id (import_batch_id)"
+                        ))
+                        conn.commit()
+                        print("Added leads.import_batch_id index.")
+                except Exception as ex:
+                    print(f"Leads import_batch_id index check: {ex}")
                 try:
                     has_cp_lead_index = bool(conn.execute(text(
                         "SELECT COUNT(*) FROM information_schema.statistics "

@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, status
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import or_, desc, asc, func, select, case
+from sqlalchemy import or_, desc, asc, func, select, case, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import DataError, IntegrityError
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -16,7 +17,8 @@ from utils.timezone import get_ist_now, format_ist_datetime, format_ist_date, fo
 from database import get_db
 from models.user import User
 from models.employee import Employee
-from models.lead import Lead, LeadAssignment, LeadStatusHistory
+from models.lead import Lead, LeadAssignment, LeadStatusHistory, LeadEnquiry
+from models.excel_import import ExcelImportBatch
 from models.activity import LeadActivity
 from models.customer import Customer
 from models.followup import Followup
@@ -1187,6 +1189,99 @@ def download_excel_template():
         headers={"Content-Disposition": "attachment; filename=Lead_Import_Template.xlsx"}
     )
 
+# Child tables that are created by the import itself. They are removed together
+# with the batch leads; every other table that references a lead blocks a revoke
+# so real CRM work (follow-ups, calls, quotations, conversions, ...) is never
+# destroyed by undoing an upload.
+IMPORT_REVOKE_ALLOWED_CHILD_TABLES = {
+    "lead_activities",
+    "lead_enquiries",
+    "lead_assignments",
+}
+
+
+def _lead_fk_blockers(db: Session, lead_ids: List[int], allowed_tables: set) -> List[str]:
+    """Return non-empty lead references outside the import-created child tables."""
+    if not lead_ids:
+        return []
+
+    try:
+        inspector = sa_inspect(db.get_bind())
+        table_names = sorted(inspector.get_table_names())
+    except Exception as exc:
+        logger.exception("Could not inspect lead dependencies for import revoke")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Could not verify whether these leads are used by other CRM "
+                "records. Nothing was deleted; please try again."
+            ),
+        ) from exc
+
+    id_list = ",".join(str(int(lead_id)) for lead_id in lead_ids)
+    blockers: List[str] = []
+
+    for table_name in table_names:
+        if table_name in allowed_tables:
+            continue
+        try:
+            foreign_keys = inspector.get_foreign_keys(table_name)
+        except Exception:
+            continue
+
+        checked_columns = set()
+        for foreign_key in foreign_keys:
+            if (foreign_key.get("referred_table") or "").lower() != "leads":
+                continue
+            for column_name in foreign_key.get("constrained_columns") or []:
+                if not column_name or column_name in checked_columns:
+                    continue
+                checked_columns.add(column_name)
+                count = db.execute(
+                    text(
+                        f"SELECT COUNT(*) FROM `{table_name}` "
+                        f"WHERE `{column_name}` IN ({id_list})"
+                    )
+                ).scalar() or 0
+                if count:
+                    blockers.append(f"{table_name}.{column_name} ({count})")
+
+    return blockers
+
+
+def _serialize_excel_import_batch(
+    batch: ExcelImportBatch,
+    remaining_lead_count: int,
+    can_revoke: bool,
+) -> dict:
+    batch_status = (batch.status or "ACTIVE").upper()
+    return {
+        "id": batch.id,
+        "filename": batch.filename,
+        "uploaded_by": batch.uploaded_by_username,
+        "created_at": batch.created_at.isoformat() if batch.created_at else None,
+        "created_at_label": format_ist_datetime(batch.created_at),
+        "total_rows": batch.total_rows or 0,
+        "imported": batch.imported_count or 0,
+        "reinquiries": batch.reinquiry_count or 0,
+        "duplicates": batch.duplicate_count or 0,
+        "invalid": batch.invalid_count or 0,
+        "status": batch_status,
+        "remaining_lead_count": remaining_lead_count,
+        "can_revoke": bool(
+            can_revoke
+            and batch_status == "ACTIVE"
+            and remaining_lead_count > 0
+        ),
+        "revoked_at_label": format_ist_datetime(batch.revoked_at),
+        "revoked_by": batch.revoked_by_username,
+        "revoked_lead_count": batch.revoked_lead_count or 0,
+        "revoked_activity_count": batch.revoked_activity_count or 0,
+        "revoked_enquiry_count": batch.revoked_enquiry_count or 0,
+        "revoked_assignment_count": batch.revoked_assignment_count or 0,
+    }
+
+
 @router.post("/import/excel")
 @router.post("/import")
 async def import_leads_excel(
@@ -1234,6 +1329,8 @@ async def import_leads_excel(
     # matching so that a row can never be classified as a re-inquiry of a row
     # created moments earlier in the same file.
     created_lead_ids = set()
+    created_leads = []
+    import_batch = None
     try:
         for lead_data in valid_leads:
             # The parser defaults the source to EXCEL; an explicit Source column is kept.
@@ -1260,6 +1357,7 @@ async def import_leads_excel(
             else:
                 created_count += 1
                 created_lead_ids.add(lead.id)
+                created_leads.append(lead)
                 assigned_emp_id = lead_data.get("assigned_to")
                 if assigned_emp_id:
                     asgn = LeadAssignment(
@@ -1271,6 +1369,25 @@ async def import_leads_excel(
                         notes="Assigned during Excel import"
                     )
                     db.add(asgn)
+
+        # Track this upload as a batch only when it actually created leads.
+        # Re-inquiries already existed before the upload and are intentionally
+        # not tagged, so a revoke can never delete them.
+        if created_leads:
+            import_batch = ExcelImportBatch(
+                filename=file.filename,
+                uploaded_by_id=current_user.id,
+                uploaded_by_username=current_user.username,
+                total_rows=results["total_rows"],
+                imported_count=created_count,
+                reinquiry_count=reinquiry_count,
+                duplicate_count=results["duplicates"],
+                invalid_count=results["invalid"],
+            )
+            db.add(import_batch)
+            db.flush()
+            for created_lead in created_leads:
+                created_lead.import_batch_id = import_batch.id
 
         db.commit()
     except (DataError, IntegrityError) as exc:
@@ -1288,6 +1405,7 @@ async def import_leads_excel(
             )
         ) from exc
 
+    batch_suffix = f" Batch #{import_batch.id}." if import_batch else ""
     log_audit(
         db=db,
         user_id=current_user.id,
@@ -1295,11 +1413,15 @@ async def import_leads_excel(
         action="IMPORT_EXCEL",
         entity_type="LEAD",
         entity_id=None,
-        details=f"Imported {created_count} new leads and {reinquiry_count} re-inquiries from Excel '{file.filename}'."
+        details=(
+            f"Imported {created_count} new leads and {reinquiry_count} "
+            f"re-inquiries from Excel '{file.filename}'.{batch_suffix}"
+        )
     )
 
     return {
         "filename": file.filename,
+        "batch_id": import_batch.id if import_batch else None,
         "total_rows": results["total_rows"],
         "imported": created_count,
         "reinquiries": reinquiry_count,
@@ -1316,6 +1438,248 @@ def download_import_errors(invalid_rows: List[dict]):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=Import_Errors.xlsx"}
     )
+
+
+@router.get("/import/batches")
+def list_excel_import_batches(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("leads", "view"))
+):
+    """Recent Excel/CSV import batches with live remaining-lead counts."""
+    batches = (
+        db.query(ExcelImportBatch)
+        .order_by(
+            ExcelImportBatch.created_at.desc(),
+            ExcelImportBatch.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+    batch_ids = [batch.id for batch in batches]
+    remaining_counts = {}
+    if batch_ids:
+        remaining_counts = dict(
+            db.query(Lead.import_batch_id, func.count(Lead.id))
+            .filter(Lead.import_batch_id.in_(batch_ids))
+            .group_by(Lead.import_batch_id)
+            .all()
+        )
+
+    can_revoke = (
+        current_user.role.upper() == "ADMIN"
+        or (
+            user_has_permission(current_user, "leads", "delete", db)
+            and user_has_permission(current_user, "leads", "approve", db)
+        )
+    )
+
+    return {
+        "can_revoke": bool(can_revoke),
+        "batches": [
+            _serialize_excel_import_batch(
+                batch,
+                remaining_counts.get(batch.id, 0),
+                can_revoke,
+            )
+            for batch in batches
+        ],
+    }
+
+
+@router.post("/import/batches/{batch_id}/revoke")
+def revoke_excel_import_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("leads", "delete"))
+):
+    """Permanently undo one Excel/CSV import batch.
+
+    Only leads tagged with this batch id are removed. Re-inquiries, older
+    imports and every other lead source are untouched. The revoke is blocked
+    when a batch lead has since been converted, quoted, called, followed up or
+    otherwise used by another CRM module, so real work is never destroyed.
+    """
+    is_admin = current_user.role.upper() == "ADMIN"
+    can_approve = is_admin or user_has_permission(
+        current_user, "leads", "approve", db
+    )
+    if not can_approve:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only an administrator or a user with lead approval permission "
+                "can revoke an Excel import batch."
+            ),
+        )
+
+    batch = (
+        db.query(ExcelImportBatch)
+        .filter(ExcelImportBatch.id == batch_id)
+        .with_for_update()
+        .first()
+    )
+    if not batch:
+        raise HTTPException(status_code=404, detail="Excel import batch not found")
+
+    batch_status = (batch.status or "ACTIVE").upper()
+    if batch_status == "REVOKED":
+        raise HTTPException(
+            status_code=400,
+            detail="This Excel import batch has already been revoked.",
+        )
+
+    lead_ids = [
+        row[0]
+        for row in (
+            db.query(Lead.id)
+            .filter(Lead.import_batch_id == batch.id)
+            .order_by(Lead.id.asc())
+            .all()
+        )
+    ]
+    if not lead_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No leads from this import batch remain, so there is nothing "
+                "to revoke."
+            ),
+        )
+
+    worked_lead_count = (
+        db.query(Lead)
+        .filter(
+            Lead.import_batch_id == batch.id,
+            or_(
+                Lead.is_reinquiry.is_(True),
+                Lead.reinquiry_count > 0,
+                Lead.total_enquiries > 1,
+                Lead.support_employee_id.isnot(None),
+                Lead.trial_support_employee_id.isnot(None),
+            ),
+        )
+        .count()
+    )
+    if worked_lead_count:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{worked_lead_count} lead(s) in this batch have since been "
+                "worked on (re-inquiry, trial or Support ownership). The batch "
+                "cannot be revoked without deleting that later work."
+            ),
+        )
+
+    blockers = _lead_fk_blockers(
+        db,
+        lead_ids,
+        IMPORT_REVOKE_ALLOWED_CHILD_TABLES,
+    )
+    if blockers:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This import batch cannot be revoked because its leads are "
+                "used by other CRM records: "
+                + ", ".join(blockers)
+                + ". Remove or reassign those records first."
+            ),
+        )
+
+    batch_filename = batch.filename
+    batch_uploaded_by = batch.uploaded_by_username
+
+    try:
+        deleted_activities = (
+            db.query(LeadActivity)
+            .filter(LeadActivity.lead_id.in_(lead_ids))
+            .delete(synchronize_session=False)
+        )
+        deleted_enquiries = (
+            db.query(LeadEnquiry)
+            .filter(LeadEnquiry.lead_id.in_(lead_ids))
+            .delete(synchronize_session=False)
+        )
+        deleted_assignments = (
+            db.query(LeadAssignment)
+            .filter(LeadAssignment.lead_id.in_(lead_ids))
+            .delete(synchronize_session=False)
+        )
+        deleted_leads = (
+            db.query(Lead)
+            .filter(
+                Lead.id.in_(lead_ids),
+                Lead.import_batch_id == batch.id,
+            )
+            .delete(synchronize_session=False)
+        )
+
+        if deleted_leads != len(lead_ids):
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "The import batch changed while it was being revoked. "
+                    "Nothing was deleted; refresh the history and try again."
+                ),
+            )
+
+        batch.status = "REVOKED"
+        batch.revoked_at = get_ist_now()
+        batch.revoked_by_id = current_user.id
+        batch.revoked_by_username = current_user.username
+        batch.revoked_lead_count = deleted_leads
+        batch.revoked_activity_count = deleted_activities
+        batch.revoked_enquiry_count = deleted_enquiries
+        batch.revoked_assignment_count = deleted_assignments
+
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception(
+            "Excel import revoke failed for batch %s", batch_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Revoke failed because one or more batch leads are still "
+                "referenced by another CRM record. Nothing was deleted."
+            ),
+        ) from exc
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="IMPORT_EXCEL_REVOKED",
+        entity_type="EXCEL_IMPORT_BATCH",
+        entity_id=str(batch.id),
+        details=(
+            f"Revoked Excel import batch #{batch.id} '{batch_filename}' "
+            f"(uploaded by {batch_uploaded_by or 'unknown'}): deleted "
+            f"{deleted_leads} leads, {deleted_activities} lead activities, "
+            f"{deleted_enquiries} enquiries and {deleted_assignments} "
+            "assignments. Re-inquiries and all other lead sources were "
+            "preserved."
+        ),
+    )
+
+    return {
+        "status": "revoked",
+        "batch_id": batch.id,
+        "filename": batch_filename,
+        "deleted_leads": deleted_leads,
+        "deleted_activities": deleted_activities,
+        "deleted_enquiries": deleted_enquiries,
+        "deleted_assignments": deleted_assignments,
+        "message": (
+            f"Excel import '{batch_filename}' was revoked. "
+            f"{deleted_leads} lead(s) deleted; other sources are unchanged."
+        ),
+    }
+
 
 @router.post("", response_model=LeadOut, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=LeadOut, status_code=status.HTTP_201_CREATED)

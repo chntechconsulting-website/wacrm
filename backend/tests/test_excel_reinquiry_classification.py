@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 import main
 from database import SessionLocal
 from models.customer import Customer
+from models.excel_import import ExcelImportBatch
 from models.lead import Lead, LeadEnquiry
 from services.auth import create_access_token
 from services.reinquiry_service import ReInquiryService
@@ -84,6 +85,12 @@ class TestExcelReInquiryClassification(unittest.TestCase):
                 customer.email and customer.email.lower().endswith(TEST_EMAIL_DOMAIN)
             ):
                 self.db.delete(customer)
+        self.db.commit()
+        # Batch history rows created by these uploads must not leak into the
+        # live Import History list once their test leads are removed.
+        self.db.query(ExcelImportBatch).filter(
+            ExcelImportBatch.filename == "lead_import_test.xlsx"
+        ).delete(synchronize_session=False)
         self.db.commit()
 
     def _make_existing_lead(self, phone, **kwargs):

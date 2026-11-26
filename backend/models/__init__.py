@@ -2,6 +2,7 @@ from database import Base
 from models.user import User
 from models.employee import Employee
 from models.lead import Lead, LeadAssignment, LeadStatusHistory, LeadEnquiry
+from models.excel_import import ExcelImportBatch
 from models.activity import LeadActivity
 from models.customer import Customer
 from models.followup import Followup
@@ -67,6 +68,7 @@ __all__ = [
     "LeadEnquiry",
     "LeadAssignment",
     "LeadStatusHistory",
+    "ExcelImportBatch",
     "LeadActivity",
     "Customer",
     "Followup",

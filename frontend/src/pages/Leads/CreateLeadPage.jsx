@@ -14,7 +14,10 @@ import {
   FileSpreadsheet,
   CheckCircle,
   Upload,
-  X
+  X,
+  History,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 
 const STATUS_OPTIONS = [
@@ -210,6 +213,11 @@ const CreateLeadPage = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewData, setPreviewData] = useState([]);
   const [importSummary, setImportSummary] = useState(null);
+  const [importBatches, setImportBatches] = useState([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchesError, setBatchesError] = useState('');
+  const [revokeTarget, setRevokeTarget] = useState(null);
+  const [revokingBatchId, setRevokingBatchId] = useState(null);
 
   // The creator is the default Sales owner of a manually created lead. The
   // default is applied once per logged-in employee so a deliberate reassignment
@@ -390,6 +398,46 @@ const CreateLeadPage = () => {
     }
   };
 
+  // EXCEL IMPORT HISTORY / REVOKE
+  const loadImportBatches = async () => {
+    setBatchesLoading(true);
+    setBatchesError('');
+    try {
+      const res = await API.get('/leads/import/batches', { params: { limit: 20 } });
+      setImportBatches(Array.isArray(res.data?.batches) ? res.data.batches : []);
+    } catch (err) {
+      console.error('Failed to load Excel import history:', err);
+      setBatchesError(formatApiError(err, 'Failed to load Excel import history.'));
+    } finally {
+      setBatchesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'import') {
+      loadImportBatches();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  const handleRevokeImport = async (batch) => {
+    if (!batch) return;
+    setRevokingBatchId(batch.id);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await API.post(`/leads/import/batches/${batch.id}/revoke`);
+      setRevokeTarget(null);
+      setSuccess(res.data?.message || `Excel import '${batch.filename}' was revoked.`);
+      await loadImportBatches();
+    } catch (err) {
+      setRevokeTarget(null);
+      setError(formatApiError(err, 'Failed to revoke the Excel import batch.'));
+    } finally {
+      setRevokingBatchId(null);
+    }
+  };
+
   // SUBMIT IMPORT
   const handleImportSubmit = async () => {
     if (!selectedFile) {
@@ -417,6 +465,7 @@ const CreateLeadPage = () => {
         failed: res.data.invalid ?? 0,
         invalid_rows: res.data.invalid_rows || []
       });
+      loadImportBatches();
     } catch (err) {
       const timedOut = err?.code === 'ECONNABORTED'
         || /timeout/i.test(err?.message || '')
@@ -1157,6 +1206,174 @@ const CreateLeadPage = () => {
               )}
             </div>
           )}
+
+          {/* Excel Import History / Revoke */}
+          <div className="content-card" style={{ marginTop: '24px', padding: '24px', borderRadius: '18px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <div style={{ width: '38px', height: '38px', borderRadius: '10px', backgroundColor: 'rgba(37, 99, 235, 0.1)', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <History size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>Excel Import History</h3>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '3px', marginBottom: 0 }}>
+                    Revoke an upload to delete only the leads created by that batch. Other imports and lead sources are never touched.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={loadImportBatches}
+                className="btn btn-secondary"
+                disabled={batchesLoading}
+                style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '0.82rem' }}
+              >
+                <RefreshCw size={14} />
+                <span>{batchesLoading ? 'Loading...' : 'Refresh'}</span>
+              </button>
+            </div>
+
+            {batchesError && (
+              <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.08)', color: '#dc2626', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '8px', padding: '10px 12px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.84rem' }}>
+                <AlertCircle size={16} />
+                <span>{batchesError}</span>
+              </div>
+            )}
+
+            {batchesLoading && importBatches.length === 0 ? (
+              <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', margin: 0 }}>Loading import history...</p>
+            ) : importBatches.length === 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '16px', backgroundColor: 'var(--bg-dark, #f8fafc)', borderRadius: '10px', border: '1px dashed var(--border-color)' }}>
+                <FileSpreadsheet size={22} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.88rem' }}>No tracked Excel imports yet</div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Every new upload will appear here with a revoke option.</div>
+                </div>
+              </div>
+            ) : (
+              <div className="table-responsive">
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th>Imported</th>
+                      <th>Re-inquiries</th>
+                      <th>Status</th>
+                      <th>Uploaded</th>
+                      <th style={{ textAlign: 'right' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importBatches.map(batch => (
+                      <tr key={batch.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <FileSpreadsheet size={16} style={{ color: '#16a34a', flexShrink: 0 }} />
+                            <div>
+                              <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{batch.filename}</div>
+                              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                Batch #{batch.id} - {batch.remaining_lead_count} lead(s) remaining
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{batch.imported}</td>
+                        <td>{batch.reinquiries}</td>
+                        <td>
+                          <span
+                            className="role-badge"
+                            style={batch.status === 'ACTIVE'
+                              ? { backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }
+                              : { backgroundColor: 'rgba(100, 116, 139, 0.1)', color: '#64748b', border: '1px solid rgba(100, 116, 139, 0.3)' }}
+                          >
+                            {batch.status}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ fontSize: '0.84rem' }}>{batch.created_at_label || '-'}</div>
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>by {batch.uploaded_by || 'unknown'}</div>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {batch.status === 'ACTIVE' ? (
+                            batch.can_revoke ? (
+                              <button
+                                type="button"
+                                onClick={() => setRevokeTarget(batch)}
+                                disabled={revokingBatchId === batch.id}
+                                className="btn btn-outline"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#dc2626', borderColor: 'rgba(220, 38, 38, 0.4)', padding: '6px 12px', fontSize: '0.8rem' }}
+                              >
+                                <Trash2 size={14} />
+                                <span>{revokingBatchId === batch.id ? 'Revoking...' : 'Revoke'}</span>
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                {batch.remaining_lead_count === 0 ? 'No leads left' : 'Admin only'}
+                              </span>
+                            )
+                          ) : (
+                            <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                              <div>Revoked {batch.revoked_at_label || ''}</div>
+                              <div>{batch.revoked_lead_count} lead(s) removed</div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {revokeTarget && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000 }}>
+          <div className="content-card" style={{ width: '100%', maxWidth: '480px', padding: '28px', borderRadius: '18px' }}>
+            <div style={{ width: '48px', height: '48px', borderRadius: '12px', backgroundColor: 'rgba(220, 38, 38, 0.1)', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
+              <Trash2 size={24} />
+            </div>
+            <h3 style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '8px' }}>
+              Revoke this Excel import?
+            </h3>
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: '10px' }}>
+              <strong>{revokeTarget.filename}</strong> will be permanently revoked. This deletes
+              <strong> {revokeTarget.remaining_lead_count} lead(s)</strong> created by this batch, together with their import-generated activities, enquiries and assignments.
+            </p>
+            <p style={{ fontSize: '0.82rem', color: '#b45309', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '8px', padding: '10px 12px', marginBottom: '22px' }}>
+              Leads from other Excel imports, re-inquiries and every other lead source will not be affected. This action cannot be undone.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setRevokeTarget(null)}
+                disabled={revokingBatchId === revokeTarget.id}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => handleRevokeImport(revokeTarget)}
+                disabled={revokingBatchId === revokeTarget.id}
+                style={{ backgroundColor: '#dc2626', borderColor: '#dc2626', display: 'flex', alignItems: 'center', gap: '7px' }}
+              >
+                {revokingBatchId === revokeTarget.id ? (
+                  <>
+                    <div className="spinner-sm" />
+                    <span>Revoking...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={15} />
+                    <span>Revoke Import</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

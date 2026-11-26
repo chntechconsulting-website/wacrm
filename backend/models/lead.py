@@ -66,6 +66,18 @@ class Lead(Base):
     landing_page = Column(String(255), nullable=True)
 
     source = Column(String(50), index=True, default="Manual", nullable=False)  # META, EXCEL, MANUAL, WEBSITE, REFERRAL
+
+    # The Excel/CSV bulk-import batch that created this lead. Null for every
+    # lead created through another source. It is intentionally independent of
+    # ``source`` so a revoke can target exactly one upload even when the
+    # spreadsheet supplied an explicit Source column.
+    import_batch_id = Column(
+        Integer,
+        ForeignKey("excel_import_batches.id"),
+        nullable=True,
+        index=True,
+    )
+
     status = Column(String(50), index=True, default="NEW LEAD", nullable=False)     # NEW LEAD, ASSIGNED, CONTACTED, INTERESTED, FOLLOW_UP, QUALIFIED, TRIAL, WON, CONVERTED_TO_SUPPORT, CONVERTED, NOT_INTERESTED, LOST
     campaign_name = Column(String(100), nullable=True)
     rating = Column(String(50), default="Warm", nullable=True)                  # Hot, Warm, Cold
