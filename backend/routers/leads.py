@@ -154,6 +154,23 @@ def is_active_sales_manager(emp: Optional[Employee], db: Session) -> bool:
     return dept in ("", "SALES", "SALE")
 
 
+def is_active_sales_employee(emp: Optional[Employee], db: Session) -> bool:
+    """Bulk assignment targets may be any active Sales employee.
+
+    Bulk assignment distributes a batch across the Sales team, so both Sales
+    Managers and Sales Executives are valid owners. Support, Finance, Admin
+    and inactive employees are still rejected.
+    """
+    if not emp:
+        return False
+    if normalize_role(emp.role) not in (ROLE_SALES_MANAGER, ROLE_SALES_EXECUTIVE):
+        return False
+    if not _employee_user_is_active(emp, db):
+        return False
+    dept = (emp.department or "").strip().upper()
+    return dept in ("", "SALES", "SALE")
+
+
 def is_active_support_executive(emp: Optional[Employee], db: Session) -> bool:
     """Support assignment targets must be active Support Executives.
 
@@ -2631,6 +2648,39 @@ def get_sales_managers(
     return result
 
 
+@router.get("/assignees")
+def get_lead_assignees(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Return active Sales employees available for bulk lead assignment.
+
+    The bulk-assignment modal distributes a batch across the Sales team, so
+    Sales Managers and Sales Executives are both valid owners. Support,
+    Finance, Admin and inactive employees are never returned.
+    """
+    employees = (
+        db.query(Employee)
+        .filter(Employee.status == "ACTIVE")
+        .order_by(Employee.name.asc())
+        .all()
+    )
+
+    result = []
+    for emp in employees:
+        if not is_active_sales_employee(emp, db):
+            continue
+        result.append({
+            "id": emp.id,
+            "name": emp.name,
+            "role": emp.role,
+            "department": emp.department,
+            "manager_id": emp.manager_id,
+            "status": emp.status
+        })
+    return result
+
+
 @router.get("/trial/support-options")
 def get_trial_support_options(
     db: Session = Depends(get_db),
@@ -3449,7 +3499,7 @@ def bulk_assign_leads(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("leads", "assign"))
 ):
-    """Assign several leads to one active Sales Manager in one transaction.
+    """Assign several leads to one active Sales employee in one transaction.
 
     The route is declared before ``/{lead_id}/assign`` so the literal
     ``/bulk/assign`` path is never captured as a lead id. Validation is
@@ -3465,13 +3515,13 @@ def bulk_assign_leads(
     target_emp = db.query(Employee).filter(Employee.id == assign_req.assigned_to).first()
     if not target_emp:
         raise HTTPException(status_code=404, detail="Target employee not found")
-    if not is_active_sales_manager(target_emp, db):
+    if not is_active_sales_employee(target_emp, db):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Manual Sales assignment allows only active Sales Managers. "
-                "Sales Executives, Support users, Managers/Admins and inactive "
-                "employees are not eligible."
+                "Bulk assignment allows only active Sales Managers and Sales "
+                "Executives. Support, Finance, Admin and inactive employees "
+                "are not eligible."
             )
         )
 

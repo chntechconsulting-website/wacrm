@@ -209,6 +209,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const canAssignSupport = ['ADMIN', 'SUPPORT_MANAGER'].includes(normalizedRole);
   const [leads, setLeads] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [bulkAssignees, setBulkAssignees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1); // 1-based page number (server-side pagination)
@@ -768,6 +769,17 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
     }
   };
 
+  // Bulk assignment can target any active Sales employee, not only managers.
+  // Keep this list separate from the manager-only single-assignment lookup.
+  const fetchBulkAssignees = async () => {
+    try {
+      const res = await API.get('/leads/assignees');
+      setBulkAssignees(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // Refresh after a lead was created or imported. New records sort newest-first,
   // so jump back to page 1 while still issuing exactly one list request.
   const refreshAfterCreate = () => {
@@ -783,6 +795,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   // filters, so they must not be refetched on every filter change.
   useEffect(() => {
     fetchEmployees();
+    fetchBulkAssignees();
   }, []);
 
   useEffect(() => {
@@ -1159,9 +1172,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
 
       const assignedIds = res.data?.lead_ids || selectedLeadIds;
       const assignedIdSet = new Set(assignedIds);
-      const assignedEmployee = employees.find(
-        emp => String(emp.id) === String(bulkAssigneeId)
-      );
+      const assignedEmployee =
+        bulkAssignees.find(emp => String(emp.id) === String(bulkAssigneeId)) ||
+        employees.find(emp => String(emp.id) === String(bulkAssigneeId));
       const updates = {
         assigned_to: parseInt(bulkAssigneeId, 10),
         assigned_employee_name:
@@ -2144,6 +2157,10 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const someVisibleLeadsSelected = !allVisibleLeadsSelected
     && leads.some(lead => selectedLeadIdSet.has(lead.id));
   const leadsTableColumnCount = canAssignLead ? 11 : 10;
+
+  // /leads/assignees includes Sales Executives. Fall back to the manager-only
+  // list until that lookup finishes (or if it is unavailable).
+  const bulkAssigneeChoices = bulkAssignees.length > 0 ? bulkAssignees : employees;
 
   // Support assignment / reassignment projections for the conversion modal.
   const supportCurrentOwnerId =
@@ -5304,12 +5321,12 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                   style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-color)' }}
                 >
                   <option value="">Select employee...</option>
-                  {employees.map(emp => (
+                  {bulkAssigneeChoices.map(emp => (
                     <option key={emp.id} value={emp.id}>{emp.name} ({emp.role})</option>
                   ))}
                 </select>
                 <small style={{ color: '#64748b', fontSize: '0.74rem', marginTop: '4px', display: 'block' }}>
-                  Only active Sales Managers are eligible. Sales Executives, Support users and inactive employees are excluded.
+                  Only active Sales employees are eligible. Sales Managers and Sales Executives are included; Support, Finance and inactive employees are not.
                 </small>
               </div>
 

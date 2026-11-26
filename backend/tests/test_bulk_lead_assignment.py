@@ -1,10 +1,11 @@
 """Bulk lead assignment regression coverage.
 
 Admin and Manager users can select several leads in the Leads table and assign
-them to one active Sales Manager in a single action. The bulk endpoint must
-behave like repeated manual assignment: every lead receives a MANUAL assignment
-record and an activity entry, initial NEW statuses move to ASSIGNED, and an
-invalid target or missing lead rejects the whole batch without partial writes.
+them to one active Sales employee (Sales Manager or Sales Executive) in a
+single action. The bulk endpoint must behave like repeated manual assignment:
+every lead receives a MANUAL assignment record and an activity entry, initial
+NEW statuses move to ASSIGNED, and an invalid target or missing lead rejects
+the whole batch without partial writes.
 
 Isolated in-memory SQLite only. No live CRM record is read or written.
 
@@ -36,7 +37,7 @@ from models.excel_import import ExcelImportBatch
 from models.lead import Lead, LeadAssignment
 from models.user import User
 from routers import leads as leads_router_module
-from routers.leads import bulk_assign_leads
+from routers.leads import bulk_assign_leads, get_lead_assignees
 from schemas.lead import LeadBulkAssignRequest
 from services.auth import get_current_user
 
@@ -69,6 +70,15 @@ class BulkLeadAssignmentTests(unittest.TestCase):
             "SALES_EXECUTIVE",
             "SALES",
             manager_emp=self.manager_emp,
+        )
+        self.support_user, self.support_emp = self._make_person(
+            "bulk_support_exec", "SUPPORT_EXECUTIVE", "SUPPORT"
+        )
+        self.inactive_exec_user, self.inactive_exec_emp = self._make_person(
+            "bulk_inactive_exec",
+            "SALES_EXECUTIVE",
+            "SALES",
+            status="INACTIVE",
         )
 
     def tearDown(self):
@@ -244,6 +254,40 @@ class BulkLeadAssignmentTests(unittest.TestCase):
                 assignments[0].assigned_by, self.manager_emp.id
             )
 
+    def test_sales_executive_can_be_a_bulk_assignment_target(self):
+        first = self._make_lead()
+        second = self._make_lead(status="CONTACTED")
+
+        result = self._assign(
+            self.manager_user, [first.id, second.id], self.exec_emp.id
+        )
+
+        self.assertEqual(result["assigned_count"], 2)
+        self.assertEqual(result["assigned_to"], self.exec_emp.id)
+        self.assertEqual(
+            result["assigned_employee_name"], self.exec_emp.name
+        )
+
+        self.db.expire_all()
+        for lead_id in (first.id, second.id):
+            lead = self.db.query(Lead).filter(Lead.id == lead_id).one()
+            self.assertEqual(lead.assigned_to, self.exec_emp.id)
+            assignments = self._assignments(lead_id)
+            self.assertEqual(len(assignments), 1)
+            self.assertEqual(assignments[0].assigned_to, self.exec_emp.id)
+            self.assertEqual(assignments[0].assigned_by, self.manager_emp.id)
+
+    def test_assignee_lookup_returns_all_active_sales_employees(self):
+        rows = get_lead_assignees(db=self.db, current_user=self.admin_user)
+        ids = {row["id"] for row in rows}
+
+        self.assertIn(self.manager_emp.id, ids)
+        self.assertIn(self.other_manager_emp.id, ids)
+        self.assertIn(self.exec_emp.id, ids)
+        self.assertNotIn(self.admin_emp.id, ids)
+        self.assertNotIn(self.support_emp.id, ids)
+        self.assertNotIn(self.inactive_exec_emp.id, ids)
+
     def test_imported_lead_can_be_reassigned_by_admin_or_manager(self):
         batch = ExcelImportBatch(
             filename="bulk-assignment-import.xlsx",
@@ -290,7 +334,7 @@ class BulkLeadAssignmentTests(unittest.TestCase):
         lead = self._make_lead()
 
         with self.assertRaises(HTTPException) as context:
-            self._assign(self.admin_user, [lead.id], self.exec_emp.id)
+            self._assign(self.admin_user, [lead.id], self.support_emp.id)
 
         self.assertEqual(context.exception.status_code, 400)
         self.db.refresh(lead)
@@ -326,9 +370,14 @@ class BulkLeadAssignmentTests(unittest.TestCase):
         ]
         self.assertIn("/leads/bulk/assign", paths)
         self.assertIn("/leads/{lead_id}/assign", paths)
+        self.assertIn("/leads/assignees", paths)
         self.assertLess(
             paths.index("/leads/bulk/assign"),
             paths.index("/leads/{lead_id}/assign"),
+        )
+        self.assertLess(
+            paths.index("/leads/assignees"),
+            paths.index("/leads/{lead_id}"),
         )
 
     def test_http_route_assigns_for_admin_and_forbids_sales_executive(self):
@@ -350,6 +399,15 @@ class BulkLeadAssignmentTests(unittest.TestCase):
 
         self.db.refresh(lead)
         self.assertEqual(lead.assigned_to, self.other_manager_emp.id)
+
+        # The dropdown lookup must expose Sales Executives as well as Managers,
+        # and must be matched before the dynamic /leads/{lead_id} route.
+        assignees = client.get("/api/leads/assignees")
+        self.assertEqual(assignees.status_code, 200, assignees.text)
+        assignee_ids = {row["id"] for row in assignees.json()}
+        self.assertIn(self.manager_emp.id, assignee_ids)
+        self.assertIn(self.exec_emp.id, assignee_ids)
+        self.assertNotIn(self.support_emp.id, assignee_ids)
 
         # A Sales Executive has no leads:assign permission, so the same route
         # must be rejected before any lead is touched.
