@@ -31,6 +31,7 @@ from schemas.lead import (
     LeadUpdate,
     LeadOut,
     LeadAssignRequest,
+    LeadBulkAssignRequest,
     LeadStatusRequest,
     LeadNoteRequest,
     LeadActivityOut,
@@ -3441,6 +3442,110 @@ def update_lead(
         lead._channel_partner_sync_message = result.get("message")
 
     return build_lead_out(lead, current_user, db)
+
+@router.put("/bulk/assign")
+def bulk_assign_leads(
+    assign_req: LeadBulkAssignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("leads", "assign"))
+):
+    """Assign several leads to one active Sales Manager in one transaction.
+
+    The route is declared before ``/{lead_id}/assign`` so the literal
+    ``/bulk/assign`` path is never captured as a lead id. Validation is
+    all-or-nothing: if any selected lead is missing, nothing is changed.
+    """
+    lead_ids = list(dict.fromkeys(assign_req.lead_ids))
+    if not lead_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select at least one lead to assign."
+        )
+
+    target_emp = db.query(Employee).filter(Employee.id == assign_req.assigned_to).first()
+    if not target_emp:
+        raise HTTPException(status_code=404, detail="Target employee not found")
+    if not is_active_sales_manager(target_emp, db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Manual Sales assignment allows only active Sales Managers. "
+                "Sales Executives, Support users, Managers/Admins and inactive "
+                "employees are not eligible."
+            )
+        )
+
+    leads = (
+        db.query(Lead)
+        .filter(Lead.id.in_(lead_ids))
+        .order_by(Lead.id.asc())
+        .all()
+    )
+    found_ids = {lead.id for lead in leads}
+    missing_ids = [lead_id for lead_id in lead_ids if lead_id not in found_ids]
+    if missing_ids:
+        preview = ", ".join(str(lead_id) for lead_id in missing_ids[:20])
+        suffix = "..." if len(missing_ids) > 20 else ""
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Lead(s) not found: {preview}{suffix}. "
+                "No leads were assigned."
+            )
+        )
+
+    current_emp = get_employee_for_user(current_user, db)
+    assigner_id = current_emp.id if current_emp else None
+    assigner_name = current_emp.name if current_emp else current_user.username
+    now = datetime.utcnow()
+
+    for lead in leads:
+        prev_emp_name = lead.assigned_employee.name if lead.assigned_employee else "Unassigned"
+        lead.assigned_to = target_emp.id
+        lead.assigned_by = assigner_id
+        lead.assigned_at = now
+
+        if normalize_lead_status(lead.status) == STATUS_NEW:
+            lead.status = "ASSIGNED"
+
+        db.add(LeadAssignment(
+            lead_id=lead.id,
+            assigned_to=target_emp.id,
+            assigned_by=assigner_id,
+            assigned_at=now,
+            assignment_method="MANUAL",
+            notes=f"Bulk assigned by {assigner_name}"
+        ))
+        log_lead_activity(
+            db=db,
+            lead_id=lead.id,
+            performed_by_id=assigner_id,
+            activity_type="ASSIGNMENT_CHANGED" if prev_emp_name != "Unassigned" else "ASSIGNED",
+            description=f"Assigned to {target_emp.name} by {assigner_name} (bulk)"
+        )
+
+    db.commit()
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        username=current_user.username,
+        action="LEAD_BULK_ASSIGNMENT",
+        entity_type="LEAD",
+        entity_id=f"BULK:{len(leads)}",
+        details=(
+            f"Bulk assigned {len(leads)} lead(s) to {target_emp.name} by "
+            f"{assigner_name}. Lead IDs: {', '.join(str(lead.id) for lead in leads)}"
+        )
+    )
+
+    return {
+        "assigned_count": len(leads),
+        "lead_ids": [lead.id for lead in leads],
+        "assigned_to": target_emp.id,
+        "assigned_employee_name": target_emp.name,
+    }
+
 
 @router.put("/{lead_id}/assign", response_model=LeadOut)
 def assign_lead(

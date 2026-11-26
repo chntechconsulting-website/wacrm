@@ -350,6 +350,7 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
   const [showDetailDrawer, setShowDetailDrawer] = useState(false);
   const [isDrawerFullScreen, setIsDrawerFullScreen] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -636,6 +637,9 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   });
 
   const [assigneeId, setAssigneeId] = useState('');
+  const [bulkAssigneeId, setBulkAssigneeId] = useState('');
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [selectedLeadIds, setSelectedLeadIds] = useState([]);
   const [noteText, setNoteText] = useState('');
   const [savingLeadId, setSavingLeadId] = useState(null);
 
@@ -659,6 +663,24 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setPage(prevPage => Math.max(1, prevPage - 1));
     }
   };
+
+  // Keep the bulk selection limited to leads that are still on screen after a
+  // page/filter change. Returning the same array when nothing changed avoids
+  // an unnecessary render and any update loop.
+  useEffect(() => {
+    setSelectedLeadIds(prev => {
+      if (prev.length === 0) return prev;
+      const visible = new Set(leads.map(lead => lead.id));
+      const next = prev.filter(id => visible.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [leads]);
+
+  // Selection is scoped to the current result view. Clear it as soon as the
+  // filters or page change so a stale selection can never be bulk-assigned.
+  useEffect(() => {
+    setSelectedLeadIds([]);
+  }, [filtersKey, page]);
 
   // Reset the Channel Partner sync editor whenever a different lead is opened.
   useEffect(() => {
@@ -1089,6 +1111,94 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
       setError(err.response?.data?.detail || 'Failed to assign lead.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const toggleLeadSelection = (leadId) => {
+    setSelectedLeadIds(prev => (
+      prev.includes(leadId)
+        ? prev.filter(id => id !== leadId)
+        : [...prev, leadId]
+    ));
+  };
+
+  const toggleSelectAllVisibleLeads = () => {
+    const visibleIds = leads.map(lead => lead.id);
+
+    setSelectedLeadIds(prev => {
+      const next = new Set(prev);
+      const allSelected = visibleIds.length > 0
+        && visibleIds.every(id => next.has(id));
+      if (allSelected) {
+        visibleIds.forEach(id => next.delete(id));
+      } else {
+        visibleIds.forEach(id => next.add(id));
+      }
+      return Array.from(next);
+    });
+  };
+
+  const handleOpenBulkAssignModal = () => {
+    if (!canAssignLead || selectedLeadIds.length === 0) return;
+    setBulkAssigneeId('');
+    setError('');
+    setShowBulkAssignModal(true);
+  };
+
+  const handleBulkAssignLeads = async (e) => {
+    e.preventDefault();
+    if (!bulkAssigneeId || selectedLeadIds.length === 0) return;
+
+    try {
+      setBulkAssigning(true);
+      setError('');
+      const res = await API.put('/leads/bulk/assign', {
+        lead_ids: selectedLeadIds,
+        assigned_to: parseInt(bulkAssigneeId, 10)
+      });
+
+      const assignedIds = res.data?.lead_ids || selectedLeadIds;
+      const assignedIdSet = new Set(assignedIds);
+      const assignedEmployee = employees.find(
+        emp => String(emp.id) === String(bulkAssigneeId)
+      );
+      const updates = {
+        assigned_to: parseInt(bulkAssigneeId, 10),
+        assigned_employee_name:
+          res.data?.assigned_employee_name || assignedEmployee?.name || null
+      };
+      const nextStatus = (status) => (
+        ['NEW', 'NEW LEAD', 'NEW_LEAD'].includes(normalizeLeadStatusValue(status))
+          ? 'ASSIGNED'
+          : status
+      );
+
+      setLeads(prev => prev.map(lead => (
+        assignedIdSet.has(lead.id)
+          ? { ...lead, ...updates, status: nextStatus(lead.status) }
+          : lead
+      )));
+      setSelectedLead(prev => (
+        prev && assignedIdSet.has(prev.id)
+          ? { ...prev, ...updates, status: nextStatus(prev.status) }
+          : prev
+      ));
+
+      const count = res.data?.assigned_count ?? assignedIds.length;
+      setSuccess(
+        `${count} lead${count === 1 ? '' : 's'} assigned successfully!`
+      );
+      setSelectedLeadIds(prev => prev.filter(id => !assignedIdSet.has(id)));
+      setBulkAssigneeId('');
+      setShowBulkAssignModal(false);
+      fetchSourceCounts();
+    } catch (err) {
+      console.error(err);
+      setError(
+        err.response?.data?.detail || 'Failed to assign selected leads.'
+      );
+    } finally {
+      setBulkAssigning(false);
     }
   };
 
@@ -2026,6 +2136,15 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
   const rangeStart = total === 0 ? 0 : (page - 1) * LEADS_PAGE_SIZE + 1;
   const rangeEnd = Math.min(page * LEADS_PAGE_SIZE, total);
 
+  // Multi-select assignment is only offered to users who can already assign a
+  // single lead (Admin or a role with the leads:assign permission).
+  const selectedLeadIdSet = new Set(selectedLeadIds);
+  const allVisibleLeadsSelected = leads.length > 0
+    && leads.every(lead => selectedLeadIdSet.has(lead.id));
+  const someVisibleLeadsSelected = !allVisibleLeadsSelected
+    && leads.some(lead => selectedLeadIdSet.has(lead.id));
+  const leadsTableColumnCount = canAssignLead ? 11 : 10;
+
   // Support assignment / reassignment projections for the conversion modal.
   const supportCurrentOwnerId =
     supportAssignState?.support_employee_id ||
@@ -2624,10 +2743,59 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
           </div>
         </div>
 
+        {/* Bulk assignment bar - only for Admin / users with leads:assign */}
+        {canAssignLead && selectedLeadIds.length > 0 && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            flexWrap: 'wrap',
+            padding: '12px 16px',
+            marginBottom: '14px',
+            borderRadius: '10px',
+            border: '1px solid #bfdbfe',
+            backgroundColor: '#eff6ff'
+          }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 700, color: '#1e40af' }}>
+              {selectedLeadIds.length} lead{selectedLeadIds.length === 1 ? '' : 's'} selected
+            </span>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleOpenBulkAssignModal}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <UserCheck size={15} /> Assign Selected
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => setSelectedLeadIds([])}
+            >
+              Clear Selection
+            </button>
+          </div>
+        )}
+
         <div className="table-responsive">
           <table className="custom-table">
             <thead>
               <tr>
+                {canAssignLead && (
+                  <th style={{ width: '42px' }}>
+                    <input
+                      type="checkbox"
+                      checked={allVisibleLeadsSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someVisibleLeadsSelected;
+                      }}
+                      onChange={toggleSelectAllVisibleLeads}
+                      aria-label="Select all leads on this page"
+                      title="Select all leads on this page"
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                  </th>
+                )}
                 <th style={{ width: '70px' }}>ID</th>
                 <th>Contact Name</th>
                 <th>Phone</th>
@@ -2661,13 +2829,13 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="10" className="text-center py-4 text-muted">
+                  <td colSpan={leadsTableColumnCount} className="text-center py-4 text-muted">
                     Loading leads data...
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan="10" style={{ padding: '36px 16px', background: '#f8fafc' }}>
+                  <td colSpan={leadsTableColumnCount} style={{ padding: '36px 16px', background: '#f8fafc' }}>
                     <PingoEmptyState
                       pose="playful"
                       height={120}
@@ -2697,6 +2865,21 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                       className={`clickable-lead-row ${isSelected ? 'row-active' : ''}`}
                       title="Click anywhere to open Lead Details & Actions"
                     >
+                      {canAssignLead && (
+                        <td
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ textAlign: 'center' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedLeadIdSet.has(lead.id)}
+                            onChange={() => toggleLeadSelection(lead.id)}
+                            aria-label={`Select lead #${lead.id}`}
+                            title={`Select lead #${lead.id} for bulk assignment`}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                          />
+                        </td>
+                      )}
                       <td>
                         <strong>#{lead.id}</strong>
                       </td>
@@ -5045,6 +5228,108 @@ const Leads = ({ defaultSource = '', defaultFilter = '', pageTitle = '', pageSub
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={submitting || !assigneeId}>
                   {submitting ? 'Assigning...' : 'Assign'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* BULK ASSIGN MODAL - assign every selected lead to one Sales Manager */}
+      {showBulkAssignModal && (
+        <div className="modal-backdrop" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999,
+          padding: '20px'
+        }}>
+          <div className="modal-content" style={{
+            backgroundColor: 'var(--bg-card, #ffffff)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '16px',
+            width: '100%', maxWidth: '480px', padding: '28px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+            position: 'relative',
+            zIndex: 100000
+          }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '20px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--text-main, #0f172a)' }}>
+                  Assign Selected Leads
+                </h3>
+                <div style={{ marginTop: '4px', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                  {selectedLeadIds.length} lead{selectedLeadIds.length === 1 ? '' : 's'} selected
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBulkAssignModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                aria-label="Close bulk assignment"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkAssignLeads}>
+              <div style={{
+                padding: '12px 14px',
+                marginBottom: '18px',
+                borderRadius: '9px',
+                border: '1px solid #e2e8f0',
+                backgroundColor: '#f8fafc',
+                fontSize: '0.8rem',
+                color: '#475569',
+                lineHeight: 1.5
+              }}>
+                <div style={{ fontWeight: 700, color: '#334155', marginBottom: '3px' }}>
+                  Selected lead IDs
+                </div>
+                <div style={{ wordBreak: 'break-word' }}>
+                  {selectedLeadIds.slice(0, 12).map(id => `#${id}`).join(', ')}
+                  {selectedLeadIds.length > 12
+                    ? ` and ${selectedLeadIds.length - 12} more`
+                    : ''}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                  Assign all selected leads to
+                </label>
+                <select
+                  value={bulkAssigneeId}
+                  onChange={(e) => setBulkAssigneeId(e.target.value)}
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-color)' }}
+                >
+                  <option value="">Select employee...</option>
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.id}>{emp.name} ({emp.role})</option>
+                  ))}
+                </select>
+                <small style={{ color: '#64748b', fontSize: '0.74rem', marginTop: '4px', display: 'block' }}>
+                  Only active Sales Managers are eligible. Sales Executives, Support users and inactive employees are excluded.
+                </small>
+              </div>
+
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setShowBulkAssignModal(false)}
+                  disabled={bulkAssigning}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={bulkAssigning || !bulkAssigneeId}
+                >
+                  {bulkAssigning
+                    ? 'Assigning...'
+                    : `Assign ${selectedLeadIds.length} Lead${selectedLeadIds.length === 1 ? '' : 's'}`}
                 </button>
               </div>
             </form>

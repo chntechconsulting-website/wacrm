@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List, Any
 from datetime import date, datetime
 
@@ -138,6 +138,13 @@ class LeadUpdate(BaseModel):
             return None
 
 class LeadAssignRequest(BaseModel):
+    assigned_to: int
+
+class LeadBulkAssignRequest(BaseModel):
+    # A single request is capped so one accidental "select everything" never
+    # turns into an unbounded transaction. Duplicate ids are de-duplicated by
+    # the endpoint before assignment.
+    lead_ids: List[int] = Field(..., min_length=1, max_length=500)
     assigned_to: int
 
 class LeadStatusRequest(BaseModel):
