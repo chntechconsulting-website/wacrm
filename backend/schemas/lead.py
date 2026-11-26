@@ -307,6 +307,18 @@ class LegacyImportBatchAdoptRequest(BaseModel):
     confirm: bool = False
 
 
+class ExcelImportBatchRevokeRequest(BaseModel):
+    """Optional body for the Excel import revoke endpoint.
+
+    The default remains a strict revoke that refuses to touch leads used by
+    later CRM work. An administrator can explicitly preserve call history by
+    detaching it from the deleted leads instead of deleting it.
+    """
+
+    preserve_call_logs: bool = False
+    confirm: bool = False
+
+
 class AutoAssignConfigBase(BaseModel):
     enabled: bool = True
     waiting_time_minutes: int = 60

@@ -40,6 +40,7 @@ from schemas.lead import (
     AutoAssignConfigUpdate,
     QuoteTaskQuotationCreateRequest,
     LegacyImportBatchAdoptRequest,
+    ExcelImportBatchRevokeRequest,
 )
 from schemas.workflow import DealWonRequest, SupportHandoffOut, SupportStatusUpdateRequest
 from services.auth import get_current_user, require_roles, require_permission
@@ -1712,6 +1713,7 @@ def adopt_legacy_excel_import_batch(
 @router.post("/import/batches/{batch_id}/revoke")
 def revoke_excel_import_batch(
     batch_id: int,
+    payload: Optional[ExcelImportBatchRevokeRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("leads", "delete"))
 ):
@@ -1721,6 +1723,11 @@ def revoke_excel_import_batch(
     imports and every other lead source are untouched. The revoke is blocked
     when a batch lead has since been converted, quoted, called, followed up or
     otherwise used by another CRM module, so real work is never destroyed.
+
+    An administrator may explicitly set ``preserve_call_logs`` and ``confirm``
+    in the request body when call logs are the *only* blocker. The call history
+    is then detached from the deleted leads (``lead_id`` set to NULL) instead of
+    being deleted, so recordings and call details remain available.
     """
     is_admin = current_user.role.upper() == "ADMIN"
     can_approve = is_admin or user_has_permission(
@@ -1798,16 +1805,58 @@ def revoke_excel_import_batch(
         lead_ids,
         IMPORT_REVOKE_ALLOWED_CHILD_TABLES,
     )
+    detached_call_logs = 0
     if blockers:
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        preserve_call_logs = bool(
+            payload
+            and payload.preserve_call_logs
+            and payload.confirm
+            and is_admin
+        )
+        only_call_log_blockers = all(
+            blocker.startswith("call_logs.lead_id ")
+            for blocker in blockers
+        )
+        if not (preserve_call_logs and only_call_log_blockers):
+            detail = (
                 "This import batch cannot be revoked because its leads are "
                 "used by other CRM records: "
                 + ", ".join(blockers)
                 + ". Remove or reassign those records first."
-            ),
+            )
+            if only_call_log_blockers:
+                detail += (
+                    " An administrator can send "
+                    '{"preserve_call_logs": true, "confirm": true} to keep '
+                    "the call history and detach it before deleting the "
+                    "leads."
+                )
+            raise HTTPException(status_code=400, detail=detail)
+
+        # Keep the call history and recordings: detach them from the leads
+        # that are about to be deleted. The update is part of the same
+        # transaction, so any later failure rolls it back too.
+        detached_call_logs = (
+            db.query(CallLog)
+            .filter(CallLog.lead_id.in_(lead_ids))
+            .update({CallLog.lead_id: None}, synchronize_session=False)
         )
+        remaining_blockers = _lead_fk_blockers(
+            db,
+            lead_ids,
+            IMPORT_REVOKE_ALLOWED_CHILD_TABLES,
+        )
+        if remaining_blockers:
+            db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This import batch still has leads used by other CRM "
+                    "records: "
+                    + ", ".join(remaining_blockers)
+                    + ". Nothing was deleted."
+                ),
+            )
 
     batch_filename = batch.filename
     batch_uploaded_by = batch.uploaded_by_username
@@ -1884,6 +1933,12 @@ def revoke_excel_import_batch(
             f"{deleted_enquiries} enquiries and {deleted_assignments} "
             "assignments. Re-inquiries and all other lead sources were "
             "preserved."
+            + (
+                f" Detached {detached_call_logs} call log(s) from the deleted "
+                "leads; their call history and recordings were preserved."
+                if detached_call_logs
+                else ""
+            )
         ),
     )
 
@@ -1895,9 +1950,16 @@ def revoke_excel_import_batch(
         "deleted_activities": deleted_activities,
         "deleted_enquiries": deleted_enquiries,
         "deleted_assignments": deleted_assignments,
+        "detached_call_logs": detached_call_logs,
         "message": (
             f"Excel import '{batch_filename}' was revoked. "
             f"{deleted_leads} lead(s) deleted; other sources are unchanged."
+            + (
+                f" {detached_call_logs} call log(s) were kept and detached "
+                "from the deleted leads."
+                if detached_call_logs
+                else ""
+            )
         ),
     }
 

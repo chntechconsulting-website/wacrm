@@ -24,6 +24,7 @@ import models  # noqa: F401  (registers every model on Base.metadata)
 from database import Base, SessionLocal, engine
 from models.activity import LeadActivity
 from models.audit_log import AuditLog
+from models.call_log import CallLog
 from models.customer import Customer
 from models.employee import Employee
 from models.excel_import import ExcelImportBatch
@@ -94,6 +95,9 @@ class TestExcelImportRevoke(unittest.TestCase):
             self.db.query(Followup).filter(
                 Followup.lead_id.in_(lead_ids)
             ).delete(synchronize_session=False)
+            self.db.query(CallLog).filter(
+                CallLog.lead_id.in_(lead_ids)
+            ).delete(synchronize_session=False)
             self.db.query(LeadActivity).filter(
                 LeadActivity.lead_id.in_(lead_ids)
             ).delete(synchronize_session=False)
@@ -110,6 +114,9 @@ class TestExcelImportRevoke(unittest.TestCase):
                 Lead.id.in_(lead_ids)
             ).delete(synchronize_session=False)
             self.db.commit()
+        self.db.query(CallLog).filter(
+            CallLog.notes.like(f"%{TEST_FILENAME_PREFIX}%")
+        ).delete(synchronize_session=False)
         self.db.query(ExcelImportBatch).filter(
             ExcelImportBatch.filename.like(f"{TEST_FILENAME_PREFIX}%")
         ).delete(synchronize_session=False)
@@ -404,6 +411,70 @@ class TestExcelImportRevoke(unittest.TestCase):
         )
         self.assertEqual(revoke.status_code, 200, revoke.text)
         self.assertEqual(revoke.json()["deleted_leads"], 2)
+
+    def test_revoke_can_preserve_call_logs_when_they_are_the_only_blocker(self):
+        """Call history is detached, not deleted, when an admin asks for it."""
+        filename = self._unique_filename("calls")
+        response = upload([
+            ["Called", "Lead", "7770000251", "called@revoke-test.invalid", "Call Co"],
+        ], filename)
+        self.assertEqual(response.status_code, 200, response.text)
+        batch_id = response.json()["batch_id"]
+
+        self._refresh()
+        lead = self.db.query(Lead).filter(
+            Lead.import_batch_id == batch_id
+        ).first()
+        self.assertIsNotNone(lead)
+        call = CallLog(
+            lead_id=lead.id,
+            provider="MOBILE_SIM",
+            provider_call_id=f"revoke-test-{uuid.uuid4().hex}",
+            from_number="7770000299",
+            to_number=lead.phone,
+            call_status="COMPLETED",
+            call_direction="OUTBOUND",
+            duration_seconds=30,
+            notes=f"{filename} call log",
+        )
+        self.db.add(call)
+        self.db.commit()
+        call_id = call.id
+        lead_id = lead.id
+
+        blocked = client.post(
+            f"/api/leads/import/batches/{batch_id}/revoke",
+            headers=AUTH,
+        )
+        self.assertEqual(blocked.status_code, 400, blocked.text)
+        self.assertIn("call_logs.lead_id", blocked.json()["detail"])
+        self.assertIn("preserve_call_logs", blocked.json()["detail"])
+
+        # Preservation requires an explicit confirmation.
+        unconfirmed = client.post(
+            f"/api/leads/import/batches/{batch_id}/revoke",
+            json={"preserve_call_logs": True},
+            headers=AUTH,
+        )
+        self.assertEqual(unconfirmed.status_code, 400, unconfirmed.text)
+
+        revoked = client.post(
+            f"/api/leads/import/batches/{batch_id}/revoke",
+            json={"preserve_call_logs": True, "confirm": True},
+            headers=AUTH,
+        )
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        self.assertEqual(revoked.json()["deleted_leads"], 1)
+        self.assertEqual(revoked.json()["detached_call_logs"], 1)
+
+        self._refresh()
+        self.assertIsNone(
+            self.db.query(Lead).filter(Lead.id == lead_id).first()
+        )
+        kept_call = self.db.query(CallLog).filter(CallLog.id == call_id).first()
+        self.assertIsNotNone(kept_call)
+        self.assertIsNone(kept_call.lead_id)
+        self.assertEqual(kept_call.duration_seconds, 30)
 
 
 if __name__ == "__main__":
