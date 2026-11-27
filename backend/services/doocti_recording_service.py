@@ -1064,16 +1064,24 @@ class DooctiRecordingService:
             return None
 
         anchor = call.started_at or call.created_at
-        if isinstance(anchor, datetime.datetime) and anchor.tzinfo is not None:
-            anchor = anchor.astimezone(IST_TIMEZONE).replace(tzinfo=None)
         if not isinstance(anchor, datetime.datetime):
             return None
+        if anchor.tzinfo is not None:
+            anchors = [anchor.astimezone(IST_TIMEZONE).replace(tzinfo=None)]
+        else:
+            # IVRService creates the initial click-to-call row with
+            # ``utcnow()`` while webhook/CDR rows are stored in IST. Accept
+            # both interpretations so an in-app call is not missed by 5h30m.
+            anchors = [
+                anchor,
+                anchor + datetime.timedelta(hours=5, minutes=30),
+            ]
 
         phones = cls._customer_phone_candidates(call)
         if not phones:
             return None
 
-        cache_key = f"synthetic:{call.id}:{prov_id}:{anchor.isoformat()}"
+        cache_key = f"synthetic:{call.id}:{prov_id}:{anchors[0].isoformat()}"
         now = time.time()
         cached = _PROVIDER_RECORDING_CACHE.get(cache_key)
         if cached and (now - cached[0]) < SYNTHETIC_RECORDING_TTL_SECONDS:
@@ -1157,7 +1165,10 @@ class DooctiRecordingService:
             row_dt = cls._provider_row_datetime(row)
             if row_dt is None:
                 continue
-            delta = (row_dt - anchor).total_seconds()
+            delta = min(
+                ((row_dt - candidate_anchor).total_seconds() for candidate_anchor in anchors),
+                key=abs,
+            )
             if delta < -window_before_seconds or delta > window_after_seconds:
                 continue
 
@@ -1967,6 +1978,9 @@ class DooctiRecordingService:
                         "CONNECTED",
                     ):
                         call.call_status = "COMPLETED"
+                    # The initial in-app row uses a UTC naive start; replace it
+                    # with the provider's IST start so all timestamps agree.
+                    call.started_at = synthetic["started_at"]
                     if not call.answered_at:
                         call.answered_at = synthetic["started_at"]
                     if not call.ended_at:

@@ -1280,6 +1280,53 @@ class TestWebhookCallBatches(RecordingTestBase):
         self.assertEqual(db.query(CallLog).count(), 1)
         db.close()
 
+    def test_synthetic_call_matches_when_started_at_is_utc(self):
+        # IVRService creates the initial in-app row with utcnow(), while the
+        # provider call log reports IST. The resolver must still join them.
+        synthetic_id = "doocti_1282_9876543210_12"
+        provider_id = "1793333906.131200151"
+        media_url = f"https://media.example.com/{provider_id}.mp3"
+        ist_started = get_ist_now() - datetime.timedelta(minutes=10)
+        utc_started = ist_started - datetime.timedelta(hours=5, minutes=30)
+        self.add_call(
+            synthetic_id,
+            started_at=utc_started,
+            duration_seconds=0,
+            call_status="ENDED",
+        )
+
+        row_started = ist_started + datetime.timedelta(seconds=5)
+        provider_row = {
+            "uniqueid": provider_id,
+            "phone_number": "9876543210",
+            "calldate": row_started.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "COMPLETE",
+            "talk_time": 21,
+            "record_location": media_url,
+        }
+
+        db = self.db()
+        call = self.load_call(db, synthetic_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "_fetch_calllog_rows",
+            return_value=([provider_row], "https://api-tenant.example.com"),
+        ):
+            resolved = DooctiRecordingService.match_recording_for_call(call, db)
+        db.close()
+
+        self.assertEqual(resolved, media_url)
+        stored = self.get_call(provider_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.recording_url, media_url)
+        self.assertEqual(stored.recording_id, provider_id)
+        self.assertEqual(stored.duration_seconds, 21)
+        # The stored start is normalised to the provider's IST timestamp.
+        self.assertEqual(
+            stored.started_at.strftime("%Y-%m-%d %H:%M:%S"),
+            row_started.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
     def test_synthetic_call_with_ambiguous_provider_rows_stays_unlinked(self):
         synthetic_id = "doocti_1282_9876543210_10"
         started = get_ist_now() - datetime.timedelta(minutes=10)
