@@ -1418,6 +1418,8 @@ class TestWebhookCallBatches(RecordingTestBase):
             result["diagnostics"]["empty_recording_url"], 1
         )
         self.assertGreaterEqual(result["diagnostics"]["recent_calls"], 1)
+        self.assertTrue(result["diagnostics"]["employees"])
+        self.assertTrue(result["diagnostics"]["unresolved_calls"])
 
     def test_repair_clears_link_when_stored_recording_id_belongs_to_another_call(self):
         owner_id = "1793333905.131200141"

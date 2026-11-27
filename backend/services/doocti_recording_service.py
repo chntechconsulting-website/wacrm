@@ -2086,19 +2086,97 @@ class DooctiRecordingService:
         provider_clause,
     ) -> Dict[str, Any]:
         """
-        Aggregate, non-sensitive counts that explain why a sync inspected zero
-        calls. No phone numbers, ids or URLs are returned.
+        Aggregate counts that explain why a sync inspected zero calls, plus
+        per-employee health and the connected calls that could not be resolved.
+        Phone numbers and recording URLs are never returned.
         """
         try:
             base = db.query(CallLog).filter(
                 CallLog.created_at >= since_date,
                 provider_clause,
             )
+            connected_statuses = {
+                "COMPLETED",
+                "COMPLETE",
+                "ANSWERED",
+                "CONNECTED",
+                "ENDED",
+            }
+            rows = base.with_entities(
+                CallLog.id,
+                CallLog.employee_id,
+                CallLog.provider_call_id,
+                CallLog.call_direction,
+                CallLog.call_status,
+                CallLog.duration_seconds,
+                CallLog.recording_url,
+                CallLog.started_at,
+                CallLog.created_at,
+            ).all()
+
+            by_employee: Dict[Any, Dict[str, Any]] = {}
+            unresolved: List[Dict[str, Any]] = []
+            for row in rows:
+                (
+                    call_id,
+                    employee_id,
+                    provider_call_id,
+                    direction,
+                    status,
+                    duration,
+                    recording_url,
+                    started_at,
+                    created_at,
+                ) = row
+                rec = str(recording_url or "").strip()
+                missing = (
+                    not rec
+                    or rec.lower() in {"null", "none", "undefined"}
+                    or "127.0.0.1" in rec
+                    or "localhost" in rec
+                )
+                connected = int(duration or 0) > 0 or (
+                    status or ""
+                ).upper() in connected_statuses
+
+                info = by_employee.setdefault(
+                    employee_id,
+                    {
+                        "employee_id": employee_id,
+                        "recent_calls": 0,
+                        "missing_recording": 0,
+                        "connected_missing_recording": 0,
+                    },
+                )
+                info["recent_calls"] += 1
+                if missing:
+                    info["missing_recording"] += 1
+                if missing and connected:
+                    info["connected_missing_recording"] += 1
+                    if len(unresolved) < 20:
+                        anchor = started_at or created_at
+                        unresolved.append(
+                            {
+                                "call_id": call_id,
+                                "employee_id": employee_id,
+                                "provider_call_id": provider_call_id,
+                                "is_synthetic": not cls.is_authoritative_call_id(
+                                    provider_call_id
+                                ),
+                                "direction": direction,
+                                "status": status,
+                                "duration": int(duration or 0),
+                                "started_at": (
+                                    anchor.isoformat()
+                                    if isinstance(anchor, datetime.datetime)
+                                    else None
+                                ),
+                            }
+                        )
+
             connected_clause = or_(
                 CallLog.duration_seconds > 0,
-                CallLog.call_status.in_(
-                    ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED", "ENDED"]
-                ),
+                CallLog.call_status.in_(sorted(connected_statuses)),
             )
             return {
                 "window_days": None,  # filled by caller
@@ -2118,6 +2196,15 @@ class DooctiRecordingService:
                         func.trim(CallLog.recording_url) != "",
                     ).count()
                 ),
+                "employees": sorted(
+                    by_employee.values(),
+                    key=lambda item: (
+                        -item["connected_missing_recording"],
+                        -item["missing_recording"],
+                        item["employee_id"] if item["employee_id"] is not None else 0,
+                    ),
+                )[:20],
+                "unresolved_calls": unresolved,
             }
         except Exception as exc:
             logger.debug(f"[DooctiRecording] sync diagnostics failed: {exc}")
