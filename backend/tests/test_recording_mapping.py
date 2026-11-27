@@ -1077,13 +1077,297 @@ class TestWebhookCallBatches(RecordingTestBase):
         with mock.patch.object(
             DooctiRecordingService,
             "resolve_provider_recording_url",
-            lambda c, d: "https://media.doocti.com/rec/other.mp3",
+            side_effect=AssertionError("authoritative resolver must not see a synthetic id"),
+        ), mock.patch.object(
+            DooctiRecordingService,
+            "resolve_synthetic_recording_row",
+            return_value=None,
         ):
             self.assertIsNone(
                 DooctiRecordingService.match_recording_for_call(call, db)
             )
         db.close()
         self.assertIsNone(self.get_call(synthetic_id).recording_url)
+
+    def test_provider_calllog_prefers_portal_host_over_iframe_dialer(self):
+        call = SimpleNamespace(
+            provider_call_id="1793333704.131200061",
+            employee_id=7,
+            call_direction="OUTBOUND",
+            to_number="9876500061",
+            from_number="07969671855",
+        )
+        cfg = {
+            "extension_mapping": {"1282": {"employee_id": 7}},
+            "portal_url": "https://api-tenant.example.com",
+            "dialer_url": "https://beta3-app.example.com",
+        }
+
+        class FakeResponse:
+            def read(self, *_args):
+                return json.dumps(
+                    {
+                        "data": [
+                            {
+                                "id": "1793333704.131200061",
+                                "record_location": "https://media.example.com/right.mp3",
+                            }
+                        ]
+                    }
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        seen = []
+
+        def fake_urlopen(req, timeout=10.0):
+            seen.append(req.full_url)
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda url, **kwargs: False,
+        ):
+            resolved = DooctiRecordingService._resolve_via_dialer_calllog(
+                call, "test-token", {}, cfg
+            )
+
+        self.assertEqual(resolved, "https://media.example.com/right.mp3")
+        self.assertTrue(seen)
+        self.assertTrue(
+            all(url.startswith("https://api-tenant.example.com/") for url in seen)
+        )
+
+    def test_dialer_calllog_falls_back_to_extension_when_email_has_no_match(self):
+        call_id = "1793333705.131200071"
+        media_url = f"https://media.example.com/{call_id}.mp3"
+        call = SimpleNamespace(
+            provider_call_id=call_id,
+            employee_id=7,
+            call_direction="OUTBOUND",
+            to_number="9876500071",
+            from_number="1282",
+        )
+        cfg = {
+            "extension_mapping": {
+                "1282": {"employee_id": 7, "username": "agent@example.com"}
+            },
+            "dialer_url": "https://dialer.example.com",
+        }
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = json.dumps(payload).encode()
+
+            def read(self, *_args):
+                return self._payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        seen_agents = []
+
+        def fake_urlopen(req, timeout=10.0):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query)
+            agent = (query.get("agent") or [""])[0]
+            seen_agents.append(agent)
+            if agent == "1282":
+                return FakeResponse(
+                    {"data": [{"id": call_id, "record_location": media_url}]}
+                )
+            return FakeResponse(
+                {
+                    "data": [
+                        {
+                            "id": "1793333705.131200072",
+                            "record_location": "https://media.example.com/other.mp3",
+                        }
+                    ]
+                }
+            )
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda url, **kwargs: False,
+        ):
+            resolved = DooctiRecordingService._resolve_via_dialer_calllog(
+                call, "test-token", {}, cfg
+            )
+
+        self.assertEqual(resolved, media_url)
+        self.assertEqual(seen_agents[:2], ["agent@example.com", "1282"])
+
+    def test_synthetic_call_adopts_provider_uniqueid_and_recording(self):
+        synthetic_id = "doocti_1282_9876543210_9"
+        provider_id = "1793333901.131200101"
+        media_url = f"https://media.example.com/{provider_id}.mp3"
+        started = get_ist_now() - datetime.timedelta(minutes=10)
+        self.add_call(
+            synthetic_id,
+            started_at=started,
+            duration_seconds=0,
+            call_status="ENDED",
+        )
+
+        row_time = (started + datetime.timedelta(seconds=5)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        provider_row = {
+            "uniqueid": provider_id,
+            "phone_number": "9876543210",
+            "calldate": row_time,
+            "status": "COMPLETE",
+            "talk_time": 42,
+            "record_location": media_url,
+        }
+
+        db = self.db()
+        call = self.load_call(db, synthetic_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "_fetch_calllog_rows",
+            return_value=([provider_row], "https://api-tenant.example.com"),
+        ):
+            resolved = DooctiRecordingService.match_recording_for_call(call, db)
+        db.close()
+
+        self.assertEqual(resolved, media_url)
+        stored = self.get_call(provider_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.recording_url, media_url)
+        self.assertEqual(stored.recording_id, provider_id)
+        self.assertEqual(stored.recording_source, "DOOCTI_API")
+        self.assertEqual(stored.duration_seconds, 42)
+        self.assertEqual(stored.call_status, "COMPLETED")
+        self.assertIsNone(self.get_call(synthetic_id))
+        db = self.db()
+        self.assertEqual(db.query(CallLog).count(), 1)
+        db.close()
+
+    def test_synthetic_call_with_ambiguous_provider_rows_stays_unlinked(self):
+        synthetic_id = "doocti_1282_9876543210_10"
+        started = get_ist_now() - datetime.timedelta(minutes=10)
+        self.add_call(synthetic_id, started_at=started)
+        row_time = (started + datetime.timedelta(seconds=5)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        rows = [
+            {
+                "uniqueid": f"1793333902.13120011{i}",
+                "phone_number": "9876543210",
+                "calldate": row_time,
+                "status": "COMPLETE",
+                "talk_time": 10 + i,
+                "record_location": f"https://media.example.com/rec{i}.mp3",
+            }
+            for i in range(2)
+        ]
+
+        db = self.db()
+        call = self.load_call(db, synthetic_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "_fetch_calllog_rows",
+            return_value=(rows, "https://api-tenant.example.com"),
+        ):
+            self.assertIsNone(
+                DooctiRecordingService.match_recording_for_call(call, db)
+            )
+        db.close()
+
+        stored = self.get_call(synthetic_id)
+        self.assertIsNotNone(stored)
+        self.assertIsNone(stored.recording_url)
+        self.assertEqual(stored.provider_call_id, synthetic_id)
+
+    def test_synthetic_call_does_not_take_existing_owners_recording(self):
+        provider_id = "1793333903.131200121"
+        synthetic_id = "doocti_1282_9876543210_11"
+        media_url = f"https://media.example.com/{provider_id}.mp3"
+        started = get_ist_now() - datetime.timedelta(minutes=10)
+        self.add_call(provider_id, started_at=started)
+        self.add_call(synthetic_id, started_at=started)
+        row_time = (started + datetime.timedelta(seconds=5)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        provider_row = {
+            "uniqueid": provider_id,
+            "phone_number": "9876543210",
+            "calldate": row_time,
+            "status": "COMPLETE",
+            "talk_time": 20,
+            "record_location": media_url,
+        }
+
+        db = self.db()
+        call = self.load_call(db, synthetic_id)
+        with mock.patch.object(
+            DooctiRecordingService,
+            "_fetch_calllog_rows",
+            return_value=([provider_row], "https://api-tenant.example.com"),
+        ):
+            self.assertIsNone(
+                DooctiRecordingService.match_recording_for_call(call, db)
+            )
+        db.close()
+
+        stored = self.get_call(synthetic_id)
+        self.assertIsNotNone(stored)
+        self.assertIsNone(stored.recording_url)
+        self.assertEqual(stored.provider_call_id, synthetic_id)
+
+    def test_sync_inspects_empty_string_recording_url(self):
+        self.add_call("1793333904.131200131", recording_url="")
+        db = self.db()
+        with mock.patch.object(
+            DooctiRecordingService,
+            "match_recording_for_call",
+            lambda call, db, **kwargs: "https://media.example.com/synced.mp3",
+        ):
+            result = DooctiRecordingService.sync_all_missing_recordings(
+                db, days_back=1
+            )
+        db.close()
+
+        self.assertGreaterEqual(result["total_inspected"], 1)
+        self.assertGreaterEqual(result["synced_count"], 1)
+        self.assertGreaterEqual(
+            result["diagnostics"]["empty_recording_url"], 1
+        )
+        self.assertGreaterEqual(result["diagnostics"]["recent_calls"], 1)
+
+    def test_repair_clears_link_when_stored_recording_id_belongs_to_another_call(self):
+        owner_id = "1793333905.131200141"
+        other_id = "1793333905.131200142"
+        self.add_call(owner_id)
+        self.add_call(
+            other_id,
+            recording_url="https://media.example.com/legacy-artifact.mp3",
+            recording_id=owner_id,
+        )
+
+        db = self.db()
+        repaired = DooctiRecordingService.repair_misassigned_recordings(db)
+        db.close()
+
+        self.assertEqual(repaired, 1)
+        owner = self.get_call(owner_id)
+        other = self.get_call(other_id)
+        self.assertEqual(
+            owner.recording_url, "https://media.example.com/legacy-artifact.mp3"
+        )
+        self.assertEqual(owner.recording_id, owner_id)
+        self.assertIsNone(other.recording_url)
+        self.assertIsNone(other.recording_id)
 
     def test_dialer_calllog_matches_by_exact_uniqueid_only(self):
         call = SimpleNamespace(
@@ -1280,7 +1564,6 @@ class TestWebhookCallBatches(RecordingTestBase):
         db.close()
 
         self.assertEqual(resolved, media_url)
-        self.assertIn("1285", seen_agents)
         self.assertIn("shalini@chnindia.com", seen_agents)
 
     def test_concurrent_same_phone_calls_are_not_merged(self):

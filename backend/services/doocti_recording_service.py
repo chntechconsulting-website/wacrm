@@ -38,9 +38,12 @@ AUDIO_DURATION_TTL_SECONDS = 3600.0
 _STUB_CHECK_CACHE: Dict[str, Tuple[float, bool]] = {}
 STUB_CHECK_TTL_SECONDS = 300.0
 
-# DooCTI recording API resolution cache: { "uniqueid": (timestamp, url|None) }
-_PROVIDER_RECORDING_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+# DooCTI recording API resolution cache: { "uniqueid"|"synthetic:<call>": (timestamp, url|None|row) }
+_PROVIDER_RECORDING_CACHE: Dict[str, Tuple[float, Any]] = {}
 PROVIDER_RECORDING_TTL_SECONDS = 600.0
+# Synthetic call rows (in-app outbound) are re-checked sooner because the
+# provider may publish the CDR a few minutes after the call ends.
+SYNTHETIC_RECORDING_TTL_SECONDS = 300.0
 
 # DooCTI login (used to obtain a portal token when the API is configured with
 # the tenant's own credentials instead of a pre-issued token).
@@ -423,7 +426,10 @@ class DooctiRecordingService:
                 data.get("portal_url") or data.get("doocti_portal_url") or ""
             ).strip().rstrip("/"),
             "dialer_url": str(
-                data.get("dialer_url") or data.get("doocti_dialer_url") or ""
+                data.get("dialer_url")
+                or data.get("doocti_dialer_url")
+                or data.get("api_url")
+                or ""
             ).strip().rstrip("/"),
             "tenant_code": str(data.get("tenant_code") or "").strip(),
             "admin_extension": str(data.get("admin_extension") or "").strip(),
@@ -655,6 +661,9 @@ class DooctiRecordingService:
             if candidate and candidate not in seen:
                 seen.add(candidate)
                 result.append(candidate)
+        # DooCTI's call log keys agents by login email. Extensions are a
+        # last-resort fallback, so never let one shadow the email.
+        result.sort(key=lambda value: 0 if "@" in value else 1)
         return result[:6]
 
     @staticmethod
@@ -687,6 +696,160 @@ class DooctiRecordingService:
                     if rows:
                         return rows
         return []
+
+    @staticmethod
+    def _provider_calllog_base_url(
+        cfg: Dict[str, Any], claims: Dict[str, Any]
+    ) -> str:
+        """
+        Host that serves the JSON agent call log (``/crm/calllog``).
+
+        The configured ``dialer_url`` is the iframe front end (for example
+        ``https://beta3-app.doocti.com``); it answers API paths with its HTML
+        shell. The tenant portal host (``portal_url`` / JWT ``portal_domain``)
+        is the one that returns JSON, so it must be preferred.
+        """
+        candidates = [
+            cfg.get("portal_url"),
+            claims.get("http://api.doocti.com/claims/portal_domain"),
+            cfg.get("dialer_url"),
+            claims.get("http://api.doocti.com/claims/dialer_domain"),
+        ]
+        for value in candidates:
+            host = str(value or "").strip()
+            if not host:
+                continue
+            if not host.startswith(("http://", "https://")):
+                host = "https://" + host
+            return host.rstrip("/")
+        return ""
+
+    @staticmethod
+    def _provider_row_datetime(
+        row: Dict[str, Any],
+    ) -> Optional[datetime.datetime]:
+        """Parses a DooCTI call-log timestamp into naive IST."""
+        raw = (
+            row.get("calldate")
+            or row.get("call_date")
+            or row.get("start_time")
+            or row.get("started_at")
+            or row.get("date")
+        )
+        if raw is None or str(raw).strip() == "":
+            return None
+
+        dt: Optional[datetime.datetime] = None
+        if isinstance(raw, datetime.datetime):
+            dt = raw
+        elif isinstance(raw, (int, float)):
+            try:
+                value = float(raw)
+                if value > 1e11:
+                    value /= 1000.0
+                dt = datetime.datetime.fromtimestamp(value, tz=IST_TIMEZONE)
+            except (ValueError, OSError, OverflowError):
+                return None
+        else:
+            text = str(raw).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            try:
+                dt = datetime.datetime.fromisoformat(text)
+            except ValueError:
+                for fmt in (
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                    "%d-%m-%Y %H:%M:%S",
+                    "%d/%m/%Y %H:%M:%S",
+                ):
+                    try:
+                        dt = datetime.datetime.strptime(text, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if dt is None:
+                    return None
+
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(IST_TIMEZONE).replace(tzinfo=None)
+        return dt
+
+    @classmethod
+    def _fetch_calllog_rows(
+        cls,
+        call: CallLog,
+        token: Optional[str],
+        cfg: Dict[str, Any],
+        claims: Dict[str, Any],
+        db: Optional[Session] = None,
+        *,
+        phone: Optional[str] = None,
+        take: int = 100,
+        max_identifiers: int = 6,
+        stop_after_first_nonempty: bool = False,
+        identifiers: Optional[List[str]] = None,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """
+        Reads the agent's provider call log and returns ``(rows, host)``.
+
+        ``agent`` is tried with the mapping/login email first (the identifier
+        DooCTI accepts) and only then with the extension. Rows are de-duplicated
+        by their own uniqueid so repeated identifiers cannot duplicate audio.
+        """
+        host = cls._provider_calllog_base_url(cfg, claims)
+        if not host:
+            return [], ""
+        if identifiers is None:
+            identifiers = cls._provider_extension_candidates(call, cfg, db)
+        identifiers = list(identifiers)[: max(1, max_identifiers)]
+        if not identifiers:
+            return [], host
+
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "WACRM-RecordingResolver/1.0",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        rows: List[Dict[str, Any]] = []
+        seen: set = set()
+        for agent in identifiers:
+            params: Dict[str, Any] = {"agent": agent, "skip": 0, "take": take}
+            if phone:
+                params["phone_number"] = phone
+            url = f"{host}/crm/calllog?{urllib.parse.urlencode(params)}"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    payload = json.loads(
+                        resp.read().decode("utf-8", errors="ignore") or "{}"
+                    )
+            except Exception as exc:
+                logger.debug(
+                    f"[DooctiRecording] calllog lookup failed for agent={agent}: {exc}"
+                )
+                continue
+
+            added = False
+            for row in cls._extract_calllog_rows(payload):
+                key = str(
+                    row.get("uniqueid")
+                    or row.get("id")
+                    or row.get("call_id")
+                    or row.get("callid")
+                    or ""
+                ).strip()
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                rows.append(row)
+                added = True
+            if added and stop_after_first_nonempty:
+                break
+        return rows, host
 
     @staticmethod
     def _portal_base_url(cfg: Dict[str, Any], claims: Dict[str, Any]) -> str:
@@ -827,45 +990,21 @@ class DooctiRecordingService:
         take the recording from the row whose *own id* is this call's uniqueid.
         The id equality is the join; phone numbers only narrow the query.
         """
-        dialer = cfg.get("dialer_url") or str(
-            claims.get("http://api.doocti.com/claims/dialer_domain") or ""
-        ).strip()
-        if dialer and not dialer.startswith(("http://", "https://")):
-            dialer = "https://" + dialer
-        if not dialer:
-            return None
-
         prov_id = str(call.provider_call_id or "").strip()
-        extensions = cls._provider_extension_candidates(call, cfg, db)
         phones = cls._customer_phone_candidates(call)
-        if not extensions:
-            return None
-
-        for ext in extensions:
-            params = {"agent": ext, "skip": 0, "take": 100}
-            if phones:
-                params["phone_number"] = phones[0]
-            url = f"{dialer.rstrip('/')}/crm/calllog?{urllib.parse.urlencode(params)}"
-            try:
-                req = urllib.request.Request(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Accept": "application/json",
-                        "User-Agent": "WACRM-RecordingResolver/1.0",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=10.0) as resp:
-                    payload = json.loads(
-                        resp.read().decode("utf-8", errors="ignore") or "{}"
-                    )
-            except Exception as exc:
-                logger.debug(
-                    f"[DooctiRecording] dialer calllog lookup failed for ext={ext}: {exc}"
-                )
+        for agent in cls._provider_extension_candidates(call, cfg, db):
+            rows, host = cls._fetch_calllog_rows(
+                call,
+                token,
+                cfg,
+                claims,
+                db,
+                phone=phones[0] if phones else None,
+                identifiers=[agent],
+            )
+            if not rows or not host:
                 continue
 
-            rows = cls._extract_calllog_rows(payload)
             for row in rows:
                 row_ids = {
                     str(row.get(key) or "").strip()
@@ -879,25 +1018,233 @@ class DooctiRecordingService:
                     if raw_location.startswith("/") and " " not in raw_location:
                         # DooCTI sometimes stores a path; the iframe resolves it
                         # against its own host before playing.
-                        candidate = dialer.rstrip("/") + raw_location
+                        candidate = host.rstrip("/") + raw_location
                 if not candidate:
                     continue
                 if cls.is_definitely_empty_recording(candidate):
                     logger.info(
-                        f"[DooctiRecording] dialer calllog for {prov_id} returned an "
+                        f"[DooctiRecording] calllog for {prov_id} returned an "
                         f"empty placeholder; ignoring."
                     )
                     continue
                 logger.info(
-                    f"🎧 [DooctiRecording] Resolved recording from dialer call log "
+                    f"🎧 [DooctiRecording] Resolved recording from provider call log "
                     f"for uniqueid='{prov_id}'."
                 )
                 return candidate
-
-            # Another identifier for this employee (for example the login email)
-            # may still own the call when the extension lookup returned unrelated
-            # rows, so keep trying until the candidates are exhausted.
         return None
+
+    @classmethod
+    def resolve_synthetic_recording_row(
+        cls,
+        call: CallLog,
+        db: Session,
+        cfg: Optional[Dict[str, Any]] = None,
+        token: Optional[str] = None,
+        claims: Optional[Dict[str, Any]] = None,
+        window_before_seconds: int = 600,
+        window_after_seconds: int = 600,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Resolves a provider call-log row for a call stored under a synthetic id.
+
+        In-app DooCTI outbound calls are first written as
+        ``doocti_<extension>_<phone>_<timestamp>`` because the iframe never
+        exposes the PBX uniqueid to the CRM. The provider call log is the
+        authority for those rows: match by the agent's login email, the
+        customer's number and the call start time, and only accept one
+        unambiguous row. Ambiguity leaves the call unlinked rather than risk
+        attaching another call's audio.
+        """
+        prov_id = str(call.provider_call_id or "").strip()
+        if cls.is_authoritative_call_id(prov_id):
+            return None
+        provider_upper = str(call.provider or "").upper()
+        if provider_upper and provider_upper != "DOOCTI":
+            return None
+
+        anchor = call.started_at or call.created_at
+        if isinstance(anchor, datetime.datetime) and anchor.tzinfo is not None:
+            anchor = anchor.astimezone(IST_TIMEZONE).replace(tzinfo=None)
+        if not isinstance(anchor, datetime.datetime):
+            return None
+
+        phones = cls._customer_phone_candidates(call)
+        if not phones:
+            return None
+
+        cache_key = f"synthetic:{call.id}:{prov_id}:{anchor.isoformat()}"
+        now = time.time()
+        cached = _PROVIDER_RECORDING_CACHE.get(cache_key)
+        if cached and (now - cached[0]) < SYNTHETIC_RECORDING_TTL_SECONDS:
+            return cached[1]
+
+        cfg = cfg or cls._get_provider_api_config(db)
+        if token is None or claims is None:
+            token, claims = cls._provider_access_token(cfg)
+        token = token or ""
+        claims = claims or {}
+
+        rows, host = cls._fetch_calllog_rows(
+            call,
+            token,
+            cfg,
+            claims,
+            db,
+            phone=phones[0],
+            take=100,
+            max_identifiers=4,
+            stop_after_first_nonempty=True,
+        )
+        if not rows:
+            # Some portal versions ignore the phone filter; read the agent's
+            # recent page and filter locally instead.
+            rows, host = cls._fetch_calllog_rows(
+                call,
+                token,
+                cfg,
+                claims,
+                db,
+                phone=None,
+                take=100,
+                max_identifiers=2,
+                stop_after_first_nonempty=True,
+            )
+        if not rows or not host:
+            _PROVIDER_RECORDING_CACHE[cache_key] = (now, None)
+            return None
+
+        candidates: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+        for row in rows:
+            row_phone = re.sub(
+                r"\D",
+                "",
+                str(
+                    row.get("phone_number")
+                    or row.get("phone")
+                    or row.get("customer_number")
+                    or ""
+                ),
+            )
+            if len(row_phone) > 10:
+                row_phone = row_phone[-10:]
+            if row_phone and row_phone not in phones:
+                continue
+
+            row_id = str(
+                row.get("uniqueid")
+                or row.get("id")
+                or row.get("call_id")
+                or row.get("callid")
+                or ""
+            ).strip()
+            if not cls.is_authoritative_call_id(row_id) or row_id in seen_ids:
+                continue
+
+            record_url = extract_recording_url(row)
+            if not record_url:
+                raw_location = str(row.get("record_location") or "").strip()
+                if raw_location.startswith("//"):
+                    record_url = "https:" + raw_location
+                elif raw_location.startswith("/") and " " not in raw_location:
+                    record_url = host.rstrip("/") + raw_location
+            if not record_url or not record_url.startswith(("http://", "https://")):
+                continue
+            if cls.is_definitely_empty_recording(record_url):
+                continue
+
+            row_dt = cls._provider_row_datetime(row)
+            if row_dt is None:
+                continue
+            delta = (row_dt - anchor).total_seconds()
+            if delta < -window_before_seconds or delta > window_after_seconds:
+                continue
+
+            seen_ids.add(row_id)
+            candidates.append(
+                {
+                    "uniqueid": row_id,
+                    "url": record_url,
+                    "row": row,
+                    "started_at": row_dt,
+                    "delta_seconds": delta,
+                }
+            )
+
+        if len(candidates) != 1:
+            if len(candidates) > 1:
+                logger.warning(
+                    f"[DooctiRecording] {len(candidates)} provider rows match "
+                    f"synthetic Call ID={call.id} ({phones[0]}); refusing to guess."
+                )
+            _PROVIDER_RECORDING_CACHE[cache_key] = (now, None)
+            return None
+
+        candidate = candidates[0]
+        row_id = candidate["uniqueid"]
+
+        # Never adopt an id or artifact that already belongs to another call.
+        conflict = (
+            db.query(CallLog.id)
+            .filter(
+                CallLog.id != call.id,
+                or_(
+                    CallLog.provider_call_id == row_id,
+                    CallLog.recording_id == row_id,
+                    CallLog.recording_url == candidate["url"],
+                ),
+            )
+            .first()
+        )
+        if conflict:
+            logger.info(
+                f"[DooctiRecording] Provider row {row_id} for synthetic Call "
+                f"ID={call.id} already belongs to Call ID={conflict[0]}; "
+                f"not duplicating it."
+            )
+            _PROVIDER_RECORDING_CACHE[cache_key] = (now, None)
+            return None
+
+        # If a second CRM row overlaps the provider row, this recording cannot
+        # be assigned to either attempt without guessing.
+        compete_start = candidate["started_at"] - datetime.timedelta(minutes=5)
+        compete_end = candidate["started_at"] + datetime.timedelta(minutes=5)
+        competing = (
+            db.query(CallLog.id)
+            .filter(
+                CallLog.id != call.id,
+                CallLog.call_direction == call.call_direction,
+                or_(
+                    CallLog.to_number.like(f"%{phones[0]}%"),
+                    CallLog.from_number.like(f"%{phones[0]}%"),
+                ),
+                or_(
+                    and_(
+                        CallLog.started_at.isnot(None),
+                        CallLog.started_at >= compete_start,
+                        CallLog.started_at <= compete_end,
+                    ),
+                    and_(
+                        CallLog.started_at.is_(None),
+                        CallLog.created_at >= compete_start,
+                        CallLog.created_at <= compete_end,
+                    ),
+                ),
+            )
+            .first()
+        )
+        if competing:
+            logger.info(
+                f"[DooctiRecording] Another Call ID={competing[0]} overlaps "
+                f"provider row {row_id}; leaving synthetic Call ID={call.id} "
+                f"unlinked."
+            )
+            _PROVIDER_RECORDING_CACHE[cache_key] = (now, None)
+            return None
+
+        _PROVIDER_RECORDING_CACHE[cache_key] = (now, candidate)
+        return candidate
 
     @classmethod
     def _resolve_via_portal_api(
@@ -996,11 +1343,18 @@ class DooctiRecordingService:
 
         cfg = cls._get_provider_api_config(db)
         token, claims = cls._provider_access_token(cfg)
-        if not token:
+
+        # The tenant's JSON call log is readable without a bearer token and is
+        # the same source the DooCTI iframe uses. Keep it as a fallback even
+        # when the optional recording API login is unavailable, so an expired
+        # credential cannot make every recording disappear again.
+        if not token and not cls._provider_calllog_base_url(cfg, claims):
             return None
 
-        resolved = cls._resolve_via_dialer_calllog(call, token, claims, cfg, db)
-        if not resolved:
+        resolved = cls._resolve_via_dialer_calllog(
+            call, token or "", claims, cfg, db
+        )
+        if not resolved and token:
             resolved = cls._resolve_via_portal_api(call, token, claims, cfg)
 
         if resolved and cls.is_definitely_empty_recording(resolved):
@@ -1423,27 +1777,53 @@ class DooctiRecordingService:
             .all()
         )
         for call in calls:
+            prov_id = str(call.provider_call_id or "").strip()
+            stored_id = str(call.recording_id or "").strip()
             rec_id = cls.recording_id_from_url(call.recording_url)
-            if not rec_id or not cls.is_authoritative_call_id(rec_id):
+            if rec_id and not cls.is_authoritative_call_id(rec_id):
+                rec_id = None
+
+            # The provider resolver stores the call's own uniqueid as
+            # recording_id even when DooCTI named the artifact after another
+            # (internal) leg. That is an explicit association, not a conflict.
+            if rec_id and rec_id == prov_id:
                 continue
-            if str(call.provider_call_id or "").strip() == rec_id:
+            if stored_id and stored_id == prov_id:
                 continue
-            owner = (
-                db.query(CallLog)
-                .filter(CallLog.provider_call_id == rec_id, CallLog.id != call.id)
-                .first()
-            )
+
+            owner = None
+            if rec_id:
+                owner = (
+                    db.query(CallLog)
+                    .filter(CallLog.provider_call_id == rec_id, CallLog.id != call.id)
+                    .first()
+                )
+            if (
+                not owner
+                and stored_id
+                and cls.is_authoritative_call_id(stored_id)
+                and stored_id != prov_id
+            ):
+                owner = (
+                    db.query(CallLog)
+                    .filter(
+                        CallLog.provider_call_id == stored_id,
+                        CallLog.id != call.id,
+                    )
+                    .first()
+                )
             if not owner:
                 continue
             if not owner.recording_url and not owner.recording_id:
                 owner.recording_url = call.recording_url
-                owner.recording_id = rec_id
+                owner.recording_id = rec_id or stored_id
                 owner.recording_duration_seconds = call.recording_duration_seconds
                 owner.recording_source = call.recording_source or "DOOCTI"
                 owner.recording_attached_at = call.recording_attached_at
                 logger.info(
-                    f"[DooctiRecording] Moved legacy recording '{rec_id}' from "
-                    f"Call ID={call.id} to its owner Call ID={owner.id}."
+                    f"[DooctiRecording] Moved legacy recording "
+                    f"'{rec_id or stored_id}' from Call ID={call.id} to its "
+                    f"owner Call ID={owner.id}."
                 )
             call.recording_url = None
             call.recording_id = None
@@ -1516,15 +1896,29 @@ class DooctiRecordingService:
                     f"[DooctiRecording] Ignoring recording on Call ID={call.id}: "
                     f"'{curr_rec}' belongs to another call uniqueid."
                 )
-                return None
-            if cls.is_configured_storage_url(curr_rec, target_base) and cls.is_definitely_empty_recording(
+                # A provably wrong link is worse than no link: it hides the
+                # call from the sync query and renders under the wrong call.
+                # Clear only the CRM association; the audio object is untouched.
+                if auto_save:
+                    call.recording_url = None
+                    call.recording_id = None
+                    call.recording_duration_seconds = None
+                    call.recording_attached_at = None
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    curr_rec = ""
+                else:
+                    return None
+            if curr_rec and cls.is_configured_storage_url(curr_rec, target_base) and cls.is_definitely_empty_recording(
                 curr_rec
             ):
                 logger.info(
                     f"[DooctiRecording] Call ID={call.id} stores an empty placeholder "
                     f"recording; attempting a provider lookup."
                 )
-            else:
+            elif curr_rec:
                 return curr_rec
 
         # 2. Loopback URL -> Oracle Cloud object (same uniqueid, no guessing).
@@ -1545,16 +1939,64 @@ class DooctiRecordingService:
                         )
                     return resolved
 
-        # 3. Only connected/completed calls may be resolved automatically.
+        # 3. In-app outbound calls are stored under a synthetic id. The provider
+        #    call log is the authority for those rows; adopt its uniqueid only
+        #    when exactly one row matches the agent, phone and call time.
+        if not cls.is_authoritative_call_id(call.provider_call_id):
+            synthetic = cls.resolve_synthetic_recording_row(call, db)
+            if not synthetic:
+                return None
+            if auto_save:
+                row = synthetic.get("row") or {}
+                try:
+                    talk_seconds = int(row.get("talk_time") or 0)
+                except (TypeError, ValueError):
+                    talk_seconds = 0
+                if talk_seconds > 0:
+                    if not call.duration_seconds or call.duration_seconds <= 0:
+                        call.duration_seconds = talk_seconds
+                    if (call.call_status or "").upper() not in (
+                        "COMPLETED",
+                        "COMPLETE",
+                        "ANSWERED",
+                        "CONNECTED",
+                    ):
+                        call.call_status = "COMPLETED"
+                    if not call.answered_at:
+                        call.answered_at = synthetic["started_at"]
+                    if not call.ended_at:
+                        call.ended_at = synthetic["started_at"] + datetime.timedelta(
+                            seconds=talk_seconds
+                        )
+                call.provider_call_id = synthetic["uniqueid"]
+                attached = cls.attach_recording(
+                    call,
+                    db,
+                    synthetic["url"],
+                    recording_id=synthetic["uniqueid"],
+                    source="DOOCTI_API",
+                    commit=True,
+                    derive_duration=True,
+                )
+                if not attached:
+                    db.rollback()
+                    return None
+                logger.info(
+                    f"🎯 [DooctiRecording] Linked provider recording for synthetic "
+                    f"Call ID={call.id} uniqueid='{synthetic['uniqueid']}'."
+                )
+            return synthetic["url"]
+
+        # 4. Only connected/completed calls may be resolved automatically.
         st_upper = (call.call_status or "").upper()
         is_candidate = (
             (call.duration_seconds is not None and call.duration_seconds > 0)
-            or st_upper in ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"]
+            or st_upper in ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED", "ENDED"]
         )
         if not is_candidate:
             return None
 
-        # 4. Strict exact-uniqueid lookup.
+        # 5. Strict exact-uniqueid lookup.
         if not cls.is_authoritative_call_id(call.provider_call_id):
             return None
 
@@ -1603,12 +2045,71 @@ class DooctiRecordingService:
             )
         return provider_url
 
+    @staticmethod
+    def _missing_recording_clause():
+        """SQL predicate for a call whose stored recording link is unusable."""
+        return or_(
+            CallLog.recording_url.is_(None),
+            func.trim(CallLog.recording_url) == "",
+            func.lower(func.trim(CallLog.recording_url)).in_(
+                ["null", "none", "undefined"]
+            ),
+            CallLog.recording_url.ilike("%127.0.0.1%"),
+            CallLog.recording_url.ilike("%localhost%"),
+        )
+
+    @classmethod
+    def _recording_sync_diagnostics(
+        cls,
+        db: Session,
+        since_date: datetime.datetime,
+        missing_clause,
+        provider_clause,
+    ) -> Dict[str, Any]:
+        """
+        Aggregate, non-sensitive counts that explain why a sync inspected zero
+        calls. No phone numbers, ids or URLs are returned.
+        """
+        try:
+            base = db.query(CallLog).filter(
+                CallLog.created_at >= since_date,
+                provider_clause,
+            )
+            connected_clause = or_(
+                CallLog.duration_seconds > 0,
+                CallLog.call_status.in_(
+                    ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED", "ENDED"]
+                ),
+            )
+            return {
+                "window_days": None,  # filled by caller
+                "recent_calls": int(base.count()),
+                "missing_recording": int(base.filter(missing_clause).count()),
+                "empty_recording_url": int(
+                    base.filter(
+                        func.trim(func.coalesce(CallLog.recording_url, "")) == ""
+                    ).count()
+                ),
+                "connected_missing_recording": int(
+                    base.filter(missing_clause, connected_clause).count()
+                ),
+                "stored_recording_url": int(
+                    base.filter(
+                        CallLog.recording_url.isnot(None),
+                        func.trim(CallLog.recording_url) != "",
+                    ).count()
+                ),
+            }
+        except Exception as exc:
+            logger.debug(f"[DooctiRecording] sync diagnostics failed: {exc}")
+            return {"error": "diagnostics unavailable"}
+
     @classmethod
     def sync_all_missing_recordings(
         cls,
         db: Session,
         days_back: int = 7,
-        limit: int = 50
+        limit: int = 100
     ) -> Dict[str, Any]:
         """
         Scans all recent completed calls missing audio recordings and auto-links them.
@@ -1624,24 +2125,29 @@ class DooctiRecordingService:
         # never render as a 0:00 player.
         released = cls.release_empty_placeholder_recordings(db, days_back=days_back)
 
+        missing_clause = cls._missing_recording_clause()
+        provider_clause = or_(
+            CallLog.provider.is_(None),
+            func.upper(CallLog.provider).notin_(["MOBILE_SIM", "DIRECT_DIAL"]),
+        )
+        diagnostics = cls._recording_sync_diagnostics(
+            db, since_date, missing_clause, provider_clause
+        )
+        diagnostics["window_days"] = days_back
+
         calls = (
             db.query(CallLog)
             .filter(
-                or_(
-                    CallLog.recording_url.is_(None),
-                    CallLog.recording_url.ilike("%127.0.0.1%"),
-                    CallLog.recording_url.ilike("%localhost%"),
-                ),
+                missing_clause,
                 CallLog.created_at >= since_date,
                 or_(
                     CallLog.duration_seconds > 0,
-                    CallLog.call_status.in_(["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"]),
+                    CallLog.call_status.in_(
+                        ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED", "ENDED"]
+                    ),
                 ),
                 # Mobile SIM calls never have DooCTI bucket recordings.
-                or_(
-                    CallLog.provider.is_(None),
-                    func.upper(CallLog.provider).notin_(["MOBILE_SIM", "DIRECT_DIAL"]),
-                ),
+                provider_clause,
             )
             .order_by(desc(CallLog.id))
             .limit(limit)
@@ -1672,6 +2178,7 @@ class DooctiRecordingService:
             "repaired_count": repaired,
             "released_empty_count": released,
             "total_inspected": len(calls),
+            "diagnostics": diagnostics,
             "updated_calls": updated_calls,
         }
 
@@ -1693,16 +2200,14 @@ class DooctiRecordingService:
         calls = (
             db.query(CallLog)
             .filter(
-                or_(
-                    CallLog.recording_url.is_(None),
-                    CallLog.recording_url.ilike("%127.0.0.1%"),
-                    CallLog.recording_url.ilike("%localhost%"),
-                ),
+                cls._missing_recording_clause(),
                 CallLog.ended_at.isnot(None),
                 or_(CallLog.created_at >= since, CallLog.ended_at >= since),
                 or_(
                     CallLog.duration_seconds > 0,
-                    CallLog.call_status.in_(["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED"]),
+                    CallLog.call_status.in_(
+                        ["COMPLETED", "COMPLETE", "ANSWERED", "CONNECTED", "ENDED"]
+                    ),
                 ),
                 # Mobile SIM calls never have DooCTI bucket recordings.
                 or_(
