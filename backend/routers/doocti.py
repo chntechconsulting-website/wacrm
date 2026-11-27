@@ -890,6 +890,41 @@ async def push_doocti_call_log(
                     f"refusing to merge uniqueid='{call_id}' into an arbitrary row."
                 )
 
+    # A delayed recording callback can be keyed by the recording artifact's own
+    # uniqueid while the audio filename still carries the PBX call uniqueid. Bind
+    # it to the call that owns that artifact instead of creating a second row.
+    if not existing_log:
+        early_rec_url = extract_recording_url(raw_data)
+        if early_rec_url:
+            early_rec_id, _ = extract_recording_metadata(raw_data, early_rec_url)
+            artifact_ids: List[str] = []
+            for candidate in (
+                early_rec_id,
+                DooctiRecordingService.recording_id_from_url(early_rec_url),
+            ):
+                clean_candidate = str(candidate or "").strip()
+                if (
+                    clean_candidate
+                    and clean_candidate != call_id
+                    and DooctiRecordingService.is_authoritative_call_id(clean_candidate)
+                    and clean_candidate not in artifact_ids
+                ):
+                    artifact_ids.append(clean_candidate)
+            if artifact_ids:
+                artifact_matches = (
+                    db.query(CallLog)
+                    .filter(CallLog.provider_call_id.in_(artifact_ids))
+                    .order_by(desc(CallLog.id))
+                    .all()
+                )
+                if len(artifact_matches) == 1:
+                    existing_log = artifact_matches[0]
+                    logger.info(
+                        f"🔁 [DOOCTI CDR] Correlated recording artifact "
+                        f"uniqueid='{call_id}' to CallLog ID={existing_log.id} "
+                        f"(provider_call_id='{existing_log.provider_call_id}')."
+                    )
+
     # 2. Agent & Station extraction (handling both scalar and dict values)
     agent_name = extract_string_val(
         raw_data.get("agent") or 

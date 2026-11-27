@@ -21,6 +21,7 @@ import os
 import sys
 import time
 import unittest
+import urllib.parse
 from types import SimpleNamespace
 from unittest import mock
 
@@ -35,6 +36,7 @@ import models  # noqa: F401  (registers every table on Base.metadata)
 from database import Base, get_db
 from main import app, startup_db_client
 from models.call_log import CallLog
+from models.employee import Employee
 from models.integration import IntegrationConfig
 from routers.ivr import build_call_log_response
 from services.doocti_recording_service import (
@@ -455,6 +457,94 @@ class TestExactRecordingMatching(RecordingTestBase):
 
         self.assertIsNone(response.recording_url)
 
+    def test_read_guard_hides_audio_owned_by_stored_recording_id(self):
+        # A stored recording id that belongs to another call row is still proof
+        # of a wrong link, even when the URL filename matches no call row.
+        owner_id = "1793333301.131253505"
+        wrong_id = "1793333301.131253506"
+        artifact_id = "1793333301.131253597"
+        self.add_call(owner_id)
+        self.add_call(
+            wrong_id,
+            recording_url=f"https://media.doocti.com/rec/{artifact_id}.mp3",
+            recording_id=owner_id,
+        )
+
+        db = self.db()
+        attached = self.load_call(db, wrong_id)
+        self.assertFalse(
+            DooctiRecordingService._recording_belongs_to_call(
+                attached, attached.recording_url, db
+            )
+        )
+        response = build_call_log_response(attached, db)
+        db.close()
+
+        self.assertIsNone(response.recording_url)
+
+    def test_provider_resolved_artifact_with_own_filename_is_visible(self):
+        # DooCTI names some recordings after the answered leg / recording id,
+        # while the provider resolver stores the call uniqueid as recording_id.
+        # The artifact is still the correct audio for this call and must play.
+        call_id = "1793333301.131253502"
+        artifact_id = "1793333301.131253599"
+        media_url = f"https://media.doocti.com/rec/{artifact_id}.mp3"
+        self.add_call(
+            call_id,
+            recording_url=media_url,
+            recording_id=call_id,
+        )
+
+        db = self.db()
+        call = self.load_call(db, call_id)
+        self.assertTrue(
+            DooctiRecordingService._recording_belongs_to_call(
+                call, call.recording_url, db
+            )
+        )
+        response = build_call_log_response(call, db)
+        db.close()
+
+        self.assertEqual(response.recording_url, media_url)
+
+    def test_inbound_provider_resolved_artifact_is_visible(self):
+        # The ownership guard is direction-agnostic: inbound calls must play a
+        # provider-resolved artifact whose filename is not the call uniqueid.
+        call_id = "1793333301.131253504"
+        artifact_id = "1793333301.131253598"
+        media_url = f"https://media.doocti.com/rec/{artifact_id}.mp3"
+        self.add_call(
+            call_id,
+            recording_url=media_url,
+            recording_id=call_id,
+            call_direction="INBOUND",
+            from_number="9876543210",
+            to_number=DID,
+        )
+
+        db = self.db()
+        call = self.load_call(db, call_id)
+        response = build_call_log_response(call, db)
+        db.close()
+
+        self.assertEqual(response.recording_url, media_url)
+
+    def test_working_employee_exact_recording_still_visible(self):
+        call_id = "1793333301.131253503"
+        media_url = storage_url(call_id)
+        self.add_call(
+            call_id,
+            recording_url=media_url,
+            recording_id=call_id,
+        )
+
+        db = self.db()
+        call = self.load_call(db, call_id)
+        response = build_call_log_response(call, db)
+        db.close()
+
+        self.assertEqual(response.recording_url, media_url)
+
 
 class TestDuplicatePrevention(RecordingTestBase):
     def test_same_url_is_not_attached_to_two_calls(self):
@@ -866,6 +956,38 @@ class TestWebhookCallBatches(RecordingTestBase):
             self.get_call(call_id).recording_url, storage_url(call_id)
         )
 
+    def test_delayed_recording_callback_keyed_by_artifact_updates_call(self):
+        # The delayed callback may carry the recording artifact's own id as
+        # `uniqueid`, while the audio filename is the call's PBX uniqueid.
+        # It must update that existing call instead of creating a duplicate row.
+        call_id = "1793333606.131200025"
+        artifact_id = "1793333606.131200099"
+        self.post_cdr(
+            {
+                "uniqueid": call_id,
+                "caller": EXTENSION,
+                "destination": "9876500095",
+                "status": "COMPLETED",
+                "duration": 37,
+            }
+        )
+        self.assertIsNone(self.get_call(call_id).recording_url)
+
+        self.post_cdr(
+            {
+                "uniqueid": artifact_id,
+                "phone_number": "9876500095",
+                "recording_path": storage_url(call_id),
+            }
+        )
+
+        call = self.get_call(call_id)
+        self.assertIsNotNone(call)
+        self.assertEqual(call.recording_url, storage_url(call_id))
+        self.assertEqual(call.duration_seconds, 37)
+        self.assertIsNone(self.get_call(artifact_id))
+        self.assertEqual(self.count_calls(call_id), 1)
+
     def test_record_location_webhook_links_exact_call(self):
         call_id = "1793333602.131200021"
         media_url = f"https://media.doocti.com/rec/{call_id}.mp3"
@@ -1074,6 +1196,92 @@ class TestWebhookCallBatches(RecordingTestBase):
         }
         identifiers = DooctiRecordingService._provider_extension_candidates(call, cfg)
         self.assertEqual(identifiers[0], "itsales@chnindia.com")
+
+    def test_dialer_calllog_uses_employee_email_when_mapping_has_only_id(self):
+        # Shalini's mapping was saved without username/email. DooCTI keys its
+        # call log by the agent login email, so the CRM Employee row must supply
+        # it; querying only the extension must not stop the lookup.
+        call_id = "1793333703.131200051"
+        media_url = f"https://media.example.com/{call_id}.mp3"
+        db = self.db()
+        db.add(
+            Employee(
+                id=13,
+                name="Shalini",
+                email="shalini@chnindia.com",
+                username="shalini",
+                role="SALES_EXECUTIVE",
+                status="ACTIVE",
+            )
+        )
+        db.commit()
+
+        call = SimpleNamespace(
+            provider_call_id=call_id,
+            employee_id=13,
+            call_direction="OUTBOUND",
+            to_number="9876500051",
+            from_number="1285",
+        )
+        cfg = {
+            "extension_mapping": {"1285": {"employee_id": 13}},
+            "dialer_url": "https://dialer.example.com",
+        }
+
+        identifiers = DooctiRecordingService._provider_extension_candidates(
+            call, cfg, db
+        )
+        self.assertIn("shalini@chnindia.com", identifiers)
+
+        seen_agents = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = json.dumps(payload).encode()
+
+            def read(self, *_args):
+                return self._payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        def fake_urlopen(req, timeout=10.0):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query)
+            agent = (query.get("agent") or [""])[0]
+            seen_agents.append(agent)
+            if agent == "shalini@chnindia.com":
+                return FakeResponse(
+                    {"data": [{"id": call_id, "record_location": media_url}]}
+                )
+            # The extension lookup returns some other call, which must not stop
+            # the resolver before it tries the employee's login email.
+            return FakeResponse(
+                {
+                    "data": [
+                        {
+                            "id": "1793333703.131200052",
+                            "record_location": "https://media.example.com/other.mp3",
+                        }
+                    ]
+                }
+            )
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda url, **kwargs: False,
+        ):
+            resolved = DooctiRecordingService._resolve_via_dialer_calllog(
+                call, "test-token", {}, cfg, db
+            )
+        db.close()
+
+        self.assertEqual(resolved, media_url)
+        self.assertIn("1285", seen_agents)
+        self.assertIn("shalini@chnindia.com", seen_agents)
 
     def test_concurrent_same_phone_calls_are_not_merged(self):
         phone = "9876500077"

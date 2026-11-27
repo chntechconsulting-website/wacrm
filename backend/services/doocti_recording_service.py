@@ -582,7 +582,7 @@ class DooctiRecordingService:
 
     @classmethod
     def _provider_extension_candidates(
-        cls, call: CallLog, cfg: Dict[str, Any]
+        cls, call: CallLog, cfg: Dict[str, Any], db: Optional[Session] = None
     ) -> List[str]:
         """
         Identifiers DooCTI's dialer call-log accepts as ``agent``.
@@ -616,6 +616,28 @@ class DooctiRecordingService:
                         candidates.extend(identifiers(ext, info))
                 except (TypeError, ValueError):
                     continue
+
+        # The CRM Employee row is authoritative for the agent's login email.
+        # Older mappings (and the mapping UI before email was stored) may carry
+        # only employee_id/username, which DooCTI's call log does not accept.
+        if emp_id is not None and db is not None:
+            try:
+                from models.employee import Employee
+
+                emp = (
+                    db.query(Employee)
+                    .filter(Employee.id == int(emp_id))
+                    .first()
+                )
+            except (TypeError, ValueError):
+                emp = None
+            except Exception:
+                emp = None
+            if emp is not None:
+                for key in ("email", "username"):
+                    value = str(getattr(emp, key, "") or "").strip()
+                    if value:
+                        candidates.append(value)
 
         admin_ext = str(cfg.get("admin_extension") or "").strip()
         if admin_ext and isinstance(mapping, dict):
@@ -798,6 +820,7 @@ class DooctiRecordingService:
         token: str,
         claims: Dict[str, Any],
         cfg: Dict[str, Any],
+        db: Optional[Session] = None,
     ) -> Optional[str]:
         """
         Mirrors what the DooCTI iframe itself does: read the agent's call log and
@@ -813,7 +836,7 @@ class DooctiRecordingService:
             return None
 
         prov_id = str(call.provider_call_id or "").strip()
-        extensions = cls._provider_extension_candidates(call, cfg)
+        extensions = cls._provider_extension_candidates(call, cfg, db)
         phones = cls._customer_phone_candidates(call)
         if not extensions:
             return None
@@ -871,11 +894,9 @@ class DooctiRecordingService:
                 )
                 return candidate
 
-            if rows:
-                # This agent has call history for the customer but not this call.
-                # The portal lookup (keyed by the exact uniqueid) still covers
-                # transferred calls, so stop querying more agents here.
-                break
+            # Another identifier for this employee (for example the login email)
+            # may still own the call when the extension lookup returned unrelated
+            # rows, so keep trying until the candidates are exhausted.
         return None
 
     @classmethod
@@ -978,7 +999,7 @@ class DooctiRecordingService:
         if not token:
             return None
 
-        resolved = cls._resolve_via_dialer_calllog(call, token, claims, cfg)
+        resolved = cls._resolve_via_dialer_calllog(call, token, claims, cfg, db)
         if not resolved:
             resolved = cls._resolve_via_portal_api(call, token, claims, cfg)
 
@@ -1159,7 +1180,24 @@ class DooctiRecordingService:
             return False
         stored_id = str(call.recording_id or "").strip()
         if stored_id and cls.is_authoritative_call_id(stored_id) and stored_id != rec_id:
-            return False
+            # The provider resolver stores the call's own uniqueid here. DooCTI
+            # may still name the artifact after the answered leg, so that is an
+            # explicit association, not a conflict.
+            if stored_id == str(call.provider_call_id or "").strip():
+                return True
+            # Only a stored id that belongs to a *different* call row proves the
+            # link is wrong. A recording-owned id (for example the artifact's own
+            # uniqueid) is not proof of misassociation.
+            try:
+                stored_owner = (
+                    db.query(CallLog.id)
+                    .filter(CallLog.provider_call_id == stored_id, CallLog.id != call.id)
+                    .first()
+                )
+            except Exception:
+                return True
+            if stored_owner:
+                return False
         return True
 
     @classmethod

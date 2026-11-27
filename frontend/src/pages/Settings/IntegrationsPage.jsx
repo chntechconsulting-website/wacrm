@@ -386,7 +386,8 @@ const IntegrationsPage = () => {
 
     currentMap[ext] = {
       employee_id: emp.id,
-      username: emp.username || '',
+      username: emp.username || emp.email || '',
+      email: emp.email || '',
       name: emp.name || '',
       role: emp.role || '',
       type: newMapping.account_type.toUpperCase(),
