@@ -1734,8 +1734,13 @@ class DooctiRecordingService:
             # Loopback paths written by the PBX (http://127.0.0.1/audio/...)
             # resolve to the configured bucket, exactly as the reader does.
             url = cls.canonical_storage_url(raw, base_url)
-            if not url or not cls.is_configured_storage_url(url, base_url):
+            if not url or not url.startswith(("http://", "https://")):
                 continue
+            # Validate links on every host, not only the configured bucket.
+            # DooCTI moved storage from DigitalOcean Spaces to Oracle Cloud, so
+            # legacy rows still hold sgp1.digitaloceanspaces.com URLs that now
+            # return 404. Those dead links must be released before the call can
+            # be resolved against the current provider host.
             if not cls.is_definitely_empty_recording(url):
                 continue
             logger.info(

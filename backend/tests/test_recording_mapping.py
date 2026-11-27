@@ -672,6 +672,33 @@ class TestLegacyRepair(RecordingTestBase):
         # The call row itself is never deleted.
         self.assertIsNotNone(call)
 
+    def test_releases_dead_link_on_legacy_recording_host(self):
+        dead_id = "1793333302.131253525"
+        live_id = "1793333303.131253526"
+        dead_url = (
+            "https://sgp1.digitaloceanspaces.com/nidoos/"
+            f"cti_chntechnolog_20261009/2026-11-27/{dead_id}.mp3"
+        )
+        live_url = (
+            "https://sgp1.digitaloceanspaces.com/nidoos/"
+            f"cti_chntechnolog_20261009/2026-11-27/{live_id}.mp3"
+        )
+        self.add_call(dead_id, recording_url=dead_url, recording_id=dead_id)
+        self.add_call(live_id, recording_url=live_url, recording_id=live_id)
+
+        db = self.db()
+        with mock.patch.object(
+            DooctiRecordingService,
+            "is_definitely_empty_recording",
+            lambda candidate, **kwargs: candidate == dead_url,
+        ):
+            released = DooctiRecordingService.release_empty_placeholder_recordings(db)
+        db.close()
+
+        self.assertEqual(released, 1)
+        self.assertIsNone(self.get_call(dead_id).recording_url)
+        self.assertEqual(self.get_call(live_id).recording_url, live_url)
+
 
 class TestCdrReconciliation(RecordingTestBase):
     def _reconcile(self, cdr, **kwargs):
