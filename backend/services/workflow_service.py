@@ -1116,7 +1116,8 @@ class WorkflowService:
                         "amount": deal_amt
                     }
                 ],
-                terms_and_conditions=default_terms_for_category(won_data.get("product_category")),
+                # Proforma Invoices do not carry Terms & Conditions.
+                terms_and_conditions="",
                 created_at=datetime.utcnow()
             )
             db.add(proforma)

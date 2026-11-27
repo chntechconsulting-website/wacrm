@@ -103,7 +103,7 @@
           },
           "subtotal": { "type": "number", "example": 75000.0 },
           "grandTotal": { "type": "number", "example": 88500.0 },
-          "termsAndConditions": { "type": "string", "example": "1. Software onboarding commences upon payment receipt.\n2. Prices subject to 18% GST." },
+          "termsAndConditions": { "type": "string", "description": "Ignored. Proforma Invoices do not include Terms & Conditions." },
           "pdfUrl": { "type": "string", "example": "/api/integrations/waquote/proformas/204/download" }
         }
       },

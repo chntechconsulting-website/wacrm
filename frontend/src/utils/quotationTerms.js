@@ -66,10 +66,15 @@ const LEGACY_PROFORMA_TERMS_NORMALIZED = new Set(LEGACY_PROFORMA_TERMS.map(norma
 const LEGACY_BIOMETRIC_PLACEHOLDERS = new Set(['biometric terms', 'biometric terms and conditions']);
 
 export function resolveDocumentTerms(terms, docType, productCategory = '') {
-  const cleaned = String(terms || '').trim();
   const type = String(docType || '').toLowerCase();
+  // Proforma Invoices intentionally carry no Terms & Conditions, regardless
+  // of the product category or any value stored on the document.
+  if (type === 'proforma') {
+    return '';
+  }
+  const cleaned = String(terms || '').trim();
   const isBiometric = String(productCategory || '').trim().toLowerCase() === 'biometric';
-  if (type === 'quotation' || type === 'proforma') {
+  if (type === 'quotation') {
     const normalized = normalizeTerms(cleaned);
     if (
       !cleaned ||

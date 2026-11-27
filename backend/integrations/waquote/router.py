@@ -375,7 +375,9 @@ def _serialize_document_detail(r: Quotation, db: Session) -> Dict[str, Any]:
         **_serialize_issuer_fields(r),
         "sourceQuotationId": r.source_quotation_id,
         "sourceQuotationNumber": r.source_quotation_number,
-        "termsAndConditions": r.terms_and_conditions or "",
+        "termsAndConditions": (
+            "" if r.doc_type == "proforma" else (r.terms_and_conditions or "")
+        ),
         "notes": r.notes or "",
         "preparedBy": r.prepared_by or "",
         "pdfUrl": r.pdf_url,
@@ -985,7 +987,9 @@ def list_waquote_documents(
             customer_payload["gstin"] = r.gstin or ""
             document_payload.update({
                 "lineItems": r.line_items or [],
-                "termsAndConditions": r.terms_and_conditions or "",
+                "termsAndConditions": (
+                    "" if r.doc_type == "proforma" else (r.terms_and_conditions or "")
+                ),
                 "notes": r.notes or "",
                 "preparedBy": r.prepared_by or "",
             })
@@ -1318,7 +1322,11 @@ def create_document(
         grand_total=payload.grand_total,
         amount_paid=payload.amount_paid,
         line_items=payload.line_items,
-        terms_and_conditions=payload.terms_and_conditions or default_terms_for_category(cat_norm),
+        terms_and_conditions=(
+            ""
+            if doc_type_norm == "proforma"
+            else (payload.terms_and_conditions or default_terms_for_category(cat_norm))
+        ),
         created_by=creator_emp_id,
         created_by_user_id=current_user.id,
         assigned_to=target_assigned_to,
@@ -1654,7 +1662,11 @@ def update_waquote_document(
         r.source_quotation_id = payload.source_quotation_id
     if payload.source_quotation_number is not None:
         r.source_quotation_number = payload.source_quotation_number
-    r.terms_and_conditions = payload.terms_and_conditions or default_terms_for_category(r.product_category)
+    if target_type == "proforma":
+        # Proforma Invoices do not carry Terms & Conditions.
+        r.terms_and_conditions = ""
+    else:
+        r.terms_and_conditions = payload.terms_and_conditions or default_terms_for_category(r.product_category)
     r.notes = payload.notes
     if payload.prepared_by is not None:
         r.prepared_by = payload.prepared_by
@@ -1868,7 +1880,8 @@ def generate_proforma_from_quotation(
         grand_total=q.grand_total,
         amount_paid=0.0,
         line_items=q.line_items or [],
-        terms_and_conditions=q.terms_and_conditions or default_terms_for_category(cat_val),
+        # Proforma Invoices never inherit quotation Terms & Conditions.
+        terms_and_conditions="",
         notes=q.notes or f"Generated from Quotation #{q.doc_number}",
         prepared_by=getattr(current_user, 'full_name', None) or getattr(current_user, 'name', None) or (current_user.username if current_user else q.prepared_by),
         issue_date=now,

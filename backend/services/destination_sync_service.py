@@ -423,7 +423,7 @@ class DestinationSyncService:
                     },
                     "lineItems": formatted_items,
                     "notes": proforma.notes or f"Created via Wa CRM from Quotation #{proforma.source_quotation_number or ''}",
-                    "termsAndConditions": proforma.terms_and_conditions or "",
+                    "termsAndConditions": "",
                     "pdfUrl": proforma.pdf_url,
                     "metadata": {
                         "crmSource": "WaCRM",

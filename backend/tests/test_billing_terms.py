@@ -9,19 +9,47 @@ from services.billing_terms import (
 
 
 class BillingTermsTests(unittest.TestCase):
-    def test_quotation_and_proforma_default_to_wahrms_terms(self):
-        for doc_type in ("quotation", "proforma"):
+    def test_quotations_default_to_category_terms(self):
+        self.assertEqual(
+            resolve_billing_terms(None, "quotation"),
+            WAHRMS_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms("   ", "quotation"),
+            WAHRMS_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms(None, "quotation", "biometric"),
+            BIOMETRIC_TERMS_AND_CONDITIONS,
+        )
+
+    def test_proforma_invoices_never_have_terms(self):
+        for doc_type in ("proforma", "PROFORMA"):
             with self.subTest(doc_type=doc_type):
+                self.assertEqual(resolve_billing_terms(None, doc_type), "")
+                self.assertEqual(resolve_billing_terms("   ", doc_type), "")
                 self.assertEqual(
-                    resolve_billing_terms(None, doc_type),
-                    WAHRMS_TERMS_AND_CONDITIONS,
+                    resolve_billing_terms("Custom commercial terms.", doc_type),
+                    "",
                 )
                 self.assertEqual(
-                    resolve_billing_terms("   ", doc_type),
-                    WAHRMS_TERMS_AND_CONDITIONS,
+                    resolve_billing_terms(None, doc_type, "biometric"),
+                    "",
+                )
+                self.assertEqual(
+                    resolve_billing_terms(
+                        BIOMETRIC_TERMS_AND_CONDITIONS, doc_type, "biometric"
+                    ),
+                    "",
+                )
+                self.assertEqual(
+                    resolve_billing_terms(
+                        WAHRMS_TERMS_AND_CONDITIONS, doc_type, "wahrms"
+                    ),
+                    "",
                 )
 
-    def test_legacy_proforma_terms_are_replaced(self):
+    def test_legacy_proforma_terms_are_replaced_on_quotations(self):
         legacy_terms = (
             "1. Payment terms: 100% advance payment against this Proforma Invoice.\n"
             "2. Bank transfers to be credited to the Axis Bank account mentioned above.\n"
@@ -29,7 +57,7 @@ class BillingTermsTests(unittest.TestCase):
             "4. Goods once sold will not be taken back."
         )
         self.assertEqual(
-            resolve_billing_terms(legacy_terms, "proforma"),
+            resolve_billing_terms(legacy_terms, "quotation"),
             WAHRMS_TERMS_AND_CONDITIONS,
         )
         legacy_terms = (
@@ -38,23 +66,19 @@ class BillingTermsTests(unittest.TestCase):
             "3. Taxes applicable as per GST guidelines."
         )
         self.assertEqual(
-            resolve_billing_terms(legacy_terms, "proforma"),
+            resolve_billing_terms(legacy_terms, "quotation"),
             WAHRMS_TERMS_AND_CONDITIONS,
         )
         self.assertEqual(
             resolve_billing_terms(
                 "1. Software access activates upon payment.\n"
                 "2. Prices subject to applicable GST.",
-                "proforma",
+                "quotation",
             ),
             WAHRMS_TERMS_AND_CONDITIONS,
         )
 
-    def test_custom_terms_are_preserved(self):
-        self.assertEqual(
-            resolve_billing_terms("Custom commercial terms.", "proforma"),
-            "Custom commercial terms.",
-        )
+    def test_custom_terms_are_preserved_on_quotations(self):
         self.assertEqual(
             resolve_billing_terms("Custom commercial terms.", "quotation"),
             "Custom commercial terms.",
@@ -80,43 +104,41 @@ class BillingTermsTests(unittest.TestCase):
             BIOMETRIC_TERMS_AND_CONDITIONS,
         )
 
-    def test_biometric_documents_resolve_to_biometric_terms(self):
+    def test_biometric_quotations_resolve_to_biometric_terms(self):
         legacy_terms = (
             "1. Payment terms: 100% advance payment against this Proforma Invoice.\n"
             "2. Bank transfers to be credited to the Axis Bank account mentioned above.\n"
             "3. Materials will be dispatched upon payment credit receipt.\n"
             "4. Goods once sold will not be taken back."
         )
-        for doc_type in ("quotation", "proforma"):
-            with self.subTest(doc_type=doc_type):
-                self.assertEqual(
-                    resolve_billing_terms(None, doc_type, "biometric"),
-                    BIOMETRIC_TERMS_AND_CONDITIONS,
-                )
-                self.assertEqual(
-                    resolve_billing_terms("   ", doc_type, "BIOMETRIC"),
-                    BIOMETRIC_TERMS_AND_CONDITIONS,
-                )
-                self.assertEqual(
-                    resolve_billing_terms(legacy_terms, doc_type, "biometric"),
-                    BIOMETRIC_TERMS_AND_CONDITIONS,
-                )
-                self.assertEqual(
-                    resolve_billing_terms("Biometric Terms", doc_type, "biometric"),
-                    BIOMETRIC_TERMS_AND_CONDITIONS,
-                )
-                self.assertEqual(
-                    resolve_billing_terms(
-                        BIOMETRIC_TERMS_AND_CONDITIONS, doc_type, "biometric"
-                    ),
-                    BIOMETRIC_TERMS_AND_CONDITIONS,
-                )
-                self.assertEqual(
-                    resolve_billing_terms(
-                        "Custom biometric terms.", doc_type, "biometric"
-                    ),
-                    "Custom biometric terms.",
-                )
+        self.assertEqual(
+            resolve_billing_terms(None, "quotation", "biometric"),
+            BIOMETRIC_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms("   ", "quotation", "BIOMETRIC"),
+            BIOMETRIC_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms(legacy_terms, "quotation", "biometric"),
+            BIOMETRIC_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms("Biometric Terms", "quotation", "biometric"),
+            BIOMETRIC_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms(
+                BIOMETRIC_TERMS_AND_CONDITIONS, "quotation", "biometric"
+            ),
+            BIOMETRIC_TERMS_AND_CONDITIONS,
+        )
+        self.assertEqual(
+            resolve_billing_terms(
+                "Custom biometric terms.", "quotation", "biometric"
+            ),
+            "Custom biometric terms.",
+        )
         self.assertEqual(
             resolve_billing_terms(None, "quotation", "wahrms"),
             WAHRMS_TERMS_AND_CONDITIONS,

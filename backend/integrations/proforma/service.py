@@ -17,7 +17,6 @@ from .schemas import (
     AuthoritativeFinancialSummary
 )
 from .auth import sanitize_secret
-from services.billing_terms import default_terms_for_category
 from services.product_validation_service import ProductValidationService
 
 logger = logging.getLogger("proforma_integration_service")
@@ -424,7 +423,8 @@ class ProformaIntegrationService:
             grand_total=calc_grand_total,
             amount_paid=0.0,
             line_items=validated_items,
-            terms_and_conditions=payload.termsAndConditions or payload.terms_and_conditions or default_terms_for_category(product_category),
+            # Proforma Invoices do not carry Terms & Conditions.
+            terms_and_conditions="",
             notes=payload.notes or f"Received via External Proforma API (Req #{request_id})",
             pdf_url=payload.pdfUrl or payload.pdf_url,
             destination_sync_status="SYNCED",

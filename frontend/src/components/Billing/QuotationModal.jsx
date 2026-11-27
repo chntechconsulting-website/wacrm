@@ -82,7 +82,8 @@ const DEFAULT_TERMS_QUOTATION = WAHRMS_TERMS_AND_CONDITIONS;
 
 const DEFAULT_TERMS_BIOMETRIC_QUOTATION = BIOMETRIC_TERMS_AND_CONDITIONS;
 
-const DEFAULT_TERMS_PROFORMA = WAHRMS_TERMS_AND_CONDITIONS;
+// Proforma Invoices intentionally carry no Terms & Conditions.
+const DEFAULT_TERMS_PROFORMA = '';
 
 const DEFAULT_TERMS_INVOICE = 
 `1. Payment received and verified by Finance.
@@ -602,9 +603,11 @@ export default function QuotationModal({
       }
 
       setTerms(
-        initialData.terms !== undefined
-          ? initialData.terms
-          : (type === 'invoice' ? DEFAULT_TERMS_INVOICE : (type === 'proforma' ? DEFAULT_TERMS_PROFORMA : (incomingCategory === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION)))
+        type === 'proforma'
+          ? ''
+          : (initialData.terms !== undefined
+            ? initialData.terms
+            : (type === 'invoice' ? DEFAULT_TERMS_INVOICE : (incomingCategory === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION)))
       );
       setNotes(
         initialData.notes !== undefined
@@ -653,8 +656,10 @@ export default function QuotationModal({
     return (defaultBundle.items || []).map((itm, idx) => buildMasterBundleLineItem(itm, idx, defaultBundle.bundleCode, false, defaultPlan, getBundlePlans(defaultBundle)));
   });
 
-  const [terms, setTerms] = useState(() => 
-    docType === 'invoice' ? DEFAULT_TERMS_INVOICE : (docType === 'proforma' ? DEFAULT_TERMS_PROFORMA : (productCategory === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION))
+  const [terms, setTerms] = useState(() =>
+    docType === 'proforma'
+      ? ''
+      : (docType === 'invoice' ? DEFAULT_TERMS_INVOICE : (productCategory === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION))
   );
   const [notes, setNotes] = useState(() => initialData.notes || DEFAULT_NOTES_QUOTATION);
   const [saving, setSaving] = useState(false);
@@ -1008,7 +1013,7 @@ export default function QuotationModal({
       round_off: calc.roundOff,
       grand_total: calc.grandTotal,
       line_items: lineItems,
-      terms_and_conditions: terms,
+      terms_and_conditions: docType === 'proforma' ? '' : terms,
       notes,
       prepared_by: preparedBy.trim(),
       status: statusOverride || 'issued',
@@ -1047,7 +1052,7 @@ export default function QuotationModal({
       roundOff: calc.roundOff,
       grandTotal: calc.grandTotal,
       lineItems,
-      terms,
+      terms: docType === 'proforma' ? '' : terms,
       issueDateFormatted: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
       validTillFormatted: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
       isDraftPreview: true
@@ -1189,7 +1194,7 @@ export default function QuotationModal({
           roundOff: calc.roundOff,
           grandTotal: calc.grandTotal,
           lineItems,
-          terms,
+          terms: docType === 'proforma' ? '' : terms,
           issueDateFormatted: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
           validTillFormatted: new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
         };
@@ -1275,7 +1280,7 @@ export default function QuotationModal({
           roundOff: calc.roundOff,
           grandTotal: calc.grandTotal,
           lineItems,
-          terms
+          terms: docType === 'proforma' ? '' : terms
         };
         if (targetStatus === 'issued') {
           const { generateQuotationPdf } = await loadPdfGenerators();
@@ -2194,36 +2199,38 @@ export default function QuotationModal({
           {/* Section 3: Totals & Summary */}
           <div className="quote-totals-container">
             <div>
-              <div className="quote-field" style={{ marginBottom: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label style={{ margin: 0, fontWeight: 600 }}>Terms & Conditions</label>
-                  {docType === 'quotation' && (
-                    <button
-                      type="button"
-                      onClick={() => setTerms(productCategory === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: '#0f766e',
-                        fontSize: '0.75rem',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        textDecoration: 'underline',
-                        padding: 0
-                      }}
-                      title="Reset to official terms and conditions"
-                    >
-                      Reset to {productCategory === 'biometric' ? 'Official Biometric Terms' : 'Official WAHRMS Terms'}
-                    </button>
-                  )}
+              {docType !== 'proforma' && (
+                <div className="quote-field" style={{ marginBottom: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <label style={{ margin: 0, fontWeight: 600 }}>Terms & Conditions</label>
+                    {docType === 'quotation' && (
+                      <button
+                        type="button"
+                        onClick={() => setTerms(productCategory === 'biometric' ? DEFAULT_TERMS_BIOMETRIC_QUOTATION : DEFAULT_TERMS_QUOTATION)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#0f766e',
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                          fontWeight: 600,
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                        title="Reset to official terms and conditions"
+                      >
+                        Reset to {productCategory === 'biometric' ? 'Official Biometric Terms' : 'Official WAHRMS Terms'}
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    rows={8}
+                    value={terms}
+                    onChange={(e) => setTerms(e.target.value)}
+                    style={{ lineHeight: 1.45, fontSize: '0.84rem' }}
+                  />
                 </div>
-                <textarea 
-                  rows={8} 
-                  value={terms} 
-                  onChange={(e) => setTerms(e.target.value)} 
-                  style={{ lineHeight: 1.45, fontSize: '0.84rem' }}
-                />
-              </div>
+              )}
 
               {(docType === 'proforma' || docType === 'po') && (
                 <div style={{ background: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '10px', padding: '12px', fontSize: '0.82rem', color: '#991b1b' }}>

@@ -57,9 +57,16 @@ _LEGACY_BIOMETRIC_PLACEHOLDERS = {"biometric terms", "biometric terms and condit
 
 
 def resolve_billing_terms(terms, doc_type, product_category=None):
-    """Return category-aware terms for quotations/proformas when missing or legacy."""
+    """Return category-aware terms for quotations.
+
+    Proforma Invoices intentionally carry no Terms & Conditions, regardless of
+    the product category or any value stored on the document.
+    """
+    normalized_type = str(doc_type or "").strip().lower()
+    if normalized_type == "proforma":
+        return ""
     cleaned = str(terms or "").strip()
-    if doc_type in ("quotation", "proforma"):
+    if normalized_type == "quotation":
         normalized = _normalize(cleaned)
         is_biometric = str(product_category or "").strip().upper() == "BIOMETRIC"
         if (

@@ -76,8 +76,8 @@ class ProformaIntegrationPayload(BaseModel):
     grand_total: Optional[float] = Field(default=None, description="Alias for grandTotal")
 
     # Terms & Meta
-    termsAndConditions: Optional[str] = Field(default=None, description="Commercial and legal terms for this proforma")
-    terms_and_conditions: Optional[str] = Field(default=None, description="Alias for termsAndConditions")
+    termsAndConditions: Optional[str] = Field(default=None, description="Ignored; Proforma Invoices do not include Terms & Conditions")
+    terms_and_conditions: Optional[str] = Field(default=None, description="Alias for termsAndConditions (ignored)")
     pdfUrl: Optional[str] = Field(default=None, description="Secure PDF document URL if already rendered")
     pdf_url: Optional[str] = Field(default=None, description="Alias for pdfUrl")
     notes: Optional[str] = Field(default=None, description="Internal integration notes or external reference notes")

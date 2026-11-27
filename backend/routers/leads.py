@@ -4432,7 +4432,6 @@ def download_lead_proforma(
                 "rate": sub,
                 "gstRate": 0.18
             }],
-            "terms_and_conditions": default_terms_for_category(getattr(lead, "product_category", None)),
             "prepared_by": (current_user.employee.name if getattr(current_user, 'employee', None) else current_user.username) or "Authorized Signatory"
         }
         pdf_bytes = generate_proforma_pdf(snapshot)

@@ -875,10 +875,13 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
     # limited bullet glyph, so render readable equivalents in the PDF while
     # keeping the stored terms unchanged.
     terms_txt = terms_txt.replace("₹", "Rs. ").replace("•", "-")
-    terms_flowable = [
-        Paragraph("<b>TERMS & CONDITIONS</b>", style_panel_title),
-        Paragraph(terms_txt.replace("\n", "<br/>"), style_notes)
-    ]
+    # Proforma Invoices intentionally omit the Terms & Conditions panel.
+    terms_flowable = []
+    if terms_txt:
+        terms_flowable = [
+            Paragraph("<b>TERMS & CONDITIONS</b>", style_panel_title),
+            Paragraph(terms_txt.replace("\n", "<br/>"), style_notes)
+        ]
 
     if is_proforma:
         payment_title = "PAYMENT DETAILS" if is_biometric else f"PAYMENT DETAILS ({document_bank['bank_name'].upper()})"
@@ -920,7 +923,16 @@ def _build_pdf_stream(data: dict, is_proforma: bool = False, doc_type: str = "qu
         Paragraph("<b>Authorized Signatory</b>", style_panel_body)
     ]
 
-    bottom_table = Table([[terms_flowable, bank_flowable, sign_flowable]], colWidths=[62 * mm, 70 * mm, 50 * mm])
+    if is_proforma:
+        bottom_table = Table(
+            [[bank_flowable, sign_flowable]],
+            colWidths=[122 * mm, 60 * mm]
+        )
+    else:
+        bottom_table = Table(
+            [[terms_flowable, bank_flowable, sign_flowable]],
+            colWidths=[62 * mm, 70 * mm, 50 * mm]
+        )
     bottom_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING', (0, 0), (-1, -1), 2),

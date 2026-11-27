@@ -124,10 +124,13 @@ Content-Type: application/json
     }
   ],
   "subtotal": 75000.00,
-  "grandTotal": 88500.00,
-  "termsAndConditions": "1. Software onboarding commences upon payment receipt.\n2. Prices subject to 18% GST."
+  "grandTotal": 88500.00
 }
 ```
+
+> Proforma Invoices do not include Terms & Conditions. The optional
+> `termsAndConditions` field is accepted for backward compatibility but is
+> ignored and never printed on the Proforma Invoice.
 
 ---
 

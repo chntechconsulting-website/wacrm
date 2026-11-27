@@ -110,7 +110,7 @@ The CRM automatically determines GST compliance based on the client's state code
 | `lineItems[].rate`| `number` | **Yes** | Unit price excluding tax (must be $\ge 0$). |
 | `lineItems[].discount` | `number` | Optional | Flat discount deducted from line item (default: `0.0`). |
 | `lineItems[].gstRate` | `number` | Optional | Decimal e.g. `0.18` (18%) or integer percentage `18` (default: `0.18`). |
-| `termsAndConditions` | `string` | Optional | Commercial and payment terms. |
+| `termsAndConditions` | `string` | Optional | Accepted for backward compatibility but ignored. Proforma Invoices do not include Terms & Conditions. |
 
 ---
 
@@ -151,10 +151,12 @@ Content-Type: application/json
       "discount": 0.00,
       "gstRate": 0.18
     }
-  ],
-  "termsAndConditions": "1. Software onboarding commences upon receipt of payment.\n2. Prices subject to 18% GST."
+  ]
 }
 ```
+
+> Proforma Invoices do not include Terms & Conditions; any
+> `termsAndConditions` value is ignored.
 
 #### Live Example Response (`201 Created`)
 ```json
@@ -226,8 +228,7 @@ async function sendProformaToCrm(orderData) {
       rate: Number(item.unitPrice || 0),
       discount: Number(item.discount || 0),
       gstRate: 0.18
-    })),
-    termsAndConditions: 'Standard payment terms apply.'
+    }))
   };
 
   try {
