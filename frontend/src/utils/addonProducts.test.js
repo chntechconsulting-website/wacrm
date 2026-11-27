@@ -10,7 +10,8 @@ import {
   createAddonLineItem,
   findAddonLineIndex,
   getAddonByCode,
-  isAddonLineItem
+  isAddonLineItem,
+  isPerEmployeeAddon
 } from './addonProducts.js';
 
 const EXPECTED = [
@@ -84,6 +85,29 @@ test('quantity defaults safely when blank or invalid', () => {
   assert.equal(createAddonLineItem('shift_roster', { qty: 0 }).qty, 1);
   assert.equal(createAddonLineItem('shift_roster', { qty: -4 }).qty, 1);
   assert.equal(createAddonLineItem('shift_roster', { qty: '12' }).qty, 12);
+});
+
+test('recurring add-ons carry duration and onboarding fields for automatic quantity', () => {
+  const item = createAddonLineItem('live_location_tracking', {
+    qty: 180,
+    durationMonths: 12,
+    onboardingCount: 15
+  });
+
+  assert.equal(item.durationMonths, 12);
+  assert.equal(item.onboardingCount, 15);
+  assert.equal(item.quantityMode, 'auto');
+  assert.equal(isPerEmployeeAddon(item), true);
+});
+
+test('one-time add-ons keep manual device quantity', () => {
+  const item = createAddonLineItem('biometric_device_setup', { qty: 3 });
+
+  assert.equal(item.durationMonths, '');
+  assert.equal(item.onboardingCount, '');
+  assert.equal(item.quantityMode, 'manual');
+  assert.equal(isPerEmployeeAddon(item), false);
+  assert.equal(isPerEmployeeAddon(createAddonLineItem('live_location_tracking')), true);
 });
 
 test('selected add-ons are found by stable code without matching ordinary lines', () => {

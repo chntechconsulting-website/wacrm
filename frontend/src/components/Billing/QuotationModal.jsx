@@ -68,7 +68,8 @@ import {
   createAddonLineItem,
   findAddonLineIndex,
   getAddonByCode,
-  isAddonLineItem
+  isAddonLineItem,
+  isPerEmployeeAddon
 } from '../../utils/addonProducts';
 // pdfmake and the PDF preview modal are heavy (~4.8 MB). They are loaded only
 // when the user previews or saves a document, not when the editor opens.
@@ -322,6 +323,17 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
   const addonCode = String(item.addonCode || item.addon_code || '').toLowerCase();
   const addon = getAddonByCode(addonCode);
   const isAddon = Boolean(item.isAddon || item.is_addon || addonCode);
+  const isRecurringAddon = isAddon && isPerEmployeeAddon({
+    ...item,
+    addonCode: addonCode || addon?.code || '',
+    pricingType: item.pricingType || item.pricing_type || addon?.pricingType || ''
+  });
+  const addonHasStructuredDetails = isRecurringAddon && (
+    toPositiveInteger(durationMonths) !== null || toPositiveInteger(onboardingCount) !== null
+  );
+  const addonBaseDescription = String(
+    item.name || addon?.name || parsed.baseDescription || rawDescription
+  ).split(/\r?\n/)[0].trim();
 
   return {
     id: item.id || Date.now() + idx,
@@ -344,9 +356,18 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
     onboardingCount,
     description: isBundleDetail
       ? formatBundleDescription({ baseDescription, planName, durationMonths, onboardingCount, unitPrice: rate })
-      : isAddon
-        ? String(item.name || addon?.name || rawDescription).split(/\r?\n/)[0].trim()
-        : formatItemDescriptionForEditor(rawDescription),
+      : isRecurringAddon
+        ? (addonHasStructuredDetails
+            ? formatBundleDescription({
+                baseDescription: addonBaseDescription,
+                durationMonths,
+                onboardingCount,
+                unitPrice: rate
+              })
+            : addonBaseDescription)
+        : isAddon
+          ? addonBaseDescription
+          : formatItemDescriptionForEditor(rawDescription),
     hsn: item.hsn || item.hsnCode || addon?.hsn || (isBio ? '85437099' : '998314'),
     qty: isBundleDetail
       ? savedQty
@@ -356,7 +377,9 @@ const buildSavedLineItem = (item, idx, incomingBundle, isBio) => {
     discount: Number(item.discount ?? 0),
     quantityMode: isBundleDetail
       ? (item.quantityMode || (hasStructuredFields ? 'auto' : 'saved'))
-      : 'manual'
+      : isRecurringAddon
+        ? (item.quantityMode || (addonHasStructuredDetails ? 'auto' : 'manual'))
+        : 'manual'
   };
 };
 
@@ -842,7 +865,33 @@ export default function QuotationModal({
   const handleAddAddon = (addon) => {
     setLineItems(prev => {
       if (findAddonLineIndex(prev, addon.code) >= 0) return prev;
-      const newItem = createAddonLineItem(addon, { id: Date.now() + prev.length });
+
+      // Recurring add-ons follow the subscription's duration and headcount.
+      // Copy them from the bundle line so months are included immediately;
+      // the fields stay editable on the add-on row.
+      const bundleSource = addon.pricingType === ADDON_PRICING_TYPES.PER_EMPLOYEE
+        ? prev.find((item) => item.isBundleDetail
+            && toPositiveInteger(item.durationMonths) !== null
+            && toPositiveInteger(item.onboardingCount) !== null)
+        : null;
+      const durationMonths = bundleSource?.durationMonths ?? '';
+      const onboardingCount = bundleSource?.onboardingCount ?? '';
+      const calculatedQty = calculateBundleQuantity(durationMonths, onboardingCount);
+
+      const newItem = createAddonLineItem(addon, {
+        id: Date.now() + prev.length,
+        qty: calculatedQty ?? undefined,
+        durationMonths,
+        onboardingCount
+      });
+      if (newItem && calculatedQty !== null) {
+        newItem.description = formatBundleDescription({
+          baseDescription: newItem.name,
+          durationMonths,
+          onboardingCount,
+          unitPrice: newItem.rate
+        });
+      }
       return newItem ? [...prev, newItem] : prev;
     });
   };
@@ -895,13 +944,29 @@ export default function QuotationModal({
         updated.quantityMode = 'auto';
       }
 
-      updated.description = formatBundleDescription({
-        baseDescription: updated.baseDescription,
-        planName: updated.planName,
-        durationMonths: updated.durationMonths,
-        onboardingCount: updated.onboardingCount,
-        unitPrice: updated.rate
-      });
+      if (updated.isBundleDetail) {
+        updated.description = formatBundleDescription({
+          baseDescription: updated.baseDescription,
+          planName: updated.planName,
+          durationMonths: updated.durationMonths,
+          onboardingCount: updated.onboardingCount,
+          unitPrice: updated.rate
+        });
+      } else if (isPerEmployeeAddon(updated)) {
+        const hasDetails = toPositiveInteger(updated.durationMonths) !== null
+          || toPositiveInteger(updated.onboardingCount) !== null;
+        const addonTitle = String(
+          updated.name || updated.baseDescription || updated.description || 'Add-on'
+        ).split(/\r?\n/)[0].trim();
+        updated.description = hasDetails
+          ? formatBundleDescription({
+              baseDescription: addonTitle,
+              durationMonths: updated.durationMonths,
+              onboardingCount: updated.onboardingCount,
+              unitPrice: updated.rate
+            })
+          : addonTitle;
+      }
 
       next[idx] = updated;
       return next;
@@ -1834,12 +1899,12 @@ export default function QuotationModal({
                 <div className="quote-addon-picker-header">
                   <div>
                     <div className="quote-addon-picker-title">Add-On Products</div>
-                    <div className="quote-addon-picker-hint">Click an add-on to add it. Remove it with the trash icon on its line. Quantity is editable on each row.</div>
+                    <div className="quote-addon-picker-hint">Click an add-on to add it. Recurring add-ons use duration × onboardings; one-time setup uses device quantity.</div>
                   </div>
                 </div>
 
                 <div className="quote-addon-group">
-                  <div className="quote-addon-group-label">Recurring · Per Employee</div>
+                  <div className="quote-addon-group-label">Recurring · Per Employee / Month</div>
                   <div className="quote-addon-options">
                     {PER_EMPLOYEE_ADDONS.map((addon) => {
                       const isSelected = selectedAddonCodes.has(addon.code);
@@ -1851,14 +1916,14 @@ export default function QuotationModal({
                           className={`quote-addon-option ${isSelected ? 'selected' : ''}`}
                           aria-pressed={isSelected}
                           data-addon-code={addon.code}
-                          title={isSelected ? `${addon.name} is already added` : `Add ${addon.name} at ₹${addon.rate} per employee`}
+                          title={isSelected ? `${addon.name} is already added` : `Add ${addon.name} at ₹${addon.rate} per ${addon.billingUnit} per month`}
                         >
                           <span className="quote-addon-option-name">
                             {isSelected ? <Check size={12} strokeWidth={3} /> : null}
                             {addon.name}
                           </span>
                           <span className="quote-addon-option-price">
-                            ₹{addon.rate.toLocaleString('en-IN')} / {addon.billingUnit}
+                            ₹{addon.rate.toLocaleString('en-IN')} / {addon.billingUnit} / month
                           </span>
                         </button>
                       );
@@ -1913,19 +1978,21 @@ export default function QuotationModal({
                   {lineItems.map((item, idx) => {
                     const lineTot = Math.max(0, (Number(item.qty ?? 0) * Number(item.rate || 0) - Number(item.discount || 0)) * (1 + Number(item.gstRate || 0.18)));
                     const isBundleDetail = Boolean(item.isBundleDetail);
-                    const calculatedQty = isBundleDetail
+                    const isRecurringAddon = isPerEmployeeAddon(item);
+                    const hasStructuredDetails = isBundleDetail || isRecurringAddon;
+                    const calculatedQty = hasStructuredDetails
                       ? calculateBundleQuantity(item.durationMonths, item.onboardingCount)
                       : null;
-                    const durationInvalid = isBundleDetail
+                    const durationInvalid = hasStructuredDetails
                       && item.durationMonths !== '' && item.durationMonths !== null && item.durationMonths !== undefined
                       && toPositiveInteger(item.durationMonths) === null;
-                    const onboardingInvalid = isBundleDetail
+                    const onboardingInvalid = hasStructuredDetails
                       && item.onboardingCount !== '' && item.onboardingCount !== null && item.onboardingCount !== undefined
                       && toPositiveInteger(item.onboardingCount) === null;
-                    const unitPriceInvalid = isBundleDetail
+                    const unitPriceInvalid = hasStructuredDetails
                       && item.rate !== '' && item.rate !== null && item.rate !== undefined
                       && toNonNegativeNumber(item.rate) === null;
-                    const showQuantityEquation = isBundleDetail
+                    const showQuantityEquation = hasStructuredDetails
                       && calculatedQty !== null
                       && item.quantityMode === 'auto';
 
@@ -1943,10 +2010,12 @@ export default function QuotationModal({
                               </span>
                             </div>
                           )}
-                          {isBundleDetail ? (
+                          {hasStructuredDetails ? (
                             <div className="bundle-detail-editor">
                               <div className="bundle-detail-title">
-                                {item.baseDescription || item.name || 'Bundle subscription'}
+                                {isBundleDetail
+                                  ? (item.baseDescription || item.name || 'Bundle subscription')
+                                  : (item.name || item.baseDescription || 'Add-on')}
                               </div>
                               <div className="bundle-detail-fields">
                                 <label className="bundle-detail-field">
@@ -2035,7 +2104,7 @@ export default function QuotationModal({
                           />
                         </td>
                         <td>
-                          {isBundleDetail ? (
+                          {hasStructuredDetails ? (
                             <div
                               className="bundle-qty-display"
                               title="Automatically calculated as duration × onboardings"

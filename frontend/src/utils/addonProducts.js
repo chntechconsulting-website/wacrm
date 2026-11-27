@@ -83,6 +83,18 @@ export function isAddonLineItem(item = {}) {
 }
 
 /**
+ * Recurring per-employee add-ons are billed like the subscription bundle:
+ * duration (months) × onboardings (employees) × unit price. One-time add-ons
+ * such as device setup keep their manual device quantity.
+ */
+export function isPerEmployeeAddon(item = {}) {
+  if (!isAddonLineItem(item)) return false;
+  const addon = getAddonByCode(item.addonCode || item.addon_code);
+  const pricingType = item.pricingType || item.pricing_type || addon?.pricingType || '';
+  return pricingType === ADDON_PRICING_TYPES.PER_EMPLOYEE;
+}
+
+/**
  * Find an add-on line by its stable product code. Used to make selection
  * idempotent and to remove an add-on when its card is clicked again.
  */
@@ -109,6 +121,7 @@ export function createAddonLineItem(addonOrCode, options = {}) {
 
   const numericQty = Number(options.qty);
   const qty = Number.isFinite(numericQty) && numericQty > 0 ? Math.floor(numericQty) : 1;
+  const isPerEmployee = addon.pricingType === ADDON_PRICING_TYPES.PER_EMPLOYEE;
 
   return {
     id: options.id ?? `addon-${addon.code}-${Date.now()}`,
@@ -128,6 +141,8 @@ export function createAddonLineItem(addonOrCode, options = {}) {
     discount: 0,
     pricingType: addon.pricingType,
     billingUnit: addon.billingUnit,
-    quantityMode: 'manual'
+    durationMonths: options.durationMonths ?? '',
+    onboardingCount: options.onboardingCount ?? '',
+    quantityMode: isPerEmployee ? 'auto' : 'manual'
   };
 }
